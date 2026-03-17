@@ -3,8 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"github.com/philippgille/chromem-go"
+	"runtime"
 )
 
 type Store struct {
@@ -25,7 +25,7 @@ func Connect(ctx context.Context, dbPath string, collectionName string) (*Store,
 	if err != nil {
 		return nil, fmt.Errorf("failed to create persistent DB: %w", err)
 	}
-	
+
 	col := db.GetCollection(collectionName, nil)
 	if col == nil {
 		col, err = db.CreateCollection(collectionName, nil, nil)
@@ -91,9 +91,9 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 			}
 		}
 		records = append(records, Record{
-			ID:      doc.ID,
-			Content: doc.Content,
-			Metadata: doc.Metadata,
+			ID:         doc.ID,
+			Content:    doc.Content,
+			Metadata:   doc.Metadata,
 			Similarity: doc.Similarity,
 		})
 		scores = append(scores, doc.Similarity)
@@ -119,7 +119,7 @@ func (s *Store) GetPathHashMapping(ctx context.Context, projectID string) (map[s
 	if count == 0 {
 		return make(map[string]string), nil
 	}
-	
+
 	dummyEmb := make([]float32, 1024)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"project_id": projectID}, nil)
 	if err != nil {
@@ -153,7 +153,7 @@ func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {
 	if count == 0 {
 		return nil, nil
 	}
-	
+
 	dummyEmb := make([]float32, 1024)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, nil, nil)
 	if err != nil {
@@ -163,8 +163,8 @@ func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {
 	var records []Record
 	for _, doc := range res {
 		records = append(records, Record{
-			ID:      doc.ID,
-			Content: doc.Content,
+			ID:       doc.ID,
+			Content:  doc.Content,
 			Metadata: doc.Metadata,
 		})
 	}
@@ -176,7 +176,7 @@ func (s *Store) GetByPath(ctx context.Context, path string, projectID string) ([
 	if count == 0 {
 		return nil, nil
 	}
-	
+
 	dummyEmb := make([]float32, 1024)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"path": path, "project_id": projectID}, nil)
 	if err != nil {
@@ -186,10 +186,36 @@ func (s *Store) GetByPath(ctx context.Context, path string, projectID string) ([
 	var records []Record
 	for _, doc := range res {
 		records = append(records, Record{
-			ID:      doc.ID,
-			Content: doc.Content,
+			ID:       doc.ID,
+			Content:  doc.Content,
 			Metadata: doc.Metadata,
 		})
 	}
 	return records, nil
+}
+
+func (s *Store) SetStatus(ctx context.Context, projectID string, status string) error {
+	id := fmt.Sprintf("status:%s", projectID)
+	// Delete old status first
+	s.collection.Delete(ctx, map[string]string{"type": "project_status", "project_id": projectID}, nil)
+
+	dummyEmb := make([]float32, 1024)
+	return s.Insert(ctx, []Record{{
+		ID:      id,
+		Content: status,
+		Embedding: dummyEmb,
+		Metadata: map[string]string{
+			"type":       "project_status",
+			"project_id": projectID,
+		},
+	}})
+}
+
+func (s *Store) GetStatus(ctx context.Context, projectID string) (string, error) {
+	dummyEmb := make([]float32, 1024)
+	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, 1, map[string]string{"type": "project_status", "project_id": projectID}, nil)
+	if err != nil || len(res) == 0 {
+		return "", err
+	}
+	return res[0].Content, nil
 }

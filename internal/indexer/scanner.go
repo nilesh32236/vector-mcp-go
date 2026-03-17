@@ -81,7 +81,7 @@ func ScanFiles(root string) ([]string, error) {
 func IsIgnoredDir(name string) bool {
 	ignored := []string{
 		"node_modules", ".git", ".next", ".turbo", "dist",
-		"build", "generated", "coverage", "out", "vendor", ".vector-db",
+		"build", "generated", "coverage", "out", "vendor", ".vector-db", ".data",
 	}
 	for _, d := range ignored {
 		if name == d {

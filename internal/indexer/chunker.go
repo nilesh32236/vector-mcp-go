@@ -35,7 +35,7 @@ func CreateChunks(text string, filePath string) []Chunk {
 		if len(chunks[i].Symbols) > 0 {
 			scope = chunks[i].Symbols[0]
 		}
-		
+
 		header := fmt.Sprintf("// File: %s\n// Scope/Entity: %s\n\n", filePath, scope)
 		chunks[i].Content = header + chunks[i].Content
 		chunks[i].Relationships = relationships
@@ -60,7 +60,7 @@ func astChunkGo(text string) []Chunk {
 				start = fset.Position(x.Doc.Pos()).Offset
 			}
 			end := fset.Position(x.End()).Offset
-			
+
 			symbolName := x.Name.Name
 			if x.Recv != nil && len(x.Recv.List) > 0 {
 				recvType := ""
@@ -122,7 +122,7 @@ func astChunkGo(text string) []Chunk {
 func chunkJavaScriptTypeScript(content string, filePath string) []Chunk {
 	// Pattern to match functions, classes, and arrow functions
 	semanticPattern := regexp.MustCompile(`(?m)^(?:export\s+)?(?:async\s+)?(?:function\s+([a-zA-Z0-9_]+)|class\s+([a-zA-Z0-9_]+)|(?:const|let|var)\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s*)?\(.*?\)\s*=>)`)
-	
+
 	indices := semanticPattern.FindAllStringSubmatchIndex(content, -1)
 	if len(indices) == 0 {
 		return fastChunk(content)
@@ -158,7 +158,8 @@ func chunkJavaScriptTypeScript(content string, filePath string) []Chunk {
 func parseRelationships(text string, ext string) []string {
 	var relations []string
 	if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
-		importRegex := regexp.MustCompile(`import\s+.*\s+from\s+['"](.*)['"]`)
+		// Match 'from "..."' or 'import "..."' or 'require("...")'
+		importRegex := regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
 		matches := importRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {
@@ -166,28 +167,43 @@ func parseRelationships(text string, ext string) []string {
 			}
 		}
 	} else if ext == ".go" {
-		importRegex := regexp.MustCompile(`"([^"]+)"`)
-		start := strings.Index(text, "import (")
-		if start != -1 {
-			end := strings.Index(text[start:], ")")
-			if end != -1 {
-				block := text[start : start+end]
-				matches := importRegex.FindAllStringSubmatch(block, -1)
-				for _, m := range matches {
-					relations = append(relations, m[1])
-				}
+		// Improved Go import parsing
+		// Match single line: import "..." or import alias "..."
+		singleImportRegex := regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
+		matches := singleImportRegex.FindAllStringSubmatch(text, -1)
+		for _, m := range matches {
+			if len(m) > 1 {
+				relations = append(relations, m[1])
 			}
-		} else {
-			singleImportRegex := regexp.MustCompile(`import\s+"([^"]+)"`)
-			matches := singleImportRegex.FindAllStringSubmatch(text, -1)
-			for _, m := range matches {
-				if len(m) > 1 {
-					relations = append(relations, m[1])
+		}
+
+		// Match import blocks: import (...)
+		blockRegex := regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
+		blocks := blockRegex.FindAllStringSubmatch(text, -1)
+		for _, b := range blocks {
+			if len(b) > 1 {
+				inner := b[1]
+				innerRegex := regexp.MustCompile(`["']([^"']+)["']`)
+				innerMatches := innerRegex.FindAllStringSubmatch(inner, -1)
+				for _, im := range innerMatches {
+					if len(im) > 1 {
+						relations = append(relations, im[1])
+					}
 				}
 			}
 		}
 	}
-	return relations
+
+	// De-duplicate relationships
+	unique := make(map[string]bool)
+	var result []string
+	for _, r := range relations {
+		if !unique[r] {
+			unique[r] = true
+			result = append(result, r)
+		}
+	}
+	return result
 }
 
 func semanticRegexChunk(text string) []Chunk {

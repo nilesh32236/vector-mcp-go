@@ -42,6 +42,7 @@ func downloadFile(url string, dest string) error {
 		return err
 	}
 
+	tempDest := dest + ".tmp"
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
@@ -52,12 +53,17 @@ func downloadFile(url string, dest string) error {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	out, err := os.Create(dest)
+	out, err := os.Create(tempDest)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
 	_, err = io.Copy(out, resp.Body)
-	return err
+	out.Close()
+	if err != nil {
+		os.Remove(tempDest)
+		return err
+	}
+
+	return os.Rename(tempDest, dest)
 }

@@ -21,6 +21,7 @@ import (
 	"vector-mcp-go/internal/indexer"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/yalue/onnxruntime_go"
@@ -46,7 +47,7 @@ var (
 	globalStore      *db.Store
 	embedPool        *embedding.EmbedderPool
 	monorepoResolver *indexer.WorkspaceResolver
-	
+
 	// Phase 6: Background Indexing
 	indexQueue  = make(chan string, 100)
 	progressMap sync.Map // path -> string status
@@ -67,14 +68,28 @@ func getStore(ctx context.Context, cfg *config.Config) (*db.Store, error) {
 }
 
 func init() {
+	_ = godotenv.Load()
 	if runtime.GOOS == "linux" {
-		execPath, _ := os.Executable()
-		execDir := filepath.Dir(execPath)
-		libPath := filepath.Join(execDir, "lib", "libonnxruntime.so")
-		if _, err := os.Stat(libPath); os.IsNotExist(err) {
-			home, _ := os.UserHomeDir()
-			libPath = filepath.Join(home, ".local", "share", "vector-mcp-go", "lib", "libonnxruntime.so")
+		libPath := os.Getenv("ONNX_LIB_PATH")
+		if libPath == "" {
+			// 1. Try relative to CWD (for go run)
+			cwd, _ := os.Getwd()
+			libPath = filepath.Join(cwd, "lib", "libonnxruntime.so")
+
+			if _, err := os.Stat(libPath); os.IsNotExist(err) {
+				// 2. Try relative to executable
+				execPath, _ := os.Executable()
+				execDir := filepath.Dir(execPath)
+				libPath = filepath.Join(execDir, "lib", "libonnxruntime.so")
+
+				if _, err := os.Stat(libPath); os.IsNotExist(err) {
+					// 3. Try standard local path
+					home, _ := os.UserHomeDir()
+					libPath = filepath.Join(home, ".local", "share", "vector-mcp-go", "lib", "libonnxruntime.so")
+				}
+			}
 		}
+		fmt.Fprintf(os.Stderr, "DEBUG: Using ONNX shared library path: %s\n", libPath)
 		onnxruntime_go.SetSharedLibraryPath(libPath)
 	}
 	err := onnxruntime_go.InitializeEnvironment()
@@ -99,11 +114,17 @@ func startIndexingWorker(cfg *config.Config, logger *slog.Logger) {
 				if r := recover(); r != nil {
 					logger.Error("Indexing worker panicked", "path", path, "recover", r)
 					progressMap.Store(path, "Failed (Panic)")
+					if store, err := getStore(context.Background(), cfg); err == nil {
+						store.SetStatus(context.Background(), path, "Failed (Panic)")
+					}
 				}
 			}()
 
 			logger.Info("Starting background indexing", "path", path)
 			progressMap.Store(path, "Initializing...")
+			if store, err := getStore(context.Background(), cfg); err == nil {
+				store.SetStatus(context.Background(), path, "Initializing...")
+			}
 
 			targetCfg := &config.Config{
 				ProjectRoot: path,
@@ -116,16 +137,21 @@ func startIndexingWorker(cfg *config.Config, logger *slog.Logger) {
 			if err != nil {
 				logger.Error("Background indexing failed", "path", path, "error", err)
 				progressMap.Store(path, fmt.Sprintf("Error: %v", err))
+				if store, err := getStore(context.Background(), cfg); err == nil {
+					store.SetStatus(context.Background(), path, fmt.Sprintf("Error: %v", err))
+				}
 				return
 			}
-			
+
 			status := fmt.Sprintf("Completed: %d indexed, %d skipped", summary.FilesIndexed, summary.FilesSkipped)
 			progressMap.Store(path, status)
+			if store, err := getStore(context.Background(), cfg); err == nil {
+				store.SetStatus(context.Background(), path, status)
+			}
 			logger.Info("Background indexing complete", "path", path, "summary", summary)
 		}()
 	}
 }
-
 func main() {
 	cfg := config.LoadConfig()
 	logger := cfg.Logger
@@ -138,6 +164,13 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Ensure models exist
+	_, err := embedding.EnsureModel(cfg.ModelsDir)
+	if err != nil {
+		logger.Error("Failed to ensure models exist", "error", err)
+		os.Exit(1)
+	}
 
 	// Handle Graceful Shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -233,7 +266,7 @@ func main() {
 	s := server.NewMCPServer("vector-mcp-go", "1.0.0", server.WithLogging())
 
 	// 0. ping
-	s.AddTool(mcp.NewTool("ping", mcp.WithDescription("Check server connectivity")), 
+	s.AddTool(mcp.NewTool("ping", mcp.WithDescription("Check server connectivity")),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultText("pong"), nil
 		})
@@ -296,7 +329,9 @@ func main() {
 	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		filePath := request.GetString("filePath", "")
 		store, err := getStore(ctx, cfg)
-		if err != nil { return mcp.NewToolResultError(err.Error()), nil }
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		pids := []string{cfg.ProjectRoot}
 		crossProjs := request.GetStringSlice("cross_reference_projects", nil)
@@ -310,19 +345,27 @@ func main() {
 		}
 
 		uniqueDeps := make(map[string]string)
-		allImportStrings := []string{}
+		allImportStrings := make(map[string]bool)
+		allSymbols := make(map[string]bool)
 		for _, r := range records {
 			var deps []string
 			if relStr := r.Metadata["relationships"]; relStr != "" {
 				if err := json.Unmarshal([]byte(relStr), &deps); err == nil {
 					for _, d := range deps {
+						allImportStrings[d] = true
 						if strings.HasPrefix(d, "./") || strings.HasPrefix(d, "../") {
 							uniqueDeps[d] = filepath.Join(filepath.Dir(filePath), d)
-							allImportStrings = append(allImportStrings, d)
 						} else if physPath, ok := monorepoResolver.Resolve(d); ok {
 							uniqueDeps[d] = physPath
-							allImportStrings = append(allImportStrings, d)
 						}
+					}
+				}
+			}
+			var symbols []string
+			if symStr := r.Metadata["symbols"]; symStr != "" {
+				if err := json.Unmarshal([]byte(symStr), &symbols); err == nil {
+					for _, s := range symbols {
+						allSymbols[s] = true
 					}
 				}
 			}
@@ -334,11 +377,27 @@ func main() {
 		var omittedFiles []string
 
 		out.WriteString(fmt.Sprintf("  <file path=\"%s\">\n    <metadata>\n", filePath))
-		depListJSON, _ := json.Marshal(allImportStrings)
-		out.WriteString(fmt.Sprintf("      <dependencies>%s</dependencies>\n    </metadata>\n", string(depListJSON)))
+		
+		// Dependencies
+		var depList []string
+		for d := range allImportStrings { depList = append(depList, d) }
+		depListJSON, _ := json.Marshal(depList)
+		out.WriteString(fmt.Sprintf("      <dependencies>%s</dependencies>\n", string(depListJSON)))
+		
+		// Symbols
+		var symList []string
+		for s := range allSymbols { symList = append(symList, s) }
+		symListJSON, _ := json.Marshal(symList)
+		out.WriteString(fmt.Sprintf("      <symbols>%s</symbols>\n", string(symListJSON)))
+		
+		out.WriteString("    </metadata>\n")
+		
 		for _, r := range records {
 			tokens := estimateTokens(r.Content)
-			if currentTokenCount+tokens > maxContextTokens { omittedFiles = append(omittedFiles, filePath); continue }
+			if currentTokenCount+tokens > maxContextTokens {
+				omittedFiles = append(omittedFiles, filePath)
+				continue
+			}
 			out.WriteString("    <code_chunk>\n" + r.Content + "\n    </code_chunk>\n")
 			currentTokenCount += tokens
 		}
@@ -350,26 +409,65 @@ func main() {
 				matchPath := strings.TrimSuffix(physPath, filepath.Ext(physPath))
 				out.WriteString(fmt.Sprintf("  <file path=\"%s\" resolved_from=\"%s\">\n", physPath, importPath))
 				foundAny := false
+				
+				// Collect file metadata first
+				fileDeps := make(map[string]bool)
+				fileSymbols := make(map[string]bool)
+				var fileChunks []db.Record
+
 				for _, dr := range allRecords {
 					projMatch := false
 					for _, pid := range pids {
-						if dr.Metadata["project_id"] == pid { projMatch = true; break }
+						if dr.Metadata["project_id"] == pid {
+							projMatch = true
+							break
+						}
 					}
-					if projMatch && strings.Contains(dr.Metadata["path"], matchPath) {
+					if projMatch && (dr.Metadata["path"] == physPath || strings.Contains(dr.Metadata["path"], matchPath)) {
+						fileChunks = append(fileChunks, dr)
+						var dps []string
+						if err := json.Unmarshal([]byte(dr.Metadata["relationships"]), &dps); err == nil {
+							for _, d := range dps { fileDeps[d] = true }
+						}
+						var sys []string
+						if err := json.Unmarshal([]byte(dr.Metadata["symbols"]), &sys); err == nil {
+							for _, s := range sys { fileSymbols[s] = true }
+						}
+					}
+				}
+
+				if len(fileChunks) > 0 {
+					out.WriteString("    <metadata>\n")
+					var fdList []string
+					for d := range fileDeps { fdList = append(fdList, d) }
+					fdJSON, _ := json.Marshal(fdList)
+					out.WriteString(fmt.Sprintf("      <dependencies>%s</dependencies>\n", string(fdJSON)))
+					
+					var fsList []string
+					for s := range fileSymbols { fsList = append(fsList, s) }
+					fsJSON, _ := json.Marshal(fsList)
+					out.WriteString(fmt.Sprintf("      <symbols>%s</symbols>\n", string(fsJSON)))
+					out.WriteString("    </metadata>\n")
+
+					for _, dr := range fileChunks {
 						tokens := estimateTokens(dr.Content)
-						if currentTokenCount+tokens > maxContextTokens { omittedFiles = append(omittedFiles, dr.Metadata["path"]); continue }
+						if currentTokenCount+tokens > maxContextTokens {
+							omittedFiles = append(omittedFiles, dr.Metadata["path"])
+							continue
+						}
 						out.WriteString("    <code_chunk>\n" + dr.Content + "\n    </code_chunk>\n")
 						currentTokenCount += tokens
 						foundAny = true
 					}
 				}
+
 				if !foundAny && currentTokenCount < maxContextTokens {
 					out.WriteString("    <error>No indexed chunks found.</error>\n")
 				}
 				out.WriteString("  </file>\n")
 			}
 		}
-		
+
 		if len(omittedFiles) > 0 {
 			out.WriteString("  <omitted_matches>\n    <files>")
 			omittedJSON, _ := json.Marshal(omittedFiles)
@@ -390,7 +488,7 @@ func main() {
 		if len(crossProjs) > 0 {
 			pids = append(pids, crossProjs...)
 		}
-		
+
 		store, _ := getStore(ctx, cfg)
 		allRecords, _ := store.GetAllRecords(ctx)
 		var targetChunks []db.Record
@@ -414,7 +512,9 @@ func main() {
 				}
 			}
 		}
-		if !found { out.WriteString("  <summary>No duplicates found.</summary>\n") }
+		if !found {
+			out.WriteString("  <summary>No duplicates found.</summary>\n")
+		}
 		out.WriteString("</duplicate_analysis>")
 		return mcp.NewToolResultText(out.String()), nil
 	})
@@ -457,7 +557,7 @@ func main() {
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			store, _ := getStore(ctx, cfg)
 			res, _ := runStatus(ctx, store, cfg)
-			
+
 			bgStatus := "\n🛰️ Background Tasks:\n"
 			hasBg := false
 			progressMap.Range(func(key, value interface{}) bool {
@@ -465,7 +565,9 @@ func main() {
 				hasBg = true
 				return true
 			})
-			if !hasBg { bgStatus += "- No active background indexing.\n" }
+			if !hasBg {
+				bgStatus += "- No active background indexing.\n"
+			}
 			return mcp.NewToolResultText(res + bgStatus), nil
 		})
 
@@ -542,16 +644,24 @@ func main() {
 		return mcp.NewToolResultText(fmt.Sprintf("<codebase_skeleton>\n%s</codebase_skeleton>", out.String())), nil
 	})
 	logger.Info("MCP Server listening on stdio...")
-	if err := server.ServeStdio(s); err != nil { logger.Error("Server error", "error", err) }
+	if err := server.ServeStdio(s); err != nil {
+		logger.Error("Server error", "error", err)
+	}
 }
 
 func runRetrieveContext(ctx context.Context, store *db.Store, query string, topK int, projectIDs []string) (string, error) {
 	emb, err := getEmbedding(ctx, query)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	results, err := store.Search(ctx, emb, topK, projectIDs)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	var out string
-	for _, r := range results { out += fmt.Sprintf("--- %s (%s) ---\n%s\n", r.Metadata["path"], r.Metadata["project_id"], r.Content) }
+	for _, r := range results {
+		out += fmt.Sprintf("--- %s (%s) ---\n%s\n", r.Metadata["path"], r.Metadata["project_id"], r.Content)
+	}
 	return out, nil
 }
 
@@ -565,7 +675,9 @@ func runHealth(ctx context.Context, store *db.Store) (string, error) {
 			count++
 		}
 	}
-	if count == 0 { return "No tasks found.", nil }
+	if count == 0 {
+		return "No tasks found.", nil
+	}
 	return out, nil
 }
 
@@ -579,24 +691,65 @@ func runStatus(ctx context.Context, store *db.Store, cfg *config.Config) (string
 		diskPaths[relPath] = true
 		currentHash, _ := indexer.GetHash(absPath)
 		if dbHash, exists := dbMapping[relPath]; exists {
-			if dbHash == currentHash { indexed = append(indexed, relPath)
-			} else { updated = append(updated, relPath) }
-		} else { missing = append(missing, relPath) }
+			if dbHash == currentHash {
+				indexed = append(indexed, relPath)
+			} else {
+				updated = append(updated, relPath)
+			}
+		} else {
+			missing = append(missing, relPath)
+		}
 	}
 	var deleted []string
-	for dbPath := range dbMapping { if !diskPaths[dbPath] { deleted = append(deleted, dbPath) } }
+	for dbPath := range dbMapping {
+		if !diskPaths[dbPath] {
+			deleted = append(deleted, dbPath)
+		}
+	}
+
 	var out strings.Builder
 	out.WriteString(fmt.Sprintf("🔍 Index Status for %s:\n", cfg.ProjectRoot))
 	out.WriteString(fmt.Sprintf("✅ Fully Indexed: %d\n🔄 Modified: %d\n📂 Missing: %d\n🗑️ Deleted: %d\n", len(indexed), len(updated), len(missing), len(deleted)))
+
+	if len(missing) > 0 {
+		out.WriteString("\n📂 Missing Files (Next to index):\n")
+		for i, f := range missing {
+			if i >= 10 {
+				out.WriteString("  ... and more\n")
+				break
+			}
+			out.WriteString(fmt.Sprintf("  - %s\n", f))
+		}
+	}
+
+	if len(updated) > 0 {
+		out.WriteString("\n🔄 Modified Files (Need update):\n")
+		for i, f := range updated {
+			if i >= 10 {
+				out.WriteString("  ... and more\n")
+				break
+			}
+			out.WriteString(fmt.Sprintf("  - %s\n", f))
+		}
+	}
+
+	status, _ := store.GetStatus(ctx, cfg.ProjectRoot)
+	if status != "" {
+		out.WriteString(fmt.Sprintf("\n🛰️ Background Status (from DB): %s\n", status))
+	}
+
 	return out.String(), nil
 }
+
 
 func watchFiles(cfg *config.Config, logger *slog.Logger) {
 	watcher, _ := fsnotify.NewWatcher()
 	defer watcher.Close()
 	watchRecursive := func(root string) {
 		filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if d != nil && d.IsDir() && !indexer.IsIgnoredDir(d.Name()) { watcher.Add(path) }
+			if d != nil && d.IsDir() && !indexer.IsIgnoredDir(d.Name()) {
+				watcher.Add(path)
+			}
 			return nil
 		})
 	}
@@ -604,10 +757,14 @@ func watchFiles(cfg *config.Config, logger *slog.Logger) {
 	for {
 		select {
 		case event, ok := <-watcher.Events:
-			if !ok { return }
+			if !ok {
+				return
+			}
 			if event.Has(fsnotify.Create) {
 				info, _ := os.Stat(event.Name)
-				if info != nil && info.IsDir() && !indexer.IsIgnoredDir(info.Name()) { watcher.Add(event.Name) }
+				if info != nil && info.IsDir() && !indexer.IsIgnoredDir(info.Name()) {
+					watcher.Add(event.Name)
+				}
 			}
 			if event.Has(fsnotify.Write) {
 				ext := filepath.Ext(event.Name)
@@ -631,8 +788,13 @@ func watchFiles(cfg *config.Config, logger *slog.Logger) {
 func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Logger) (IndexSummary, error) {
 	summary := IndexSummary{Status: "completed"}
 	store, _ := getStore(ctx, cfg)
+	
+	store.SetStatus(ctx, cfg.ProjectRoot, "Scanning files and cleaning index...")
+	
 	files, err := indexer.ScanFiles(cfg.ProjectRoot)
-	if err != nil { return summary, err }
+	if err != nil {
+		return summary, err
+	}
 	summary.FilesProcessed = len(files)
 
 	hashMapping, _ := store.GetPathHashMapping(ctx, cfg.ProjectRoot)
@@ -649,11 +811,21 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Log
 
 	for dbPath := range hashMapping {
 		found := false
-		for _, absPath := range files { if config.GetRelativePath(absPath, cfg.ProjectRoot) == dbPath { found = true; break } }
-		if !found { store.DeleteByPath(ctx, dbPath, cfg.ProjectRoot) }
+		for _, absPath := range files {
+			if config.GetRelativePath(absPath, cfg.ProjectRoot) == dbPath {
+				found = true
+				break
+			}
+		}
+		if !found {
+			store.DeleteByPath(ctx, dbPath, cfg.ProjectRoot)
+		}
 	}
 
-	if len(toIndex) == 0 { return summary, nil }
+	if len(toIndex) == 0 {
+		store.SetStatus(ctx, cfg.ProjectRoot, fmt.Sprintf("Completed: %d files skipped (up to date)", summary.FilesSkipped))
+		return summary, nil
+	}
 
 	var wg sync.WaitGroup
 	results := make(chan result, len(toIndex))
@@ -670,7 +842,9 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Log
 	}
 
 	go func() {
-		for _, path := range toIndex { tasks <- path }
+		for _, path := range toIndex {
+			tasks <- path
+		}
 		close(tasks)
 	}()
 
@@ -681,14 +855,19 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Log
 
 	var batch []db.Record
 	processed := 0
+	totalToIndex := len(toIndex)
 	for r := range results {
 		processed++
-		if r.err != "" { summary.Errors = append(summary.Errors, r.err) }
+		if r.err != "" {
+			summary.Errors = append(summary.Errors, r.err)
+		}
 		if r.indexed {
 			summary.FilesIndexed++
 			batch = append(batch, r.records...)
 		}
-		if r.skipped { summary.FilesSkipped++ }
+		if r.skipped {
+			summary.FilesSkipped++
+		}
 
 		if len(batch) >= 50 {
 			logger.Info("Inserting batch of records", "count", len(batch))
@@ -696,9 +875,11 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Log
 			batch = batch[:0]
 		}
 
-		if processed % 50 == 0 || processed == len(toIndex) {
-			progressMap.Store(cfg.ProjectRoot, fmt.Sprintf("Processing: %d/%d files", processed, len(toIndex)))
-		}
+		// Real-time progress update
+		progress := float64(processed) / float64(totalToIndex) * 100
+		status := fmt.Sprintf("Indexing: %.1f%% (%d/%d) - Current: %s", progress, processed, totalToIndex, r.relPath)
+		progressMap.Store(cfg.ProjectRoot, status)
+		store.SetStatus(ctx, cfg.ProjectRoot, status)
 	}
 
 	if len(batch) > 0 {
@@ -708,10 +889,12 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Log
 	return summary, nil
 }
 
+
 type result struct {
 	indexed bool
 	skipped bool
 	err     string
+	relPath string
 	records []db.Record
 }
 
@@ -724,29 +907,37 @@ func processFile(ctx context.Context, path string, cfg *config.Config, store *db
 
 	relPath := config.GetRelativePath(path, cfg.ProjectRoot)
 	currentHash, err := indexer.GetHash(path)
-	if err != nil { return result{err: err.Error()} }
+	if err != nil {
+		return result{err: err.Error(), relPath: relPath}
+	}
 
 	existingHash, _ := store.GetFileHash(ctx, relPath, cfg.ProjectRoot)
-	if existingHash == currentHash { return result{skipped: true} }
+	if existingHash == currentHash {
+		return result{skipped: true, relPath: relPath}
+	}
 
 	content, err := os.ReadFile(path)
-	if err != nil { return result{err: err.Error()} }
-	
+	if err != nil {
+		return result{err: err.Error(), relPath: relPath}
+	}
+
 	chunks := indexer.CreateChunks(string(content), relPath)
 	var records []db.Record
 	for _, chunk := range chunks {
 		emb, err := getEmbedding(ctx, chunk.Content)
-		if err != nil { continue }
+		if err != nil {
+			continue
+		}
 		relJSON, _ := json.Marshal(chunk.Relationships)
 		symJSON, _ := json.Marshal(chunk.Symbols)
 		records = append(records, db.Record{
-			ID: fmt.Sprintf("%s-%s-%d", cfg.ProjectRoot, relPath, time.Now().UnixNano()),
+			ID:      fmt.Sprintf("%s-%s-%d", cfg.ProjectRoot, relPath, time.Now().UnixNano()),
 			Content: chunk.Content,
 			Embedding: emb,
 			Metadata: map[string]string{
-				"path": relPath,
-				"project_id": cfg.ProjectRoot,
-				"hash": currentHash,
+				"path":          relPath,
+				"project_id":    cfg.ProjectRoot,
+				"hash":          currentHash,
 				"relationships": string(relJSON),
 				"symbols":       string(symJSON),
 			},
@@ -755,16 +946,21 @@ func processFile(ctx context.Context, path string, cfg *config.Config, store *db
 
 	if len(records) > 0 {
 		store.DeleteByPath(ctx, relPath, cfg.ProjectRoot)
-		return result{indexed: true, records: records}
+		return result{indexed: true, records: records, relPath: relPath}
 	}
-	return result{}
+	return result{relPath: relPath}
 }
+
 
 func indexSingleFile(ctx context.Context, path string, cfg *config.Config, logger *slog.Logger) (IndexSummary, error) {
 	store, err := getStore(ctx, cfg)
-	if err != nil { return IndexSummary{}, err }
+	if err != nil {
+		return IndexSummary{}, err
+	}
 	res := processFile(ctx, path, cfg, store)
-	if res.err != "" { return IndexSummary{Status: "error"}, nil }
+	if res.err != "" {
+		return IndexSummary{Status: "error"}, nil
+	}
 	if res.indexed {
 		store.Insert(ctx, res.records)
 	}

@@ -18,6 +18,7 @@ require (
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
+	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
