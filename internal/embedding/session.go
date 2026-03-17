@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"unicode/utf8"
 
 	"github.com/sugarme/tokenizer"
 	"github.com/sugarme/tokenizer/pretrained"
@@ -22,32 +23,28 @@ type Embedder struct {
 }
 
 func NewEmbedder(modelsDir string) (*Embedder, error) {
+	fmt.Fprintf(os.Stderr, "   DEBUG: Entering NewEmbedder...\n")
 	modelPath := filepath.Join(modelsDir, "bge-m3-q4.onnx")
 	tokenizerPath := filepath.Join(modelsDir, "tokenizer.json")
 
-	// Load tokenizer using the pretrained sub-package which has FromFile implemented
+	fmt.Fprintf(os.Stderr, "   DEBUG: Loading tokenizer from %s...\n", tokenizerPath)
 	tk, err := pretrained.FromFile(tokenizerPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tokenizer from %s: %w", tokenizerPath, err)
 	}
 
-	// We'll handle truncation and padding manually in Embed()
-	// because sugarme/tokenizer high-level methods are buggy with this model.
-
-	// Safety: BGE-M3 from Xenova might have nil components in sugarme
-	if tk.GetNormalizer() == nil {
-		fmt.Fprintf(os.Stderr, "⚠️ Normalizer is nil...\n")
-	}
-
+	fmt.Fprintf(os.Stderr, "   DEBUG: Tokenizer loaded. Creating shape...\n")
 	shape := onnxruntime_go.NewShape(1, MaxSeqLength)
 
 	// Pre-allocate input tensors
+	fmt.Fprintf(os.Stderr, "   DEBUG: Allocating inputIdsTensor...\n")
 	inputIds := make([]int64, MaxSeqLength)
 	inputIdsTensor, err := onnxruntime_go.NewTensor(shape, inputIds)
 	if err != nil {
 		return nil, err
 	}
 
+	fmt.Fprintf(os.Stderr, "   DEBUG: Allocating attentionMaskTensor...\n")
 	attentionMask := make([]int64, MaxSeqLength)
 	attentionMaskTensor, err := onnxruntime_go.NewTensor(shape, attentionMask)
 	if err != nil {
@@ -56,6 +53,7 @@ func NewEmbedder(modelsDir string) (*Embedder, error) {
 	}
 
 	// Pre-allocate output tensor
+	fmt.Fprintf(os.Stderr, "   DEBUG: Allocating outputTensor...\n")
 	outputShape := onnxruntime_go.NewShape(1, MaxSeqLength, 1024)
 	outputTensor, err := onnxruntime_go.NewEmptyTensor[float32](outputShape)
 	if err != nil {
@@ -64,6 +62,7 @@ func NewEmbedder(modelsDir string) (*Embedder, error) {
 		return nil, err
 	}
 
+	fmt.Fprintf(os.Stderr, "   DEBUG: Creating AdvancedSession...\n")
 	inputs := []onnxruntime_go.Value{inputIdsTensor, attentionMaskTensor}
 	outputs := []onnxruntime_go.Value{outputTensor}
 
@@ -72,12 +71,14 @@ func NewEmbedder(modelsDir string) (*Embedder, error) {
 		[]string{"last_hidden_state"},
 		inputs, outputs, nil)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "   DEBUG: Session creation failed: %v\n", err)
 		inputIdsTensor.Destroy()
 		attentionMaskTensor.Destroy()
 		outputTensor.Destroy()
 		return nil, fmt.Errorf("failed to create ONNX session: %w", err)
 	}
 
+	fmt.Fprintf(os.Stderr, "   DEBUG: NewEmbedder success!\n")
 	return &Embedder{
 		session:             session,
 		tokenizer:           tk,
@@ -94,6 +95,22 @@ func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err e
 			err = fmt.Errorf("tokenizer panic: %v", r)
 		}
 	}()
+
+	// 0. Sanitize and validate
+	if !utf8.ValidString(text) {
+		// Attempt to sanitize by stripping invalid bytes if possible, or just fail
+		return nil, fmt.Errorf("invalid UTF-8 sequence")
+	}
+	if len(text) == 0 {
+		return nil, fmt.Errorf("empty input text")
+	}
+
+	// Truncate to a safe limit to avoid internal tokenizer buffer issues
+	// 16k runes is plenty for 512 tokens
+	runes := []rune(text)
+	if len(runes) > 16000 {
+		text = string(runes[:16000])
+	}
 
 	// 1. Tokenize
 	en, err := e.tokenizer.EncodeSingle(text, true)

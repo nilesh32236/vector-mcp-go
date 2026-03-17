@@ -59,6 +59,13 @@ func (s *Store) Insert(ctx context.Context, records []Record) error {
 }
 
 func (s *Store) Search(ctx context.Context, queryEmbedding []float32, topK int) ([]Record, error) {
+	count := s.collection.Count()
+	if count == 0 {
+		return nil, nil
+	}
+	if topK > count {
+		topK = count
+	}
 	res, err := s.collection.QueryEmbedding(ctx, queryEmbedding, topK, nil, nil)
 	if err != nil {
 		return nil, err
@@ -87,13 +94,24 @@ func (s *Store) GetByID(ctx context.Context, id string) (Record, error) {
 	}, nil
 }
 
-func (s *Store) GetByMetadata(ctx context.Context, key, value string) ([]Record, error) {
-	// Query with empty text but with metadata filter
-	filter := map[string]string{key: value}
+func (s *Store) DeleteByPath(ctx context.Context, path string) error {
+	filter := map[string]string{"path": path}
+	return s.collection.Delete(ctx, filter, nil)
+}
+
+func (s *Store) Count() int {
+	return s.collection.Count()
+}
+
+func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {
+	count := s.collection.Count()
+	if count == 0 {
+		return nil, nil
+	}
 	
-	// Chromem-go's Query requires a non-zero nResults if searching. 
-	// If we just want to filter, we can use a large number or QueryWithOptions.
-	res, err := s.collection.Query(ctx, "", 1000, filter, nil)
+	// Query with the exact number of documents available
+	dummyEmb := make([]float32, 1024)
+	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, nil, nil)
 	if err != nil {
 		return nil, err
 	}

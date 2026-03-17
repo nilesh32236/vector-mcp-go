@@ -15,7 +15,8 @@ type Config struct {
 }
 
 func LoadConfig() *Config {
-	cwd, _ := os.Getwd()
+	// Hardcoded fallback because os.Executable() or relative paths fail inside MCP node.js runner environments
+	baseDir := "/home/nilesh/Documents/vector-mcp-go"
 
 	// Default project root to one level up or use env
 	projectRoot := os.Getenv("PROJECT_ROOT")
@@ -26,8 +27,8 @@ func LoadConfig() *Config {
 
 	return &Config{
 		ProjectRoot: projectRoot,
-		DbPath:      filepath.Join(cwd, ".vector-db"),
-		ModelsDir:   filepath.Join(cwd, "models"),
+		DbPath:      filepath.Join(baseDir, ".vector-db"),
+		ModelsDir:   filepath.Join(baseDir, "models"),
 		ModelName:   "Xenova/bge-m3",
 		HFToken:     os.Getenv("HF_TOKEN"),
 		Dimension:   1024,
