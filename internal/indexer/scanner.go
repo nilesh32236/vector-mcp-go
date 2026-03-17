@@ -25,21 +25,6 @@ func ScanFiles(root string) ([]string, error) {
 		ignorer, _ = ignore.CompileIgnoreFile(filepath.Join(root, ".gitignore"))
 	}
 
-	// Default hardcoded exclusions if no ignore file or as fallback safety
-	defaultExcludes := []string{
-		"node_modules",
-		".git",
-		".next",
-		".turbo",
-		"dist",
-		"build",
-		"generated",
-		"coverage",
-		"out",
-		"vendor",
-		".vector-db",
-	}
-
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -52,12 +37,15 @@ func ScanFiles(root string) ([]string, error) {
 
 		// Always exclude default dirs
 		if info.IsDir() {
-			dirName := info.Name()
-			for _, d := range defaultExcludes {
-				if dirName == d {
-					// fmt.Printf("🚫 Skipping excluded directory: %s\n", path)
-					return filepath.SkipDir
-				}
+			if IsIgnoredDir(info.Name()) {
+				return filepath.SkipDir
+			}
+		}
+
+		// Always exclude heavy files and lockfiles
+		if !info.IsDir() {
+			if IsIgnoredFile(info.Name()) {
+				return nil
 			}
 		}
 
@@ -88,6 +76,41 @@ func ScanFiles(root string) ([]string, error) {
 		return nil
 	})
 	return files, err
+}
+
+func IsIgnoredDir(name string) bool {
+	ignored := []string{
+		"node_modules", ".git", ".next", ".turbo", "dist",
+		"build", "generated", "coverage", "out", "vendor", ".vector-db",
+	}
+	for _, d := range ignored {
+		if name == d {
+			return true
+		}
+	}
+	return false
+}
+
+func IsIgnoredFile(name string) bool {
+	ignoredExact := []string{
+		"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum",
+	}
+	for _, f := range ignoredExact {
+		if name == f {
+			return true
+		}
+	}
+
+	ignoredSuffixes := []string{
+		".map", ".min.js", ".svg",
+	}
+	for _, s := range ignoredSuffixes {
+		if len(name) >= len(s) && name[len(name)-len(s):] == s {
+			return true
+		}
+	}
+
+	return false
 }
 
 func GetHash(path string) (string, error) {

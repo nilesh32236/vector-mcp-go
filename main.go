@@ -92,19 +92,6 @@ func getEmbedding(ctx context.Context, text string) ([]float32, error) {
 	return e.Embed(ctx, text)
 }
 
-func isIgnoredDir(name string) bool {
-	ignored := []string{
-		"node_modules", ".git", ".next", ".turbo", "dist",
-		"build", "generated", "coverage", "out", "vendor", ".vector-db",
-	}
-	for _, d := range ignored {
-		if name == d {
-			return true
-		}
-	}
-	return false
-}
-
 func startIndexingWorker(cfg *config.Config, logger *slog.Logger) {
 	for path := range indexQueue {
 		func() {
@@ -482,6 +469,78 @@ func main() {
 			return mcp.NewToolResultText(res + bgStatus), nil
 		})
 
+	// 6. get_codebase_skeleton
+	s.AddTool(mcp.NewTool("get_codebase_skeleton",
+		mcp.WithDescription("Returns a topological tree map of the directory structure to help understand the project layout."),
+		mcp.WithString("project_path", mcp.Description("Absolute path to the project root (optional, defaults to current project root).")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		targetPath := request.GetString("project_path", cfg.ProjectRoot)
+		if targetPath == "" {
+			targetPath = cfg.ProjectRoot
+		}
+
+		var out strings.Builder
+		out.WriteString(fmt.Sprintf("%s\n", filepath.Base(targetPath)))
+
+		itemCount := 0
+		maxItems := 1000
+		maxDepth := 5
+		truncated := false
+
+		err := filepath.WalkDir(targetPath, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+
+			if path == targetPath {
+				return nil
+			}
+
+			relPath, err := filepath.Rel(targetPath, path)
+			if err != nil {
+				return nil
+			}
+
+			depth := strings.Count(relPath, string(os.PathSeparator)) + 1
+
+			if d.IsDir() {
+				if indexer.IsIgnoredDir(d.Name()) {
+					return filepath.SkipDir
+				}
+				if depth > maxDepth {
+					return filepath.SkipDir
+				}
+			} else {
+				if indexer.IsIgnoredFile(d.Name()) {
+					return nil
+				}
+				if depth > maxDepth {
+					return nil
+				}
+			}
+
+			if itemCount >= maxItems {
+				truncated = true
+				return filepath.SkipDir
+			}
+			itemCount++
+
+			indent := strings.Repeat("│   ", depth-1)
+			out.WriteString(fmt.Sprintf("%s├── %s\n", indent, d.Name()))
+
+			return nil
+		})
+
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Error walking directory: %v", err)), nil
+		}
+
+		if truncated {
+			out.WriteString("... (tree truncated for size limit)\n")
+		}
+
+		return mcp.NewToolResultText(fmt.Sprintf("<codebase_skeleton>\n%s</codebase_skeleton>", out.String())), nil
+	})
 	logger.Info("MCP Server listening on stdio...")
 	if err := server.ServeStdio(s); err != nil { logger.Error("Server error", "error", err) }
 }
@@ -537,7 +596,7 @@ func watchFiles(cfg *config.Config, logger *slog.Logger) {
 	defer watcher.Close()
 	watchRecursive := func(root string) {
 		filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if d != nil && d.IsDir() && !isIgnoredDir(d.Name()) { watcher.Add(path) }
+			if d != nil && d.IsDir() && !indexer.IsIgnoredDir(d.Name()) { watcher.Add(path) }
 			return nil
 		})
 	}
@@ -548,7 +607,7 @@ func watchFiles(cfg *config.Config, logger *slog.Logger) {
 			if !ok { return }
 			if event.Has(fsnotify.Create) {
 				info, _ := os.Stat(event.Name)
-				if info != nil && info.IsDir() && !isIgnoredDir(info.Name()) { watcher.Add(event.Name) }
+				if info != nil && info.IsDir() && !indexer.IsIgnoredDir(info.Name()) { watcher.Add(event.Name) }
 			}
 			if event.Has(fsnotify.Write) {
 				ext := filepath.Ext(event.Name)
