@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -15,20 +16,28 @@ type Chunk struct {
 	Relationships []string
 }
 
-func CreateChunks(text string, ext string) []Chunk {
+func CreateChunks(text string, filePath string) []Chunk {
+	ext := filepath.Ext(filePath)
 	relationships := parseRelationships(text, ext)
 	var chunks []Chunk
 
 	if ext == ".go" {
 		chunks = astChunkGo(text)
 	} else if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
-		chunks = semanticRegexChunk(text)
+		chunks = chunkJavaScriptTypeScript(text, filePath)
 	} else {
 		chunks = fastChunk(text)
 	}
 
-	// Attach relationships to each chunk
+	// Inject Context Headers and attach relationships
 	for i := range chunks {
+		scope := "Global"
+		if len(chunks[i].Symbols) > 0 {
+			scope = chunks[i].Symbols[0]
+		}
+		
+		header := fmt.Sprintf("// File: %s\n// Scope/Entity: %s\n\n", filePath, scope)
+		chunks[i].Content = header + chunks[i].Content
 		chunks[i].Relationships = relationships
 	}
 	return chunks
@@ -38,7 +47,6 @@ func astChunkGo(text string) []Chunk {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "", text, parser.ParseComments)
 	if err != nil {
-		// Fallback to regex if parsing fails (e.g. incomplete code)
 		return semanticRegexChunk(text)
 	}
 
@@ -47,7 +55,6 @@ func astChunkGo(text string) []Chunk {
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.FuncDecl:
-			// Extract Functions and Methods
 			start := fset.Position(x.Pos()).Offset
 			if x.Doc != nil {
 				start = fset.Position(x.Doc.Pos()).Offset
@@ -56,7 +63,6 @@ func astChunkGo(text string) []Chunk {
 			
 			symbolName := x.Name.Name
 			if x.Recv != nil && len(x.Recv.List) > 0 {
-				// Include receiver type for methods
 				recvType := ""
 				switch t := x.Recv.List[0].Type.(type) {
 				case *ast.Ident:
@@ -77,10 +83,9 @@ func astChunkGo(text string) []Chunk {
 					Symbols: []string{symbolName},
 				})
 			}
-			return false // Don't recurse into function bodies
+			return false
 
 		case *ast.GenDecl:
-			// Extract Types (Structs, Interfaces, etc.)
 			if x.Tok == token.TYPE {
 				start := fset.Position(x.Pos()).Offset
 				if x.Doc != nil {
@@ -107,9 +112,44 @@ func astChunkGo(text string) []Chunk {
 		return true
 	})
 
-	// If AST didn't find anything (e.g. only global variables), fallback to regex
 	if len(chunks) == 0 {
 		return semanticRegexChunk(text)
+	}
+
+	return chunks
+}
+
+func chunkJavaScriptTypeScript(content string, filePath string) []Chunk {
+	// Pattern to match functions, classes, and arrow functions
+	semanticPattern := regexp.MustCompile(`(?m)^(?:export\s+)?(?:async\s+)?(?:function\s+([a-zA-Z0-9_]+)|class\s+([a-zA-Z0-9_]+)|(?:const|let|var)\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s*)?\(.*?\)\s*=>)`)
+	
+	indices := semanticPattern.FindAllStringSubmatchIndex(content, -1)
+	if len(indices) == 0 {
+		return fastChunk(content)
+	}
+
+	var chunks []Chunk
+	for i := 0; i < len(indices); i++ {
+		start := indices[i][0]
+		end := len(content)
+		if i+1 < len(indices) {
+			end = indices[i+1][0]
+		}
+
+		// Extract symbol name from submatches
+		symbolName := ""
+		match := semanticPattern.FindStringSubmatch(content[indices[i][0]:indices[i][1]])
+		for j := 1; j < len(match); j++ {
+			if match[j] != "" {
+				symbolName = match[j]
+				break
+			}
+		}
+
+		chunks = append(chunks, Chunk{
+			Content: strings.TrimSpace(content[start:end]),
+			Symbols: []string{symbolName},
+		})
 	}
 
 	return chunks

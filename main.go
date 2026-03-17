@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"vector-mcp-go/internal/config"
@@ -33,10 +35,21 @@ type IndexSummary struct {
 	DurationMs     int64    `json:"duration_ms"`
 }
 
+const maxContextTokens = 10000
+
+func estimateTokens(text string) int {
+	return (len(strings.Fields(text)) * 4) / 3
+}
+
 var (
-	dbMu        sync.RWMutex
-	globalStore *db.Store
-	embedPool   *embedding.EmbedderPool
+	dbMu             sync.RWMutex
+	globalStore      *db.Store
+	embedPool        *embedding.EmbedderPool
+	monorepoResolver *indexer.WorkspaceResolver
+	
+	// Phase 6: Background Indexing
+	indexQueue  = make(chan string, 100)
+	progressMap sync.Map // path -> string status
 )
 
 func getStore(ctx context.Context, cfg *config.Config) (*db.Store, error) {
@@ -70,21 +83,93 @@ func init() {
 	}
 }
 
+func getEmbedding(ctx context.Context, text string) ([]float32, error) {
+	e, err := embedPool.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer embedPool.Put(e)
+	return e.Embed(ctx, text)
+}
+
+func isIgnoredDir(name string) bool {
+	ignored := []string{
+		"node_modules", ".git", ".next", ".turbo", "dist",
+		"build", "generated", "coverage", "out", "vendor", ".vector-db",
+	}
+	for _, d := range ignored {
+		if name == d {
+			return true
+		}
+	}
+	return false
+}
+
+func startIndexingWorker(cfg *config.Config, logger *slog.Logger) {
+	for path := range indexQueue {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("Indexing worker panicked", "path", path, "recover", r)
+					progressMap.Store(path, "Failed (Panic)")
+				}
+			}()
+
+			logger.Info("Starting background indexing", "path", path)
+			progressMap.Store(path, "Initializing...")
+
+			targetCfg := &config.Config{
+				ProjectRoot: path,
+				DbPath:      cfg.DbPath,
+				ModelsDir:   cfg.ModelsDir,
+				Logger:      cfg.Logger,
+			}
+
+			summary, err := IndexFullCodebase(context.Background(), targetCfg, logger)
+			if err != nil {
+				logger.Error("Background indexing failed", "path", path, "error", err)
+				progressMap.Store(path, fmt.Sprintf("Error: %v", err))
+				return
+			}
+			
+			status := fmt.Sprintf("Completed: %d indexed, %d skipped", summary.FilesIndexed, summary.FilesSkipped)
+			progressMap.Store(path, status)
+			logger.Info("Background indexing complete", "path", path, "summary", summary)
+		}()
+	}
+}
+
 func main() {
 	cfg := config.LoadConfig()
 	logger := cfg.Logger
 
+	// Initialize monorepo resolver
+	monorepoResolver = indexer.InitResolver(cfg.ProjectRoot)
+
 	indexFlag := flag.Bool("index", false, "Run full codebase indexing and exit")
 	flag.Parse()
 
-	ctx := context.Background()
-	
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle Graceful Shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigChan
+		logger.Info("Received signal, shutting down gracefully", "signal", sig)
+		cancel()
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+
+	// Start Background Worker
+	go startIndexingWorker(cfg, logger)
+
 	// CLI Support for maintenance
 	args := flag.Args()
 	if len(args) > 0 {
 		cmd := args[0]
-		
-		// Commands that don't need the embedder pool
 		if cmd == "status" || cmd == "health" {
 			store, err := getStore(ctx, cfg)
 			if err != nil {
@@ -101,7 +186,6 @@ func main() {
 			return
 		}
 
-		// Initialize Embedder Pool for commands that need it
 		pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, 1)
 		if err != nil {
 			logger.Error("Failed to initialize embedder pool", "error", err)
@@ -120,22 +204,20 @@ func main() {
 		case "retrieve_context":
 			query := ""
 			topK := 5
-			if len(args) > 1 {
-				for i := 1; i < len(args); i++ {
-					if args[i] == "-query" && i+1 < len(args) {
-						query = args[i+1]
-						i++
-					} else if args[i] == "-topK" && i+1 < len(args) {
-						fmt.Sscanf(args[i+1], "%d", &topK)
-						i++
-					}
+			for i := 1; i < len(args); i++ {
+				if args[i] == "-query" && i+1 < len(args) {
+					query = args[i+1]
+					i++
+				} else if args[i] == "-topK" && i+1 < len(args) {
+					fmt.Sscanf(args[i+1], "%d", &topK)
+					i++
 				}
 			}
 			if query == "" {
 				fmt.Println("Usage: ./vector-mcp-go retrieve_context -query \"your query\" [-topK 5]")
 				return
 			}
-			res, err := runRetrieveContext(ctx, store, query, topK)
+			res, err := runRetrieveContext(ctx, store, query, topK, []string{cfg.ProjectRoot})
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
 			} else {
@@ -145,7 +227,7 @@ func main() {
 		}
 	}
 
-	// Default initialization for MCP server mode
+	// Initialize Embedder Pool for MCP mode
 	pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, 2)
 	if err != nil {
 		logger.Error("Failed to initialize embedder pool", "error", err)
@@ -159,166 +241,100 @@ func main() {
 		return
 	}
 
-	// Start File Watcher
 	go watchFiles(cfg, logger)
 
-	s := server.NewMCPServer(
-		"vector-mcp-go",
-		"2.1.0",
-		server.WithLogging(),
-	)
+	s := server.NewMCPServer("vector-mcp-go", "1.0.0", server.WithLogging())
 
-	// Tool: ping
-	s.AddTool(mcp.NewTool("ping",
-		mcp.WithDescription("Check server connectivity"),
+	// 0. ping
+	s.AddTool(mcp.NewTool("ping", mcp.WithDescription("Check server connectivity")), 
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultText("pong"), nil
+		})
+
+	// 1. trigger_project_index
+	s.AddTool(mcp.NewTool("trigger_project_index",
+		mcp.WithDescription("Trigger a full background index of a project."),
+		mcp.WithString("project_path", mcp.Description("Absolute path to the project root")),
 	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return mcp.NewToolResultText("pong"), nil
+		path := request.GetString("project_path", "")
+		if path == "" {
+			return mcp.NewToolResultError("project_path is required"), nil
+		}
+		indexQueue <- path
+		return mcp.NewToolResultText(fmt.Sprintf("Initial indexing triggered in the background for %s.", path)), nil
 	})
 
-	// Tool: store_context
+	// 2. store_context
 	s.AddTool(mcp.NewTool("store_context",
-		mcp.WithDescription("Store text content in the project brain"),
-		mcp.WithString("text", mcp.Description("The text content to store")),
-		mcp.WithString("type", mcp.Description("Type of information (documentation, knowledge, task)")),
+		mcp.WithDescription("Store general project rules, architectural decisions, or shared context for other agents to read."),
+		mcp.WithString("text", mcp.Description("The text context to store.")),
+		mcp.WithString("project_id", mcp.Description("The project this context belongs to. Defaults to the current project.")),
 	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		text := request.GetString("text", "")
-		infoType := request.GetString("type", "knowledge")
+		if text == "" {
+			return mcp.NewToolResultError("text is required"), nil
+		}
+		projectID := request.GetString("project_id", cfg.ProjectRoot)
+
 		emb, err := getEmbedding(ctx, text)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Embedding failed: %v", err)), nil
+			return mcp.NewToolResultError(fmt.Sprintf("failed to generate embedding: %v", err)), nil
 		}
+
 		store, err := getStore(ctx, cfg)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("DB connection failed: %v", err)), nil
+			return mcp.NewToolResultError(err.Error()), nil
 		}
+
 		err = store.Insert(ctx, []db.Record{{
-			ID:        fmt.Sprintf("manual-%d", time.Now().UnixNano()),
-			Content:   text,
+			ID:        fmt.Sprintf("context-%d", time.Now().UnixNano()),
+			Content:   fmt.Sprintf("// Shared Context\n%s", text),
 			Embedding: emb,
-			Metadata: map[string]string{"type": infoType},
-		}})
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		return mcp.NewToolResultText("Context stored successfully."), nil
-	})
-
-	// Tool: retrieve_context
-	s.AddTool(mcp.NewTool("retrieve_context",
-		mcp.WithDescription("Retrieve relevant context from the project brain"),
-		mcp.WithString("query", mcp.Description("The search query")),
-		mcp.WithNumber("topK", mcp.Description("Number of results (default 5)")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		query := request.GetString("query", "")
-		topK := request.GetInt("topK", 5)
-		emb, err := getEmbedding(ctx, query)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Embedding failed: %v", err)), nil
-		}
-		store, err := getStore(ctx, cfg)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("DB connection failed: %v", err)), nil
-		}
-		results, err := store.Search(ctx, emb, topK)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Search failed: %v", err)), nil
-		}
-		var out string
-		for _, r := range results {
-			out += fmt.Sprintf("--- %s ---\n%s\n", r.Metadata["path"], r.Content)
-		}
-		if out == "" {
-			out = "No relevant context found."
-		}
-		return mcp.NewToolResultText(out), nil
-	})
-
-	// Tool: update_task_status
-	s.AddTool(mcp.NewTool("update_task_status",
-		mcp.WithDescription("Update the status of a specific task within the project brain"),
-		mcp.WithString("taskId", mcp.Description("The description or ID of the task")),
-		mcp.WithString("status", mcp.Description("The current status")),
-		mcp.WithString("notes", mcp.Description("Progress notes")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		taskId := request.GetString("taskId", "")
-		status := request.GetString("status", "pending")
-		notes := request.GetString("notes", "")
-		store, err := getStore(ctx, cfg)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		err = store.Insert(ctx, []db.Record{{
-			ID:      fmt.Sprintf("task-%s", taskId),
-			Content: fmt.Sprintf("Task: %s\nStatus: %s\nNotes: %s", taskId, status, notes),
 			Metadata: map[string]string{
-				"type": "task",
-				"taskId": taskId,
-				"status": status,
-				"notes": notes,
+				"project_id": projectID,
+				"type":       "shared_knowledge",
 			},
-			Embedding: make([]float32, 1024),
 		}})
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return mcp.NewToolResultError(fmt.Sprintf("failed to store context: %v", err)), nil
 		}
-		return mcp.NewToolResultText(fmt.Sprintf("Task '%s' updated.", taskId)), nil
+
+		return mcp.NewToolResultText("Context successfully stored in the global brain."), nil
 	})
 
-	// Tool: get_project_health
-	s.AddTool(mcp.NewTool("get_project_health",
-		mcp.WithDescription("Get a high-level overview of the project's health"),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		store, err := getStore(ctx, cfg)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		res, err := runHealth(ctx, store)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		return mcp.NewToolResultText(res), nil
-	})
-
-	// Tool: get_related_context
+	// 3. get_related_context
 	s.AddTool(mcp.NewTool("get_related_context",
-		mcp.WithDescription("Retrieve context for a file and its local dependencies"),
+		mcp.WithDescription("Retrieve context for a file and its local dependencies, optionally cross-referencing other projects."),
 		mcp.WithString("filePath", mcp.Description("The relative path of the file to analyze")),
 	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		filePath := request.GetString("filePath", "")
 		store, err := getStore(ctx, cfg)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+		if err != nil { return mcp.NewToolResultError(err.Error()), nil }
+
+		pids := []string{cfg.ProjectRoot}
+		crossProjs := request.GetStringSlice("cross_reference_projects", nil)
+		if len(crossProjs) > 0 {
+			pids = append(pids, crossProjs...)
 		}
 
-		// 1. Get all chunks for the target file
-		records, err := store.GetByPath(ctx, filePath)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to get records for %s: %v", filePath, err)), nil
-		}
-		if len(records) == 0 {
+		records, err := store.GetByPath(ctx, filePath, cfg.ProjectRoot)
+		if err != nil || len(records) == 0 {
 			return mcp.NewToolResultText(fmt.Sprintf("No context found for file: %s", filePath)), nil
 		}
 
-		// 2. Extract unique relationships (local dependencies)
-		uniqueDeps := make(map[string]bool)
+		uniqueDeps := make(map[string]string)
+		allImportStrings := []string{}
 		for _, r := range records {
 			var deps []string
-			relStr := r.Metadata["relationships"]
-			if relStr != "" {
+			if relStr := r.Metadata["relationships"]; relStr != "" {
 				if err := json.Unmarshal([]byte(relStr), &deps); err == nil {
 					for _, d := range deps {
-						// Filter for local imports:
-						// - Starts with module name (vector-mcp-go)
-						// - Or is a relative path (./ or ../)
-						// - Or doesn't contain a dot in the first segment (simplified stdlib check)
-						// Actually, standard library is usually like "fmt", "os", etc.
-						// External is "github.com/..."
-						isLocal := strings.HasPrefix(d, "vector-mcp-go") || 
-						           strings.HasPrefix(d, "./") || 
-						           strings.HasPrefix(d, "../")
-						
-						if isLocal {
-							uniqueDeps[d] = true
+						if strings.HasPrefix(d, "./") || strings.HasPrefix(d, "../") {
+							uniqueDeps[d] = filepath.Join(filepath.Dir(filePath), d)
+							allImportStrings = append(allImportStrings, d)
+						} else if physPath, ok := monorepoResolver.Resolve(d); ok {
+							uniqueDeps[d] = physPath
+							allImportStrings = append(allImportStrings, d)
 						}
 					}
 				}
@@ -326,158 +342,162 @@ func main() {
 		}
 
 		var out strings.Builder
-		out.WriteString(fmt.Sprintf("### Summary for %s\n", filePath))
-		out.WriteString(fmt.Sprintf("Found %d chunks in this file.\n\n", len(records)))
-		for i, r := range records {
-			if i < 2 { // Show first 2 chunks as summary
-				out.WriteString(fmt.Sprintf("Chunk %d:\n%s\n\n", i+1, r.Content))
-			}
+		out.WriteString("<context>\n")
+		currentTokenCount := 0
+		var omittedFiles []string
+
+		out.WriteString(fmt.Sprintf("  <file path=\"%s\">\n    <metadata>\n", filePath))
+		depListJSON, _ := json.Marshal(allImportStrings)
+		out.WriteString(fmt.Sprintf("      <dependencies>%s</dependencies>\n    </metadata>\n", string(depListJSON)))
+		for _, r := range records {
+			tokens := estimateTokens(r.Content)
+			if currentTokenCount+tokens > maxContextTokens { omittedFiles = append(omittedFiles, filePath); continue }
+			out.WriteString("    <code_chunk>\n" + r.Content + "\n    </code_chunk>\n")
+			currentTokenCount += tokens
 		}
+		out.WriteString("  </file>\n")
 
 		if len(uniqueDeps) > 0 {
-			out.WriteString("### Dependencies Context:\n")
 			allRecords, _ := store.GetAllRecords(ctx)
-			for dep := range uniqueDeps {
-				// Try to find the file path for this dependency
-				depPath := dep
-				if strings.HasPrefix(dep, "vector-mcp-go/") {
-					depPath = strings.TrimPrefix(dep, "vector-mcp-go/")
-				}
-
-				// Search for top 3 relevant chunks from this dependency
+			for importPath, physPath := range uniqueDeps {
+				matchPath := strings.TrimSuffix(physPath, filepath.Ext(physPath))
+				out.WriteString(fmt.Sprintf("  <file path=\"%s\" resolved_from=\"%s\">\n", physPath, importPath))
 				foundAny := false
-				count := 0
 				for _, dr := range allRecords {
-					if strings.Contains(dr.Metadata["path"], depPath) {
-						out.WriteString(fmt.Sprintf("#### From dependency: %s (Path: %s)\n", dep, dr.Metadata["path"]))
-						out.WriteString(fmt.Sprintf("%s\n\n", dr.Content))
+					projMatch := false
+					for _, pid := range pids {
+						if dr.Metadata["project_id"] == pid { projMatch = true; break }
+					}
+					if projMatch && strings.Contains(dr.Metadata["path"], matchPath) {
+						tokens := estimateTokens(dr.Content)
+						if currentTokenCount+tokens > maxContextTokens { omittedFiles = append(omittedFiles, dr.Metadata["path"]); continue }
+						out.WriteString("    <code_chunk>\n" + dr.Content + "\n    </code_chunk>\n")
+						currentTokenCount += tokens
 						foundAny = true
-						count++
-						if count >= 3 { break }
 					}
 				}
-				if !foundAny {
-					out.WriteString(fmt.Sprintf("#### Dependency: %s (No indexed chunks found)\n\n", dep))
+				if !foundAny && currentTokenCount < maxContextTokens {
+					out.WriteString("    <error>No indexed chunks found.</error>\n")
 				}
+				out.WriteString("  </file>\n")
 			}
-		} else {
-			out.WriteString("\n*No local dependencies found for this file.*\n")
 		}
-
+		
+		if len(omittedFiles) > 0 {
+			out.WriteString("  <omitted_matches>\n    <files>")
+			omittedJSON, _ := json.Marshal(omittedFiles)
+			out.WriteString(string(omittedJSON) + "</files>\n  </omitted_matches>\n")
+		}
+		out.WriteString("</context>")
 		return mcp.NewToolResultText(out.String()), nil
 	})
 
-	// Tool: index_status
-	s.AddTool(mcp.NewTool("index_status",
-		mcp.WithDescription("Check synchronization status between filesystem and vector index"),
+	// 3. find_duplicate_code
+	s.AddTool(mcp.NewTool("find_duplicate_code",
+		mcp.WithDescription("Scans a specific path to find duplicated logic across namespaces."),
+		mcp.WithString("target_path", mcp.Description("The relative path to check")),
 	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		targetPath := request.GetString("target_path", "")
+		pids := []string{cfg.ProjectRoot}
+		crossProjs := request.GetStringSlice("cross_reference_projects", nil)
+		if len(crossProjs) > 0 {
+			pids = append(pids, crossProjs...)
+		}
+		
+		store, _ := getStore(ctx, cfg)
+		allRecords, _ := store.GetAllRecords(ctx)
+		var targetChunks []db.Record
+		for _, r := range allRecords {
+			if r.Metadata["project_id"] == cfg.ProjectRoot && strings.HasPrefix(r.Metadata["path"], targetPath) {
+				targetChunks = append(targetChunks, r)
+			}
+		}
+
+		var out strings.Builder
+		out.WriteString(fmt.Sprintf("<duplicate_analysis target=\"%s\">\n", targetPath))
+		found := false
+		for _, tc := range targetChunks {
+			emb, _ := getEmbedding(ctx, tc.Content)
+			matches, _, _ := store.SearchWithScore(ctx, emb, 5, pids)
+			for _, m := range matches {
+				if m.Similarity > 0.93 && (m.Metadata["path"] != tc.Metadata["path"] || m.Metadata["project_id"] != tc.Metadata["project_id"]) {
+					out.WriteString(fmt.Sprintf("  <finding>\n    <original file=\"%s\">%s</original>\n", tc.Metadata["path"], tc.Metadata["path"]))
+					out.WriteString(fmt.Sprintf("    <match file=\"%s\" project=\"%s\" score=\"%f\">%s</match>\n  </finding>\n", m.Metadata["path"], m.Metadata["project_id"], m.Similarity, m.Metadata["path"]))
+					found = true
+				}
+			}
+		}
+		if !found { out.WriteString("  <summary>No duplicates found.</summary>\n") }
+		out.WriteString("</duplicate_analysis>")
+		return mcp.NewToolResultText(out.String()), nil
+	})
+
+	// 4. delete_context
+	s.AddTool(mcp.NewTool("delete_context",
+		mcp.WithDescription("Delete specific shared memory context, or completely wipe a project's vector index."),
+		mcp.WithString("target_path", mcp.Description("The exact file path, context ID, or 'ALL' to clear the whole project.")),
+		mcp.WithString("project_id", mcp.Description("The project ID to target. Defaults to the current project.")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		targetPath := request.GetString("target_path", "")
+		if targetPath == "" {
+			return mcp.NewToolResultError("target_path is required"), nil
+		}
+		projectID := request.GetString("project_id", cfg.ProjectRoot)
+
 		store, err := getStore(ctx, cfg)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		res, err := runStatus(ctx, store, cfg)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		return mcp.NewToolResultText(res), nil
-	})
 
-	// Tool: index_codebase
-	s.AddTool(mcp.NewTool("index_codebase",
-		mcp.WithDescription("Index the entire project codebase"),
-		mcp.WithString("projectId", mcp.Description("Optional absolute path to project root to index")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		projectId := request.GetString("projectId", "")
-		targetCfg := cfg
-		if projectId != "" {
-			targetCfg = &config.Config{
-				ProjectRoot: projectId,
-				DbPath:      cfg.DbPath,
-				ModelsDir:   cfg.ModelsDir,
-				Logger:      cfg.Logger,
+		if targetPath == "ALL" {
+			err = store.ClearProject(ctx, projectID)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to clear project: %v", err)), nil
 			}
+			return mcp.NewToolResultText(fmt.Sprintf("Successfully wiped all vectors for project: %s", projectID)), nil
 		}
-		summary, err := IndexFullCodebase(ctx, targetCfg, logger)
+
+		err = store.DeleteByPath(ctx, targetPath, projectID)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return mcp.NewToolResultError(fmt.Sprintf("failed to delete context: %v", err)), nil
 		}
-		summaryJSON, _ := json.MarshalIndent(summary, "", "  ")
-		return mcp.NewToolResultText(string(summaryJSON)), nil
+
+		return mcp.NewToolResultText(fmt.Sprintf("Deleted context/file: %s from project: %s", targetPath, projectID)), nil
 	})
 
-	// Tool: index_file
-	s.AddTool(mcp.NewTool("index_file",
-		mcp.WithDescription("Index a specific file for incremental updates"),
-		mcp.WithString("filePath", mcp.Description("Relative or absolute path to file")),
-		mcp.WithString("projectId", mcp.Description("Optional absolute path to project root")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		relPath := request.GetString("filePath", "")
-		projectId := request.GetString("projectId", "")
-		
-		targetCfg := cfg
-		if projectId != "" {
-			targetCfg = &config.Config{
-				ProjectRoot: projectId,
-				DbPath:      cfg.DbPath,
-				ModelsDir:   cfg.ModelsDir,
-				Logger:      cfg.Logger,
-			}
-		}
-
-		absPath := relPath
-		if !filepath.IsAbs(relPath) {
-			absPath = filepath.Join(targetCfg.ProjectRoot, relPath)
-		}
-
-		summary, err := indexSingleFile(ctx, absPath, targetCfg, logger)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		summaryJSON, _ := json.MarshalIndent(summary, "", "  ")
-		return mcp.NewToolResultText(string(summaryJSON)), nil
-	})
+	// 5. index_status
+	s.AddTool(mcp.NewTool("index_status", mcp.WithDescription("Check index status and background progress.")),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			store, _ := getStore(ctx, cfg)
+			res, _ := runStatus(ctx, store, cfg)
+			
+			bgStatus := "\n🛰️ Background Tasks:\n"
+			hasBg := false
+			progressMap.Range(func(key, value interface{}) bool {
+				bgStatus += fmt.Sprintf("- %s: %s\n", key, value)
+				hasBg = true
+				return true
+			})
+			if !hasBg { bgStatus += "- No active background indexing.\n" }
+			return mcp.NewToolResultText(res + bgStatus), nil
+		})
 
 	logger.Info("MCP Server listening on stdio...")
-	if err := server.ServeStdio(s); err != nil {
-		logger.Error("Server error", "error", err)
-	}
+	if err := server.ServeStdio(s); err != nil { logger.Error("Server error", "error", err) }
 }
 
-func getEmbedding(ctx context.Context, text string) ([]float32, error) {
-	e, err := embedPool.Get(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer embedPool.Put(e)
-	return e.Embed(ctx, text)
-}
-
-func runRetrieveContext(ctx context.Context, store *db.Store, query string, topK int) (string, error) {
+func runRetrieveContext(ctx context.Context, store *db.Store, query string, topK int, projectIDs []string) (string, error) {
 	emb, err := getEmbedding(ctx, query)
-	if err != nil {
-		return "", fmt.Errorf("embedding failed: %w", err)
-	}
-	
-	results, err := store.Search(ctx, emb, topK)
-	if err != nil {
-		return "", fmt.Errorf("search failed: %w", err)
-	}
-	
+	if err != nil { return "", err }
+	results, err := store.Search(ctx, emb, topK, projectIDs)
+	if err != nil { return "", err }
 	var out string
-	for _, r := range results {
-		out += fmt.Sprintf("--- %s ---\n%s\n", r.Metadata["path"], r.Content)
-	}
-	if out == "" {
-		out = "No relevant context found."
-	}
+	for _, r := range results { out += fmt.Sprintf("--- %s (%s) ---\n%s\n", r.Metadata["path"], r.Metadata["project_id"], r.Content) }
 	return out, nil
 }
 
 func runHealth(ctx context.Context, store *db.Store) (string, error) {
-	allRecords, err := store.GetAllRecords(ctx)
-	if err != nil {
-		return "", err
-	}
+	allRecords, _ := store.GetAllRecords(ctx)
 	var out string = "📊 Project Health Overview:\n"
 	count := 0
 	for _, r := range allRecords {
@@ -486,154 +506,100 @@ func runHealth(ctx context.Context, store *db.Store) (string, error) {
 			count++
 		}
 	}
-	if count == 0 {
-		return "No tasks found in project brain.", nil
-	}
+	if count == 0 { return "No tasks found.", nil }
 	return out, nil
 }
 
 func runStatus(ctx context.Context, store *db.Store, cfg *config.Config) (string, error) {
-	// 1. Get current files from disk
-	diskFiles, err := indexer.ScanFiles(cfg.ProjectRoot)
-	if err != nil {
-		return "", err
-	}
-
-	// 2. Get all indexed files from DB
-	dbMapping, err := store.GetPathHashMapping(ctx)
-	if err != nil {
-		return "", err
-	}
-
+	diskFiles, _ := indexer.ScanFiles(cfg.ProjectRoot)
+	dbMapping, _ := store.GetPathHashMapping(ctx, cfg.ProjectRoot)
 	var indexed, updated, missing []string
 	diskPaths := make(map[string]bool)
-
 	for _, absPath := range diskFiles {
 		relPath := config.GetRelativePath(absPath, cfg.ProjectRoot)
 		diskPaths[relPath] = true
-		
 		currentHash, _ := indexer.GetHash(absPath)
-		
 		if dbHash, exists := dbMapping[relPath]; exists {
-			if dbHash == currentHash {
-				indexed = append(indexed, relPath)
-			} else {
-				updated = append(updated, relPath)
-			}
-		} else {
-			missing = append(missing, relPath)
-		}
+			if dbHash == currentHash { indexed = append(indexed, relPath)
+			} else { updated = append(updated, relPath) }
+		} else { missing = append(missing, relPath) }
 	}
-
-	// 3. Find deleted files (in DB but not on disk)
 	var deleted []string
-	for dbPath := range dbMapping {
-		if !diskPaths[dbPath] {
-			deleted = append(deleted, dbPath)
-		}
-	}
-
+	for dbPath := range dbMapping { if !diskPaths[dbPath] { deleted = append(deleted, dbPath) } }
 	var out strings.Builder
-	out.WriteString("🔍 Detailed Index Status:\n")
-	out.WriteString(fmt.Sprintf("✅ Fully Indexed: %d files\n", len(indexed)))
-	out.WriteString(fmt.Sprintf("🔄 Outdated/Modified: %d files\n", len(updated)))
-	out.WriteString(fmt.Sprintf("📂 Missing from Index: %d files\n", len(missing)))
-	out.WriteString(fmt.Sprintf("🗑️ Deleted from Disk: %d files\n", len(deleted)))
-	
-	if len(updated) > 0 || len(missing) > 0 || len(deleted) > 0 {
-		out.WriteString("\n💡 Recommendation: Run './vector-mcp-go -index' to synchronize.")
-	}
-
+	out.WriteString(fmt.Sprintf("🔍 Index Status for %s:\n", cfg.ProjectRoot))
+	out.WriteString(fmt.Sprintf("✅ Fully Indexed: %d\n🔄 Modified: %d\n📂 Missing: %d\n🗑️ Deleted: %d\n", len(indexed), len(updated), len(missing), len(deleted)))
 	return out.String(), nil
 }
 
 func watchFiles(cfg *config.Config, logger *slog.Logger) {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		logger.Error("Failed to create watcher", "error", err)
-		return
-	}
+	watcher, _ := fsnotify.NewWatcher()
 	defer watcher.Close()
-	
-	watcher.Add(cfg.ProjectRoot)
+	watchRecursive := func(root string) {
+		filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if d != nil && d.IsDir() && !isIgnoredDir(d.Name()) { watcher.Add(path) }
+			return nil
+		})
+	}
+	watchRecursive(cfg.ProjectRoot)
 	for {
 		select {
 		case event, ok := <-watcher.Events:
 			if !ok { return }
+			if event.Has(fsnotify.Create) {
+				info, _ := os.Stat(event.Name)
+				if info != nil && info.IsDir() && !isIgnoredDir(info.Name()) { watcher.Add(event.Name) }
+			}
 			if event.Has(fsnotify.Write) {
 				ext := filepath.Ext(event.Name)
-				if ext == ".go" || ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
-					logger.Info("Auto re-indexing modified file", "file", event.Name)
+				if ext == ".go" || ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".md" {
 					indexSingleFile(context.Background(), event.Name, cfg, logger)
 				}
 			}
-		case err, ok := <-watcher.Errors:
-			if !ok { return }
-			logger.Error("Watcher error", "error", err)
+			if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
+				relPath := config.GetRelativePath(event.Name, cfg.ProjectRoot)
+				store, err := getStore(context.Background(), cfg)
+				if err == nil {
+					store.DeleteByPath(context.Background(), relPath, cfg.ProjectRoot)
+					logger.Info("File removed from vector index", "path", relPath)
+				}
+			}
+		case <-time.After(1 * time.Hour): // Keep alive
 		}
 	}
 }
 
 func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Logger) (IndexSummary, error) {
-	startTime := time.Now()
 	summary := IndexSummary{Status: "completed"}
-	store, err := getStore(ctx, cfg)
-	if err != nil { return summary, err }
-	
+	store, _ := getStore(ctx, cfg)
 	files, err := indexer.ScanFiles(cfg.ProjectRoot)
 	if err != nil { return summary, err }
 	summary.FilesProcessed = len(files)
 
-	// Pre-fetch hash mapping for fast lookup
-	hashMapping, _ := store.GetPathHashMapping(ctx)
-	
+	hashMapping, _ := store.GetPathHashMapping(ctx, cfg.ProjectRoot)
 	var toIndex []string
-	processedCount := 0
 	for _, path := range files {
 		relPath := config.GetRelativePath(path, cfg.ProjectRoot)
 		currentHash, _ := indexer.GetHash(path)
-		
 		if existingHash, ok := hashMapping[relPath]; ok && existingHash == currentHash {
 			summary.FilesSkipped++
-			processedCount++
-			if processedCount%100 == 0 || processedCount == len(files) {
-				fmt.Printf("⏳ Progress: %d/%d files processed (Fast-skip unchanged)...\n", processedCount, len(files))
-			}
 			continue
 		}
 		toIndex = append(toIndex, path)
 	}
 
-	// 3. Prune deleted files
-	deletedCount := 0
 	for dbPath := range hashMapping {
-		isStillOnDisk := false
-		for _, absPath := range files {
-			if config.GetRelativePath(absPath, cfg.ProjectRoot) == dbPath {
-				isStillOnDisk = true
-				break
-			}
-		}
-		if !isStillOnDisk {
-			store.DeleteByPath(ctx, dbPath)
-			deletedCount++
-		}
-	}
-	if deletedCount > 0 {
-		fmt.Printf("🧹 Pruned %d deleted files from index.\n", deletedCount)
+		found := false
+		for _, absPath := range files { if config.GetRelativePath(absPath, cfg.ProjectRoot) == dbPath { found = true; break } }
+		if !found { store.DeleteByPath(ctx, dbPath, cfg.ProjectRoot) }
 	}
 
-	if len(toIndex) == 0 {
-		fmt.Printf("✅ All %d files are already indexed and up-to-date.\n", len(files))
-		summary.DurationMs = time.Since(startTime).Milliseconds()
-		return summary, nil
-	}
-
-	fmt.Printf("📂 Found %d new or modified files to index.\n", len(toIndex))
+	if len(toIndex) == 0 { return summary, nil }
 
 	var wg sync.WaitGroup
 	results := make(chan result, len(toIndex))
 	tasks := make(chan string, len(toIndex))
+
 	for i := 0; i < runtime.NumCPU(); i++ {
 		wg.Add(1)
 		go func() {
@@ -643,25 +609,43 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Log
 			}
 		}()
 	}
-	for _, path := range toIndex { tasks <- path }
-	close(tasks)
-	
-	go func() { wg.Wait(); close(results) }()
-	
+
+	go func() {
+		for _, path := range toIndex { tasks <- path }
+		close(tasks)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var batch []db.Record
+	processed := 0
 	for r := range results {
-		processedCount++
-		if processedCount%50 == 0 || processedCount == len(files) {
-			fmt.Printf("⏳ Progress: %d/%d files processed...\n", processedCount, len(files))
-		}
-		if r.err != "" {
-			summary.Errors = append(summary.Errors, r.err)
-		} else if r.indexed {
+		processed++
+		if r.err != "" { summary.Errors = append(summary.Errors, r.err) }
+		if r.indexed {
 			summary.FilesIndexed++
-		} else if r.skipped {
-			summary.FilesSkipped++
+			batch = append(batch, r.records...)
+		}
+		if r.skipped { summary.FilesSkipped++ }
+
+		if len(batch) >= 50 {
+			logger.Info("Inserting batch of records", "count", len(batch))
+			store.Insert(ctx, batch)
+			batch = batch[:0]
+		}
+
+		if processed % 50 == 0 || processed == len(toIndex) {
+			progressMap.Store(cfg.ProjectRoot, fmt.Sprintf("Processing: %d/%d files", processed, len(toIndex)))
 		}
 	}
-	summary.DurationMs = time.Since(startTime).Milliseconds()
+
+	if len(batch) > 0 {
+		store.Insert(ctx, batch)
+	}
+
 	return summary, nil
 }
 
@@ -669,31 +653,27 @@ type result struct {
 	indexed bool
 	skipped bool
 	err     string
+	records []db.Record
 }
 
 func processFile(ctx context.Context, path string, cfg *config.Config, store *db.Store) result {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Panic processing file", "path", path, "recover", r)
+		}
+	}()
+
 	relPath := config.GetRelativePath(path, cfg.ProjectRoot)
-	
-	// 1. Calculate current hash
 	currentHash, err := indexer.GetHash(path)
-	if err != nil {
-		return result{err: err.Error()}
-	}
+	if err != nil { return result{err: err.Error()} }
 
-	// 2. Check if already indexed with same hash
-	existingHash, _ := store.GetFileHash(ctx, relPath)
-	if existingHash == currentHash {
-		// Skip re-indexing
-		return result{skipped: true}
-	}
-
-	cfg.Logger.Info("Indexing file", "path", relPath)
+	existingHash, _ := store.GetFileHash(ctx, relPath, cfg.ProjectRoot)
+	if existingHash == currentHash { return result{skipped: true} }
 
 	content, err := os.ReadFile(path)
-	if err != nil {
-		return result{err: err.Error()}
-	}
-	chunks := indexer.CreateChunks(string(content), filepath.Ext(path))
+	if err != nil { return result{err: err.Error()} }
+	
+	chunks := indexer.CreateChunks(string(content), relPath)
 	var records []db.Record
 	for _, chunk := range chunks {
 		emb, err := getEmbedding(ctx, chunk.Content)
@@ -701,22 +681,22 @@ func processFile(ctx context.Context, path string, cfg *config.Config, store *db
 		relJSON, _ := json.Marshal(chunk.Relationships)
 		symJSON, _ := json.Marshal(chunk.Symbols)
 		records = append(records, db.Record{
-			ID: fmt.Sprintf("%s-%d", relPath, time.Now().UnixNano()),
+			ID: fmt.Sprintf("%s-%s-%d", cfg.ProjectRoot, relPath, time.Now().UnixNano()),
 			Content: chunk.Content,
 			Embedding: emb,
 			Metadata: map[string]string{
-				"path":          relPath,
-				"hash":          currentHash,
+				"path": relPath,
+				"project_id": cfg.ProjectRoot,
+				"hash": currentHash,
 				"relationships": string(relJSON),
 				"symbols":       string(symJSON),
 			},
 		})
 	}
+
 	if len(records) > 0 {
-		store.DeleteByPath(ctx, relPath)
-		err = store.Insert(ctx, records)
-		if err != nil { return result{err: err.Error()} }
-		return result{indexed: true}
+		store.DeleteByPath(ctx, relPath, cfg.ProjectRoot)
+		return result{indexed: true, records: records}
 	}
 	return result{}
 }
@@ -725,21 +705,14 @@ func indexSingleFile(ctx context.Context, path string, cfg *config.Config, logge
 	store, err := getStore(ctx, cfg)
 	if err != nil { return IndexSummary{}, err }
 	res := processFile(ctx, path, cfg, store)
-	if res.err != "" { return IndexSummary{Status: "error", Errors: []string{res.err}}, nil }
-	return IndexSummary{Status: "completed", FilesProcessed: 1, FilesIndexed: 1}, nil
+	if res.err != "" { return IndexSummary{Status: "error"}, nil }
+	if res.indexed {
+		store.Insert(ctx, res.records)
+	}
+	return IndexSummary{Status: "completed", FilesIndexed: 1}, nil
 }
 
 func runStandaloneIndex(cfg *config.Config, logger *slog.Logger) {
-	fmt.Printf("🚀 Starting full indexing for: %s\n", cfg.ProjectRoot)
-	fmt.Println("📂 Detailed logs: tail -f ~/.local/share/vector-mcp-go/server.log")
-	
-	summary, err := IndexFullCodebase(context.Background(), cfg, logger)
-	if err != nil {
-		fmt.Printf("❌ Indexing failed: %v\n", err)
-		logger.Error("Standalone indexing failed", "error", err)
-		return
-	}
-	
-	fmt.Printf("✅ Indexing complete! Processed %d files.\n", summary.FilesProcessed)
-	logger.Info("Standalone indexing complete", "summary", summary)
+	summary, _ := IndexFullCodebase(context.Background(), cfg, logger)
+	logger.Info("Standalone index complete", "summary", summary)
 }
