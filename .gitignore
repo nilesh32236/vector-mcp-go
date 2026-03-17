@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+dist/
+.vector-db/
+*.log
+
+# Environment
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+models/
+
+vector-mcp-go
