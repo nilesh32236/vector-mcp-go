@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -233,6 +234,94 @@ func main() {
 		return mcp.NewToolResultText(res), nil
 	})
 
+	// Tool: get_related_context
+	s.AddTool(mcp.NewTool("get_related_context",
+		mcp.WithDescription("Retrieve context for a file and its local dependencies"),
+		mcp.WithString("filePath", mcp.Description("The relative path of the file to analyze")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		filePath := request.GetString("filePath", "")
+		store, err := getStore(ctx, cfg)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		// 1. Get all chunks for the target file
+		records, err := store.GetByPath(ctx, filePath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to get records for %s: %v", filePath, err)), nil
+		}
+		if len(records) == 0 {
+			return mcp.NewToolResultText(fmt.Sprintf("No context found for file: %s", filePath)), nil
+		}
+
+		// 2. Extract unique relationships (local dependencies)
+		uniqueDeps := make(map[string]bool)
+		for _, r := range records {
+			var deps []string
+			relStr := r.Metadata["relationships"]
+			if relStr != "" {
+				if err := json.Unmarshal([]byte(relStr), &deps); err == nil {
+					for _, d := range deps {
+						// Filter for local imports:
+						// - Starts with module name (vector-mcp-go)
+						// - Or is a relative path (./ or ../)
+						// - Or doesn't contain a dot in the first segment (simplified stdlib check)
+						// Actually, standard library is usually like "fmt", "os", etc.
+						// External is "github.com/..."
+						isLocal := strings.HasPrefix(d, "vector-mcp-go") || 
+						           strings.HasPrefix(d, "./") || 
+						           strings.HasPrefix(d, "../")
+						
+						if isLocal {
+							uniqueDeps[d] = true
+						}
+					}
+				}
+			}
+		}
+
+		var out strings.Builder
+		out.WriteString(fmt.Sprintf("### Summary for %s\n", filePath))
+		out.WriteString(fmt.Sprintf("Found %d chunks in this file.\n\n", len(records)))
+		for i, r := range records {
+			if i < 2 { // Show first 2 chunks as summary
+				out.WriteString(fmt.Sprintf("Chunk %d:\n%s\n\n", i+1, r.Content))
+			}
+		}
+
+		if len(uniqueDeps) > 0 {
+			out.WriteString("### Dependencies Context:\n")
+			allRecords, _ := store.GetAllRecords(ctx)
+			for dep := range uniqueDeps {
+				// Try to find the file path for this dependency
+				depPath := dep
+				if strings.HasPrefix(dep, "vector-mcp-go/") {
+					depPath = strings.TrimPrefix(dep, "vector-mcp-go/")
+				}
+
+				// Search for top 3 relevant chunks from this dependency
+				foundAny := false
+				count := 0
+				for _, dr := range allRecords {
+					if strings.Contains(dr.Metadata["path"], depPath) {
+						out.WriteString(fmt.Sprintf("#### From dependency: %s (Path: %s)\n", dep, dr.Metadata["path"]))
+						out.WriteString(fmt.Sprintf("%s\n\n", dr.Content))
+						foundAny = true
+						count++
+						if count >= 3 { break }
+					}
+				}
+				if !foundAny {
+					out.WriteString(fmt.Sprintf("#### Dependency: %s (No indexed chunks found)\n\n", dep))
+				}
+			}
+		} else {
+			out.WriteString("\n*No local dependencies found for this file.*\n")
+		}
+
+		return mcp.NewToolResultText(out.String()), nil
+	})
+
 	// Tool: index_codebase
 	s.AddTool(mcp.NewTool("index_codebase",
 		mcp.WithDescription("Index the entire project codebase"),
@@ -362,12 +451,42 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Log
 	summary := IndexSummary{Status: "completed"}
 	store, err := getStore(ctx, cfg)
 	if err != nil { return summary, err }
+	
 	files, err := indexer.ScanFiles(cfg.ProjectRoot)
 	if err != nil { return summary, err }
 	summary.FilesProcessed = len(files)
+
+	// Pre-fetch hash mapping for fast lookup
+	hashMapping, _ := store.GetPathHashMapping(ctx)
+	
+	var toIndex []string
+	processedCount := 0
+	for _, path := range files {
+		relPath := config.GetRelativePath(path, cfg.ProjectRoot)
+		currentHash, _ := indexer.GetHash(path)
+		
+		if existingHash, ok := hashMapping[relPath]; ok && existingHash == currentHash {
+			summary.FilesSkipped++
+			processedCount++
+			if processedCount%100 == 0 || processedCount == len(files) {
+				fmt.Printf("⏳ Progress: %d/%d files processed (Fast-skip unchanged)...\n", processedCount, len(files))
+			}
+			continue
+		}
+		toIndex = append(toIndex, path)
+	}
+
+	if len(toIndex) == 0 {
+		fmt.Printf("✅ All %d files are already indexed and up-to-date.\n", len(files))
+		summary.DurationMs = time.Since(startTime).Milliseconds()
+		return summary, nil
+	}
+
+	fmt.Printf("📂 Found %d new or modified files to index.\n", len(toIndex))
+
 	var wg sync.WaitGroup
-	results := make(chan result, len(files))
-	tasks := make(chan string, len(files))
+	results := make(chan result, len(toIndex))
+	tasks := make(chan string, len(toIndex))
 	for i := 0; i < runtime.NumCPU(); i++ {
 		wg.Add(1)
 		go func() {
@@ -377,22 +496,50 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Log
 			}
 		}()
 	}
-	for _, path := range files { tasks <- path }
+	for _, path := range toIndex { tasks <- path }
 	close(tasks)
+	
 	go func() { wg.Wait(); close(results) }()
+	
 	for r := range results {
-		if r.err != "" { summary.Errors = append(summary.Errors, r.err)
-		} else if r.indexed { summary.FilesIndexed++
-		} else { summary.FilesSkipped++ }
+		processedCount++
+		if processedCount%50 == 0 || processedCount == len(files) {
+			fmt.Printf("⏳ Progress: %d/%d files processed...\n", processedCount, len(files))
+		}
+		if r.err != "" {
+			summary.Errors = append(summary.Errors, r.err)
+		} else if r.indexed {
+			summary.FilesIndexed++
+		} else if r.skipped {
+			summary.FilesSkipped++
+		}
 	}
 	summary.DurationMs = time.Since(startTime).Milliseconds()
 	return summary, nil
 }
 
-type result struct { indexed bool; err string }
+type result struct {
+	indexed bool
+	skipped bool
+	err     string
+}
 
 func processFile(ctx context.Context, path string, cfg *config.Config, store *db.Store) result {
 	relPath := config.GetRelativePath(path, cfg.ProjectRoot)
+	
+	// 1. Calculate current hash
+	currentHash, err := indexer.GetHash(path)
+	if err != nil {
+		return result{err: err.Error()}
+	}
+
+	// 2. Check if already indexed with same hash
+	existingHash, _ := store.GetFileHash(ctx, relPath)
+	if existingHash == currentHash {
+		// Skip re-indexing
+		return result{skipped: true}
+	}
+
 	cfg.Logger.Info("Indexing file", "path", relPath)
 
 	content, err := os.ReadFile(path)
@@ -404,11 +551,18 @@ func processFile(ctx context.Context, path string, cfg *config.Config, store *db
 	for _, chunk := range chunks {
 		emb, err := getEmbedding(ctx, chunk.Content)
 		if err != nil { continue }
+		relJSON, _ := json.Marshal(chunk.Relationships)
+		symJSON, _ := json.Marshal(chunk.Symbols)
 		records = append(records, db.Record{
 			ID: fmt.Sprintf("%s-%d", relPath, time.Now().UnixNano()),
 			Content: chunk.Content,
 			Embedding: emb,
-			Metadata: map[string]string{"path": relPath},
+			Metadata: map[string]string{
+				"path":          relPath,
+				"hash":          currentHash,
+				"relationships": string(relJSON),
+				"symbols":       string(symJSON),
+			},
 		})
 	}
 	if len(records) > 0 {
@@ -429,7 +583,16 @@ func indexSingleFile(ctx context.Context, path string, cfg *config.Config, logge
 }
 
 func runStandaloneIndex(cfg *config.Config, logger *slog.Logger) {
+	fmt.Printf("🚀 Starting full indexing for: %s\n", cfg.ProjectRoot)
+	fmt.Println("📂 Detailed logs: tail -f ~/.local/share/vector-mcp-go/server.log")
+	
 	summary, err := IndexFullCodebase(context.Background(), cfg, logger)
-	if err != nil { logger.Error("Standalone indexing failed", "error", err); return }
+	if err != nil {
+		fmt.Printf("❌ Indexing failed: %v\n", err)
+		logger.Error("Standalone indexing failed", "error", err)
+		return
+	}
+	
+	fmt.Printf("✅ Indexing complete! Processed %d files.\n", summary.FilesProcessed)
 	logger.Info("Standalone indexing complete", "summary", summary)
 }

@@ -26,7 +26,19 @@ func ScanFiles(root string) ([]string, error) {
 	}
 
 	// Default hardcoded exclusions if no ignore file or as fallback safety
-	defaultExcludes := []string{".git", "node_modules", ".vector-db", "dist", "build"}
+	defaultExcludes := []string{
+		"node_modules",
+		".git",
+		".next",
+		".turbo",
+		"dist",
+		"build",
+		"generated",
+		"coverage",
+		"out",
+		"vendor",
+		".vector-db",
+	}
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -40,8 +52,10 @@ func ScanFiles(root string) ([]string, error) {
 
 		// Always exclude default dirs
 		if info.IsDir() {
+			dirName := info.Name()
 			for _, d := range defaultExcludes {
-				if info.Name() == d {
+				if dirName == d {
+					// fmt.Printf("🚫 Skipping excluded directory: %s\n", path)
 					return filepath.SkipDir
 				}
 			}

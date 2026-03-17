@@ -77,9 +77,57 @@ func (s *Store) Search(ctx context.Context, queryEmbedding []float32, topK int) 
 	return records, nil
 }
 
+func (s *Store) GetByPath(ctx context.Context, path string) ([]Record, error) {
+	count := s.collection.Count()
+	if count == 0 {
+		return nil, nil
+	}
+	
+	// Use a dummy query with a metadata filter
+	dummyEmb := make([]float32, 1024)
+	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"path": path}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var records []Record
+	for _, doc := range res {
+		records = append(records, Record{
+			ID:      doc.ID,
+			Content: doc.Content,
+			Metadata: doc.Metadata,
+		})
+	}
+	return records, nil
+}
+
 func (s *Store) DeleteByPath(ctx context.Context, path string) error {
 	filter := map[string]string{"path": path}
 	return s.collection.Delete(ctx, filter, nil)
+}
+
+func (s *Store) GetPathHashMapping(ctx context.Context) (map[string]string, error) {
+	records, err := s.GetAllRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mapping := make(map[string]string)
+	for _, r := range records {
+		if path, ok := r.Metadata["path"]; ok {
+			mapping[path] = r.Metadata["hash"]
+		}
+	}
+	return mapping, nil
+}
+
+func (s *Store) GetFileHash(ctx context.Context, path string) (string, error) {
+	// We only need one record to check the hash
+	dummyEmb := make([]float32, 1024)
+	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, 1, map[string]string{"path": path}, nil)
+	if err != nil || len(res) == 0 {
+		return "", err
+	}
+	return res[0].Metadata["hash"], nil
 }
 
 func (s *Store) Count() int {
