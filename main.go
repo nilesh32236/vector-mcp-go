@@ -83,24 +83,69 @@ func main() {
 	args := flag.Args()
 	if len(args) > 0 {
 		cmd := args[0]
+		
+		// Commands that don't need the embedder pool
+		if cmd == "status" || cmd == "health" {
+			store, err := getStore(ctx, cfg)
+			if err != nil {
+				logger.Error("DB connection failed", "error", err)
+				os.Exit(1)
+			}
+			if cmd == "status" {
+				res, _ := runStatus(ctx, store, cfg)
+				fmt.Println(res)
+			} else {
+				res, _ := runHealth(ctx, store)
+				fmt.Println(res)
+			}
+			return
+		}
+
+		// Initialize Embedder Pool for commands that need it
+		pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, 1)
+		if err != nil {
+			logger.Error("Failed to initialize embedder pool", "error", err)
+			os.Exit(1)
+		}
+		embedPool = pool
+		defer embedPool.Close()
+
 		store, err := getStore(ctx, cfg)
 		if err != nil {
 			logger.Error("DB connection failed", "error", err)
 			os.Exit(1)
 		}
+
 		switch cmd {
-		case "status":
-			res, _ := runStatus(ctx, store, cfg)
-			fmt.Println(res)
-			return
-		case "health":
-			res, _ := runHealth(ctx, store)
-			fmt.Println(res)
+		case "retrieve_context":
+			query := ""
+			topK := 5
+			if len(args) > 1 {
+				for i := 1; i < len(args); i++ {
+					if args[i] == "-query" && i+1 < len(args) {
+						query = args[i+1]
+						i++
+					} else if args[i] == "-topK" && i+1 < len(args) {
+						fmt.Sscanf(args[i+1], "%d", &topK)
+						i++
+					}
+				}
+			}
+			if query == "" {
+				fmt.Println("Usage: ./vector-mcp-go retrieve_context -query \"your query\" [-topK 5]")
+				return
+			}
+			res, err := runRetrieveContext(ctx, store, query, topK)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+			} else {
+				fmt.Println(res)
+			}
 			return
 		}
 	}
 
-	// Initialize Embedder Pool
+	// Default initialization for MCP server mode
 	pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, 2)
 	if err != nil {
 		logger.Error("Failed to initialize embedder pool", "error", err)
@@ -322,6 +367,21 @@ func main() {
 		return mcp.NewToolResultText(out.String()), nil
 	})
 
+	// Tool: index_status
+	s.AddTool(mcp.NewTool("index_status",
+		mcp.WithDescription("Check synchronization status between filesystem and vector index"),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		store, err := getStore(ctx, cfg)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		res, err := runStatus(ctx, store, cfg)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(res), nil
+	})
+
 	// Tool: index_codebase
 	s.AddTool(mcp.NewTool("index_codebase",
 		mcp.WithDescription("Index the entire project codebase"),
@@ -392,6 +452,27 @@ func getEmbedding(ctx context.Context, text string) ([]float32, error) {
 	return e.Embed(ctx, text)
 }
 
+func runRetrieveContext(ctx context.Context, store *db.Store, query string, topK int) (string, error) {
+	emb, err := getEmbedding(ctx, query)
+	if err != nil {
+		return "", fmt.Errorf("embedding failed: %w", err)
+	}
+	
+	results, err := store.Search(ctx, emb, topK)
+	if err != nil {
+		return "", fmt.Errorf("search failed: %w", err)
+	}
+	
+	var out string
+	for _, r := range results {
+		out += fmt.Sprintf("--- %s ---\n%s\n", r.Metadata["path"], r.Content)
+	}
+	if out == "" {
+		out = "No relevant context found."
+	}
+	return out, nil
+}
+
 func runHealth(ctx context.Context, store *db.Store) (string, error) {
 	allRecords, err := store.GetAllRecords(ctx)
 	if err != nil {
@@ -412,11 +493,58 @@ func runHealth(ctx context.Context, store *db.Store) (string, error) {
 }
 
 func runStatus(ctx context.Context, store *db.Store, cfg *config.Config) (string, error) {
-	files, err := indexer.ScanFiles(cfg.ProjectRoot)
+	// 1. Get current files from disk
+	diskFiles, err := indexer.ScanFiles(cfg.ProjectRoot)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Index status: %d files in project root, %d records in database.", len(files), store.Count()), nil
+
+	// 2. Get all indexed files from DB
+	dbMapping, err := store.GetPathHashMapping(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var indexed, updated, missing []string
+	diskPaths := make(map[string]bool)
+
+	for _, absPath := range diskFiles {
+		relPath := config.GetRelativePath(absPath, cfg.ProjectRoot)
+		diskPaths[relPath] = true
+		
+		currentHash, _ := indexer.GetHash(absPath)
+		
+		if dbHash, exists := dbMapping[relPath]; exists {
+			if dbHash == currentHash {
+				indexed = append(indexed, relPath)
+			} else {
+				updated = append(updated, relPath)
+			}
+		} else {
+			missing = append(missing, relPath)
+		}
+	}
+
+	// 3. Find deleted files (in DB but not on disk)
+	var deleted []string
+	for dbPath := range dbMapping {
+		if !diskPaths[dbPath] {
+			deleted = append(deleted, dbPath)
+		}
+	}
+
+	var out strings.Builder
+	out.WriteString("🔍 Detailed Index Status:\n")
+	out.WriteString(fmt.Sprintf("✅ Fully Indexed: %d files\n", len(indexed)))
+	out.WriteString(fmt.Sprintf("🔄 Outdated/Modified: %d files\n", len(updated)))
+	out.WriteString(fmt.Sprintf("📂 Missing from Index: %d files\n", len(missing)))
+	out.WriteString(fmt.Sprintf("🗑️ Deleted from Disk: %d files\n", len(deleted)))
+	
+	if len(updated) > 0 || len(missing) > 0 || len(deleted) > 0 {
+		out.WriteString("\n💡 Recommendation: Run './vector-mcp-go -index' to synchronize.")
+	}
+
+	return out.String(), nil
 }
 
 func watchFiles(cfg *config.Config, logger *slog.Logger) {
@@ -474,6 +602,25 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, logger *slog.Log
 			continue
 		}
 		toIndex = append(toIndex, path)
+	}
+
+	// 3. Prune deleted files
+	deletedCount := 0
+	for dbPath := range hashMapping {
+		isStillOnDisk := false
+		for _, absPath := range files {
+			if config.GetRelativePath(absPath, cfg.ProjectRoot) == dbPath {
+				isStillOnDisk = true
+				break
+			}
+		}
+		if !isStillOnDisk {
+			store.DeleteByPath(ctx, dbPath)
+			deletedCount++
+		}
+	}
+	if deletedCount > 0 {
+		fmt.Printf("🧹 Pruned %d deleted files from index.\n", deletedCount)
 	}
 
 	if len(toIndex) == 0 {
