@@ -22,29 +22,71 @@ type Embedder struct {
 	outputTensor        *onnxruntime_go.Tensor[float32]
 }
 
+type EmbedderPool struct {
+	pool chan *Embedder
+}
+
+func NewEmbedderPool(ctx context.Context, modelsDir string, size int) (*EmbedderPool, error) {
+	pool := make(chan *Embedder, size)
+	for i := 0; i < size; i++ {
+		emb, err := NewEmbedder(modelsDir)
+		if err != nil {
+			// Clean up already created embedders
+			close(pool)
+			for e := range pool {
+				e.Close()
+			}
+			return nil, fmt.Errorf("failed to initialize embedder pool (index %d): %w", i, err)
+		}
+		pool <- emb
+	}
+	return &EmbedderPool{pool: pool}, nil
+}
+
+func (p *EmbedderPool) Get(ctx context.Context) (*Embedder, error) {
+	select {
+	case e := <-p.pool:
+		return e, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (p *EmbedderPool) Put(e *Embedder) {
+	p.pool <- e
+}
+
+func (p *EmbedderPool) Close() {
+	close(p.pool)
+	for e := range p.pool {
+		e.Close()
+	}
+}
+
 func NewEmbedder(modelsDir string) (*Embedder, error) {
-	fmt.Fprintf(os.Stderr, "   DEBUG: Entering NewEmbedder...\n")
 	modelPath := filepath.Join(modelsDir, "bge-m3-q4.onnx")
 	tokenizerPath := filepath.Join(modelsDir, "tokenizer.json")
 
-	fmt.Fprintf(os.Stderr, "   DEBUG: Loading tokenizer from %s...\n", tokenizerPath)
+	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("model file not found: %s", modelPath)
+	}
+	if _, err := os.Stat(tokenizerPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("tokenizer file not found: %s", tokenizerPath)
+	}
+
 	tk, err := pretrained.FromFile(tokenizerPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tokenizer from %s: %w", tokenizerPath, err)
 	}
 
-	fmt.Fprintf(os.Stderr, "   DEBUG: Tokenizer loaded. Creating shape...\n")
 	shape := onnxruntime_go.NewShape(1, MaxSeqLength)
 
-	// Pre-allocate input tensors
-	fmt.Fprintf(os.Stderr, "   DEBUG: Allocating inputIdsTensor...\n")
 	inputIds := make([]int64, MaxSeqLength)
 	inputIdsTensor, err := onnxruntime_go.NewTensor(shape, inputIds)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Fprintf(os.Stderr, "   DEBUG: Allocating attentionMaskTensor...\n")
 	attentionMask := make([]int64, MaxSeqLength)
 	attentionMaskTensor, err := onnxruntime_go.NewTensor(shape, attentionMask)
 	if err != nil {
@@ -52,8 +94,6 @@ func NewEmbedder(modelsDir string) (*Embedder, error) {
 		return nil, err
 	}
 
-	// Pre-allocate output tensor
-	fmt.Fprintf(os.Stderr, "   DEBUG: Allocating outputTensor...\n")
 	outputShape := onnxruntime_go.NewShape(1, MaxSeqLength, 1024)
 	outputTensor, err := onnxruntime_go.NewEmptyTensor[float32](outputShape)
 	if err != nil {
@@ -62,7 +102,6 @@ func NewEmbedder(modelsDir string) (*Embedder, error) {
 		return nil, err
 	}
 
-	fmt.Fprintf(os.Stderr, "   DEBUG: Creating AdvancedSession...\n")
 	inputs := []onnxruntime_go.Value{inputIdsTensor, attentionMaskTensor}
 	outputs := []onnxruntime_go.Value{outputTensor}
 
@@ -71,14 +110,12 @@ func NewEmbedder(modelsDir string) (*Embedder, error) {
 		[]string{"last_hidden_state"},
 		inputs, outputs, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "   DEBUG: Session creation failed: %v\n", err)
 		inputIdsTensor.Destroy()
 		attentionMaskTensor.Destroy()
 		outputTensor.Destroy()
 		return nil, fmt.Errorf("failed to create ONNX session: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "   DEBUG: NewEmbedder success!\n")
 	return &Embedder{
 		session:             session,
 		tokenizer:           tk,
@@ -89,30 +126,24 @@ func NewEmbedder(modelsDir string) (*Embedder, error) {
 }
 
 func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err error) {
-	// Panic recovery for buggy tokenizer internal states
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("tokenizer panic: %v", r)
 		}
 	}()
 
-	// 0. Sanitize and validate
 	if !utf8.ValidString(text) {
-		// Attempt to sanitize by stripping invalid bytes if possible, or just fail
 		return nil, fmt.Errorf("invalid UTF-8 sequence")
 	}
 	if len(text) == 0 {
 		return nil, fmt.Errorf("empty input text")
 	}
 
-	// Truncate to a safe limit to avoid internal tokenizer buffer issues
-	// 16k runes is plenty for 512 tokens
 	runes := []rune(text)
 	if len(runes) > 16000 {
 		text = string(runes[:16000])
 	}
 
-	// 1. Tokenize
 	en, err := e.tokenizer.EncodeSingle(text, true)
 	if err != nil {
 		return nil, fmt.Errorf("tokenization failed: %w", err)
@@ -121,7 +152,6 @@ func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err e
 	ids := en.GetIds()
 	mask := en.GetAttentionMask()
 
-	// 2. Update existing tensor data
 	inputIdsData := e.inputIdsTensor.GetData()
 	attentionMaskData := e.attentionMaskTensor.GetData()
 
@@ -130,18 +160,16 @@ func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err e
 			inputIdsData[i] = int64(ids[i])
 			attentionMaskData[i] = int64(mask[i])
 		} else {
-			inputIdsData[i] = 0 // Padding
+			inputIdsData[i] = 0
 			attentionMaskData[i] = 0
 		}
 	}
 
-	// 3. Run Inference
 	err = e.session.Run()
 	if err != nil {
 		return nil, fmt.Errorf("ONNX run failed: %w", err)
 	}
 
-	// 4. Mean Pooling: Take CLS
 	fullOutput := e.outputTensor.GetData()
 	embedding := make([]float32, 1024)
 	copy(embedding, fullOutput[:1024])

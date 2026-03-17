@@ -13,22 +13,18 @@ type Store struct {
 }
 
 type Record struct {
-	ID        string
-	Content   string
-	Embedding []float32
-	Metadata  map[string]string
+	ID        string            `json:"id"`
+	Content   string            `json:"content"`
+	Embedding []float32         `json:"embedding"`
+	Metadata  map[string]string `json:"metadata"`
 }
 
 func Connect(ctx context.Context, dbPath string, collectionName string) (*Store, error) {
-	// Create or load the persistent DB
-	// False for compress as code is generally small
 	db, err := chromem.NewPersistentDB(dbPath, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create persistent DB: %w", err)
 	}
 	
-	// Get or create collection
-	// We pass nil for embedding function because we'll provide them manually
 	col := db.GetCollection(collectionName, nil)
 	if col == nil {
 		col, err = db.CreateCollection(collectionName, nil, nil)
@@ -54,7 +50,6 @@ func (s *Store) Insert(ctx context.Context, records []Record) error {
 		})
 	}
 
-	// Use number of CPUs for parallel processing
 	return s.collection.AddDocuments(ctx, docs, runtime.NumCPU())
 }
 
@@ -82,18 +77,6 @@ func (s *Store) Search(ctx context.Context, queryEmbedding []float32, topK int) 
 	return records, nil
 }
 
-func (s *Store) GetByID(ctx context.Context, id string) (Record, error) {
-	doc, err := s.collection.GetByID(ctx, id)
-	if err != nil {
-		return Record{}, err
-	}
-	return Record{
-		ID:      doc.ID,
-		Content: doc.Content,
-		Metadata: doc.Metadata,
-	}, nil
-}
-
 func (s *Store) DeleteByPath(ctx context.Context, path string) error {
 	filter := map[string]string{"path": path}
 	return s.collection.Delete(ctx, filter, nil)
@@ -109,7 +92,7 @@ func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {
 		return nil, nil
 	}
 	
-	// Query with the exact number of documents available
+	// Chromem-go doesn't have a direct "get all", so we use a dummy query with high topK
 	dummyEmb := make([]float32, 1024)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, nil, nil)
 	if err != nil {
