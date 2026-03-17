@@ -17,5 +17,15 @@ Thumbs.db
 .idea/
 
 models/
+lib/linux_amd64/
+lib/darwin_arm64/
+lib/darwin_amd64/
 
+# Binaries
 vector-mcp-go
+*.so
+*.dylib
+*.a
+*.onnx
+*.json
+!tokenizer.json
