@@ -21,7 +21,7 @@ type Config struct {
 	Logger      *slog.Logger
 }
 
-func LoadConfig() *Config {
+func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Config {
 	_ = godotenv.Load() // Ignore error if .env file doesn't exist
 
 	home, err := os.UserHomeDir()
@@ -29,19 +29,28 @@ func LoadConfig() *Config {
 		home = os.TempDir()
 	}
 
-	dataDir := os.Getenv("DATA_DIR")
+	dataDir := dataDirOverride
 	if dataDir == "" {
-		dataDir = filepath.Join(home, ".local", "share", "vector-mcp-go")
+		dataDir = os.Getenv("DATA_DIR")
+		if dataDir == "" {
+			dataDir = filepath.Join(home, ".local", "share", "vector-mcp-go")
+		}
 	}
 
-	dbPath := os.Getenv("DB_PATH")
+	dbPath := dbPathOverride
 	if dbPath == "" {
-		dbPath = filepath.Join(dataDir, "lancedb")
+		dbPath = os.Getenv("DB_PATH")
+		if dbPath == "" {
+			dbPath = filepath.Join(dataDir, "lancedb")
+		}
 	}
 
-	modelsDir := os.Getenv("MODELS_DIR")
+	modelsDir := modelsDirOverride
 	if modelsDir == "" {
-		modelsDir = filepath.Join(dataDir, "models")
+		modelsDir = os.Getenv("MODELS_DIR")
+		if modelsDir == "" {
+			modelsDir = filepath.Join(dataDir, "models")
+		}
 	}
 
 	logPath := os.Getenv("LOG_PATH")

@@ -153,14 +153,17 @@ func startIndexingWorker(cfg *config.Config, logger *slog.Logger) {
 	}
 }
 func main() {
-	cfg := config.LoadConfig()
+	dataDirFlag := flag.String("data-dir", "", "Base directory for DB and models (defaults to ~/.local/share/vector-mcp-go)")
+	modelsDirFlag := flag.String("models-dir", "", "Specific directory for models (defaults to data-dir/models)")
+	dbPathFlag := flag.String("db-path", "", "Specific path for the database (defaults to data-dir/lancedb)")
+	indexFlag := flag.Bool("index", false, "Run full codebase indexing and exit")
+	flag.Parse()
+
+	cfg := config.LoadConfig(*dataDirFlag, *modelsDirFlag, *dbPathFlag)
 	logger := cfg.Logger
 
 	// Initialize monorepo resolver
 	monorepoResolver = indexer.InitResolver(cfg.ProjectRoot)
-
-	indexFlag := flag.Bool("index", false, "Run full codebase indexing and exit")
-	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
