@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nilesh32236/vector-mcp-go/internal/api"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/daemon"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
@@ -119,20 +120,6 @@ func main() {
 		masterServer.UpdateEmbedder(realEmbedder)
 	}
 
-	// Graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigChan
-		logger.Info("Received signal, shutting down", "signal", sig)
-		cancel()
-		if isMaster && masterServer != nil {
-			masterServer.Close()
-		}
-		time.Sleep(500 * time.Millisecond)
-		os.Exit(0)
-	}()
-
 	// Initialize dependencies
 	storeGetter := func(ctx context.Context) (*db.Store, error) {
 		return getStore(ctx, cfg, false)
@@ -140,6 +127,36 @@ func main() {
 	freshStoreGetter := func(ctx context.Context) (*db.Store, error) {
 		return getStore(ctx, cfg, true)
 	}
+
+	// Start API server
+	apiSrv := api.NewServer(cfg, storeGetter, embedder)
+	go func() {
+		if err := apiSrv.Start(); err != nil {
+			logger.Error("API server error", "error", err)
+		}
+	}()
+
+	// Graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigChan
+		logger.Info("Received signal, shutting down", "signal", sig)
+
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+
+		if err := apiSrv.Shutdown(shutdownCtx); err != nil {
+			logger.Error("API server shutdown error", "error", err)
+		}
+
+		cancel()
+		if isMaster && masterServer != nil {
+			masterServer.Close()
+		}
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
 
 	// Initialize worker (only Master processes the queue)
 	if isMaster {
