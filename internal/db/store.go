@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"github.com/philippgille/chromem-go"
 	"runtime"
+	"sort"
+	"strings"
 )
 
 type Store struct {
@@ -64,32 +66,36 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 	if count == 0 {
 		return nil, nil, nil
 	}
-	if topK > count {
-		topK = count
-	}
 
-	// Note: chromem-go doesn't support "OR" filters in 'where' easily.
-	// We'll perform one broad search and filter by project_id manually if projectIDs is provided.
-	res, err := s.collection.QueryEmbedding(ctx, queryEmbedding, topK*len(projectIDs)+topK, nil, nil)
-	if err != nil {
-		return nil, nil, err
+	var allResults []chromem.Result
+	if len(projectIDs) == 0 {
+		res, err := s.collection.QueryEmbedding(ctx, queryEmbedding, topK, nil, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		allResults = res
+	} else {
+		// Perform individual queries for each project to avoid truncation issues
+		for _, pid := range projectIDs {
+			res, err := s.collection.QueryEmbedding(ctx, queryEmbedding, topK, map[string]string{"project_id": pid}, nil)
+			if err != nil {
+				return nil, nil, err
+			}
+			allResults = append(allResults, res...)
+		}
+		// Sort by similarity descending
+		sort.Slice(allResults, func(i, j int) bool {
+			return allResults[i].Similarity > allResults[j].Similarity
+		})
+		// Slicing topK
+		if len(allResults) > topK {
+			allResults = allResults[:topK]
+		}
 	}
 
 	var records []Record
 	var scores []float32
-	for _, doc := range res {
-		if len(projectIDs) > 0 {
-			match := false
-			for _, pid := range projectIDs {
-				if doc.Metadata["project_id"] == pid {
-					match = true
-					break
-				}
-			}
-			if !match {
-				continue
-			}
-		}
+	for _, doc := range allResults {
 		records = append(records, Record{
 			ID:         doc.ID,
 			Content:    doc.Content,
@@ -97,9 +103,6 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 			Similarity: doc.Similarity,
 		})
 		scores = append(scores, doc.Similarity)
-		if len(records) >= topK {
-			break
-		}
 	}
 	return records, scores, nil
 }
@@ -107,6 +110,31 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 func (s *Store) DeleteByPath(ctx context.Context, path string, projectID string) error {
 	filter := map[string]string{"path": path, "project_id": projectID}
 	return s.collection.Delete(ctx, filter, nil)
+}
+
+// DeleteByPrefix deletes all records where the metadata 'path' starts with the given prefix.
+// This is critical for handling directory removals/renames correctly.
+func (s *Store) DeleteByPrefix(ctx context.Context, prefix string, projectID string) error {
+	count := s.collection.Count()
+	if count == 0 {
+		return nil
+	}
+
+	// Fetch all IDs for this project to check paths
+	dummyEmb := make([]float32, 1024)
+	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"project_id": projectID}, nil)
+	if err != nil {
+		return err
+	}
+
+	for _, doc := range res {
+		path := doc.Metadata["path"]
+		// Check if it's the exact file OR a file within the directory (prefix + /)
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			s.collection.Delete(ctx, map[string]string{"path": path, "project_id": projectID}, nil)
+		}
+	}
+	return nil
 }
 
 func (s *Store) ClearProject(ctx context.Context, projectID string) error {

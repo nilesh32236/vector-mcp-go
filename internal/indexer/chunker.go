@@ -245,17 +245,29 @@ func semanticRegexChunk(text string) []Chunk {
 func fastChunk(text string) []Chunk {
 	var chunks []Chunk
 	runes := []rune(text)
-	for i := 0; i < len(runes); i += 3000 {
-		end := i + 4000
+	chunkSize := 3000
+	overlap := 500
+
+	if len(runes) == 0 {
+		return nil
+	}
+
+	for i := 0; i < len(runes); {
+		end := i + chunkSize
 		if end > len(runes) {
 			end = len(runes)
 		}
+
 		chunks = append(chunks, Chunk{
 			Content: string(runes[i:end]),
 		})
+
 		if end == len(runes) {
 			break
 		}
+
+		// Advance by (chunkSize - overlap)
+		i += (chunkSize - overlap)
 	}
 	return chunks
 }

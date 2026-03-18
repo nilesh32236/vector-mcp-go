@@ -1,14 +1,227 @@
 package indexer
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
 
 	ignore "github.com/sabhiram/go-gitignore"
+	"vector-mcp-go/internal/config"
+	"vector-mcp-go/internal/db"
 )
+
+// IndexSummary provides a summary of the indexing operation.
+type IndexSummary struct {
+	Status         string   `json:"status"`
+	FilesProcessed int      `json:"files_processed"`
+	FilesIndexed   int      `json:"files_indexed"`
+	FilesSkipped   int      `json:"files_skipped"`
+	Errors         []string `json:"errors"`
+	DurationMs     int64    `json:"duration_ms"`
+}
+
+// Result represents the outcome of processing a single file.
+type Result struct {
+	Indexed bool
+	Skipped bool
+	Err     string
+	RelPath string
+	Records []db.Record
+}
+
+const MaxContextTokens = 10000
+
+// EstimateTokens provides a rough estimate of the number of tokens in a string.
+func EstimateTokens(text string) int {
+	return (len(strings.Fields(text)) * 4) / 3
+}
+
+// Embedder is an interface for generating vector embeddings from text.
+type Embedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+}
+
+// IndexFullCodebase performs a comprehensive index of the project directory.
+func IndexFullCodebase(ctx context.Context, cfg *config.Config, store *db.Store, embedder Embedder, progressMap *sync.Map, logger *slog.Logger) (IndexSummary, error) {
+	summary := IndexSummary{Status: "completed"}
+
+	store.SetStatus(ctx, cfg.ProjectRoot, "Scanning files and cleaning index...")
+
+	files, err := ScanFiles(cfg.ProjectRoot)
+	if err != nil {
+		return summary, err
+	}
+	summary.FilesProcessed = len(files)
+
+	hashMapping, _ := store.GetPathHashMapping(ctx, cfg.ProjectRoot)
+	var toIndex []string
+	for _, path := range files {
+		relPath := config.GetRelativePath(path, cfg.ProjectRoot)
+		currentHash, _ := GetHash(path)
+		if existingHash, ok := hashMapping[relPath]; ok && existingHash == currentHash {
+			summary.FilesSkipped++
+			continue
+		}
+		toIndex = append(toIndex, path)
+	}
+
+	for dbPath := range hashMapping {
+		found := false
+		for _, absPath := range files {
+			if config.GetRelativePath(absPath, cfg.ProjectRoot) == dbPath {
+				found = true
+				break
+			}
+		}
+		if !found {
+			store.DeleteByPath(ctx, dbPath, cfg.ProjectRoot)
+		}
+	}
+
+	if len(toIndex) == 0 {
+		store.SetStatus(ctx, cfg.ProjectRoot, fmt.Sprintf("Completed: %d files skipped (up to date)", summary.FilesSkipped))
+		return summary, nil
+	}
+
+	var wg sync.WaitGroup
+	results := make(chan Result, len(toIndex))
+	tasks := make(chan string, len(toIndex))
+
+	for i := 0; i < runtime.NumCPU(); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for path := range tasks {
+				results <- ProcessFile(ctx, path, cfg, store, embedder)
+			}
+		}()
+	}
+
+	go func() {
+		for _, path := range toIndex {
+			tasks <- path
+		}
+		close(tasks)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var batch []db.Record
+	processed := 0
+	totalToIndex := len(toIndex)
+	for r := range results {
+		processed++
+		if r.Err != "" {
+			summary.Errors = append(summary.Errors, r.Err)
+		}
+		if r.Indexed {
+			summary.FilesIndexed++
+			batch = append(batch, r.Records...)
+		}
+		if r.Skipped {
+			summary.FilesSkipped++
+		}
+
+		if len(batch) >= 50 {
+			logger.Info("Inserting batch of records", "count", len(batch))
+			store.Insert(ctx, batch)
+			batch = batch[:0]
+		}
+
+		// Real-time progress update
+		progress := float64(processed) / float64(totalToIndex) * 100
+		status := fmt.Sprintf("Indexing: %.1f%% (%d/%d) - Current: %s", progress, processed, totalToIndex, r.RelPath)
+		if progressMap != nil {
+			progressMap.Store(cfg.ProjectRoot, status)
+		}
+		store.SetStatus(ctx, cfg.ProjectRoot, status)
+	}
+
+	if len(batch) > 0 {
+		store.Insert(ctx, batch)
+	}
+
+	return summary, nil
+}
+
+// ProcessFile indexes a single file if its hash has changed.
+func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db.Store, embedder Embedder) Result {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("Panic processing file", "path", path, "recover", r)
+		}
+	}()
+
+	relPath := config.GetRelativePath(path, cfg.ProjectRoot)
+	currentHash, err := GetHash(path)
+	if err != nil {
+		return Result{Err: err.Error(), RelPath: relPath}
+	}
+
+	existingHash, _ := store.GetFileHash(ctx, relPath, cfg.ProjectRoot)
+	if existingHash == currentHash {
+		return Result{Skipped: true, RelPath: relPath}
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return Result{Err: err.Error(), RelPath: relPath}
+	}
+
+	chunks := CreateChunks(string(content), relPath)
+	var records []db.Record
+	for _, chunk := range chunks {
+		emb, err := embedder.Embed(ctx, chunk.Content)
+		if err != nil {
+			continue
+		}
+		relJSON, _ := json.Marshal(chunk.Relationships)
+		symJSON, _ := json.Marshal(chunk.Symbols)
+		records = append(records, db.Record{
+			ID:        fmt.Sprintf("%s-%s-%d", cfg.ProjectRoot, relPath, time.Now().UnixNano()),
+			Content:   chunk.Content,
+			Embedding: emb,
+			Metadata: map[string]string{
+				"path":          relPath,
+				"project_id":    cfg.ProjectRoot,
+				"hash":          currentHash,
+				"relationships": string(relJSON),
+				"symbols":       string(symJSON),
+			},
+		})
+	}
+
+	if len(records) > 0 {
+		store.DeleteByPath(ctx, relPath, cfg.ProjectRoot)
+		return Result{Indexed: true, Records: records, RelPath: relPath}
+	}
+	return Result{RelPath: relPath}
+}
+
+// IndexSingleFile indexes a single file and updates the database.
+func IndexSingleFile(ctx context.Context, path string, cfg *config.Config, store *db.Store, embedder Embedder) (IndexSummary, error) {
+	res := ProcessFile(ctx, path, cfg, store, embedder)
+	if res.Err != "" {
+		return IndexSummary{Status: "error"}, nil
+	}
+	if res.Indexed {
+		store.Insert(ctx, res.Records)
+	}
+	return IndexSummary{Status: "completed", FilesIndexed: 1}, nil
+}
 
 var (
 	AllowExts = []string{".ts", ".tsx", ".js", ".jsx", ".prisma", ".json", ".css", ".html", ".md", ".env", ".yml", ".yaml", ".go", ".py", ".rs", ".sh", ".txt"}

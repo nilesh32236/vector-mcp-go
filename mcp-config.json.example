@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "vector-mcp": {
+      "command": "/path/to/vector-mcp-go",
+      "args": [],
+      "env": {
+        "ONNX_LIB_PATH": "/usr/local/lib/libonnxruntime.so"
+      }
+    }
+  }
+}
