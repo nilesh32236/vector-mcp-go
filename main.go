@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
+	"github.com/nilesh32236/vector-mcp-go/internal/daemon"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/embedding"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
@@ -57,11 +59,6 @@ func (pe *poolEmbedder) Embed(ctx context.Context, text string) ([]float32, erro
 }
 
 func main() {
-	if err := onnx.Init(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize ONNX: %v\n", err)
-		os.Exit(1)
-	}
-
 	dataDirFlag := flag.String("data-dir", "", "Base directory for DB and models")
 	modelsDirFlag := flag.String("models-dir", "", "Specific directory for models")
 	dbPathFlag := flag.String("db-path", "", "Specific path for the database")
@@ -74,9 +71,58 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if _, err := embedding.EnsureModel(cfg.ModelsDir); err != nil {
-		logger.Error("Failed to ensure models exist", "error", err)
-		os.Exit(1)
+	// 1. Master/Slave Detection using Unix Socket
+	socketPath := filepath.Join(cfg.DataDir, "daemon.sock")
+	var isMaster bool
+	var daemonClient *daemon.Client
+	var embedder indexer.Embedder
+
+	// Try to listen on the socket to see if we are the master
+	masterServer, err := daemon.StartMasterServer(socketPath, nil, indexQueue)
+	if err == nil {
+		isMaster = true
+		logger.Info("Starting as MASTER instance", "socket", socketPath)
+		defer masterServer.Close()
+	} else {
+		isMaster = false
+		logger.Info("Starting as SLAVE instance (master already running)", "socket", socketPath)
+		daemonClient = daemon.NewClient(socketPath)
+		embedder = daemon.NewRemoteEmbedder(socketPath)
+		cfg.DisableWatcher = true
+	}
+
+	// 2. Conditional Initialization
+	if isMaster {
+		if err := onnx.Init(); err != nil {
+			logger.Error("Failed to initialize ONNX", "error", err)
+			os.Exit(1)
+		}
+
+		if _, err := embedding.EnsureModel(cfg.ModelsDir); err != nil {
+			logger.Error("Failed to ensure models exist", "error", err)
+			os.Exit(1)
+		}
+
+		pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, 2)
+		if err != nil {
+			logger.Error("Failed to initialize embedder pool", "error", err)
+			os.Exit(1)
+		}
+		embedPool = pool
+		// We don't close embedPool here because we need it for the daemon and server.
+		// It will be closed on process exit.
+
+		realEmbedder := &poolEmbedder{pool: embedPool}
+		embedder = realEmbedder
+
+		// Update daemon with real embedder
+		masterServer.Close()
+		masterServer, err = daemon.StartMasterServer(socketPath, realEmbedder, indexQueue)
+		if err != nil {
+			logger.Error("Failed to restart master daemon with embedder", "error", err)
+			os.Exit(1)
+		}
+		defer masterServer.Close()
 	}
 
 	// Graceful shutdown
@@ -86,20 +132,14 @@ func main() {
 		sig := <-sigChan
 		logger.Info("Received signal, shutting down", "signal", sig)
 		cancel()
+		if isMaster && masterServer != nil {
+			masterServer.Close()
+		}
 		time.Sleep(500 * time.Millisecond)
 		os.Exit(0)
 	}()
 
 	// Initialize dependencies
-	pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, 2)
-	if err != nil {
-		logger.Error("Failed to initialize embedder pool", "error", err)
-		os.Exit(1)
-	}
-	embedPool = pool
-	defer embedPool.Close()
-
-	embedder := &poolEmbedder{pool: embedPool}
 	storeGetter := func(ctx context.Context) (*db.Store, error) {
 		return getStore(ctx, cfg, false)
 	}
@@ -107,9 +147,11 @@ func main() {
 		return getStore(ctx, cfg, true)
 	}
 
-	// Initialize worker
-	idxWorker := worker.NewIndexWorker(cfg, logger, indexQueue, &progressMap, storeGetter, embedder)
-	go idxWorker.Start(ctx)
+	// Initialize worker (only Master processes the queue)
+	if isMaster {
+		idxWorker := worker.NewIndexWorker(cfg, logger, indexQueue, &progressMap, storeGetter, embedder)
+		go idxWorker.Start(ctx)
+	}
 
 	// CLI logic
 	args := flag.Args()
@@ -122,9 +164,6 @@ func main() {
 				os.Exit(1)
 			}
 			if cmd == "status" {
-				// We can't easily call runStatus from mcp package here without making it exported or duplication.
-				// For now, let's just use the server's status logic if we had it, or just exit.
-				// Since we want to keep main.go thin, we might want a CLI package too later.
 				fmt.Println("CLI status/health not yet refactored into modular CLI package.")
 			}
 			return
@@ -132,6 +171,10 @@ func main() {
 	}
 
 	if *indexFlag {
+		if !isMaster {
+			logger.Error("Standalone indexing can only be run when no other instance is active (Master only)")
+			os.Exit(1)
+		}
 		store, _ := getStore(ctx, cfg, false)
 		summary, _ := indexer.IndexFullCodebase(ctx, cfg, store, embedder, &progressMap, logger)
 		logger.Info("Standalone index complete", "summary", summary)
@@ -139,20 +182,20 @@ func main() {
 	}
 
 	// Start file watcher
-	if !cfg.DisableWatcher {
+	if !cfg.DisableWatcher && isMaster {
 		fw, err := watcher.NewFileWatcher(cfg, logger, resetChan, storeGetter, embedder)
 		if err != nil {
 			logger.Error("Failed to initialize file watcher", "error", err)
 			os.Exit(1)
 		}
 		go fw.Start(ctx)
-	} else {
-		logger.Info("File watcher is disabled via configuration (DISABLE_FILE_WATCHER=true)")
+	} else if cfg.DisableWatcher {
+		logger.Info("File watcher is disabled (Slave instance or explicit config)")
 	}
 
 	// Start MCP server
 	resolver := indexer.InitResolver(cfg.ProjectRoot)
-	srv := mcp.NewServer(cfg, logger, storeGetter, freshStoreGetter, embedder, indexQueue, &progressMap, resetChan, resolver)
+	srv := mcp.NewServer(cfg, logger, storeGetter, freshStoreGetter, embedder, indexQueue, daemonClient, &progressMap, resetChan, resolver)
 	if err := srv.Serve(); err != nil {
 		logger.Error("Server error", "error", err)
 		os.Exit(1)

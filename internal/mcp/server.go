@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
+	"github.com/nilesh32236/vector-mcp-go/internal/daemon"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 )
@@ -27,13 +28,14 @@ type Server struct {
 	freshStoreGetter func(ctx context.Context) (*db.Store, error)
 	embedder         indexer.Embedder
 	indexQueue       chan string
+	daemonClient     *daemon.Client
 	progressMap      *sync.Map
 	watcherResetChan chan string
 	monorepoResolver *indexer.WorkspaceResolver
 }
 
 // NewServer creates a new Server instance and registers its tools.
-func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx context.Context) (*db.Store, error), freshStoreGetter func(ctx context.Context) (*db.Store, error), embedder indexer.Embedder, queue chan string, progress *sync.Map, resetChan chan string, resolver *indexer.WorkspaceResolver) *Server {
+func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx context.Context) (*db.Store, error), freshStoreGetter func(ctx context.Context) (*db.Store, error), embedder indexer.Embedder, queue chan string, daemonClient *daemon.Client, progress *sync.Map, resetChan chan string, resolver *indexer.WorkspaceResolver) *Server {
 	s := server.NewMCPServer("vector-mcp-go", "1.0.0", server.WithLogging())
 	srv := &Server{
 		cfg:              cfg,
@@ -43,6 +45,7 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 		freshStoreGetter: freshStoreGetter,
 		embedder:         embedder,
 		indexQueue:       queue,
+		daemonClient:     daemonClient,
 		progressMap:      progress,
 		watcherResetChan: resetChan,
 		monorepoResolver: resolver,
@@ -132,6 +135,15 @@ func (s *Server) handleTriggerProjectIndex(ctx context.Context, request mcp.Call
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
 	}
+
+	if s.daemonClient != nil {
+		err := s.daemonClient.TriggerIndex(absPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to delegate indexing to master daemon: %v", err)), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("Indexing task successfully delegated to the master daemon for %s.", absPath)), nil
+	}
+
 	s.indexQueue <- absPath
 	return mcp.NewToolResultText(fmt.Sprintf("Initial indexing triggered in the background for %s.", absPath)), nil
 }

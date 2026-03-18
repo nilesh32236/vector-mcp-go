@@ -14,6 +14,7 @@ A modular, high-performance Model Context Protocol (MCP) server for **local sema
     - **Relationship Mapping**: Traces imports and dependencies to provide holistic context.
     - **Semantic Chunking**: Intelligent overlap-based chunking preserves meaning across boundaries.
 - **Real-time Indexing**: Built-in debounced file watcher synchronizes the vector index as you save.
+- **Multi-Instance Optimization**: Intelligent Master/Slave architecture ensures only one instance loads the heavy embedding models and runs the file watcher, drastically reducing RAM usage (~600MB → ~20MB for slave instances).
 - **Safety & Performance**: Non-blocking background workers and embedder resource pooling ensure server stability.
 
 ---
