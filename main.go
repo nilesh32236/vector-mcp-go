@@ -116,13 +116,7 @@ func main() {
 		embedder = realEmbedder
 
 		// Update daemon with real embedder
-		masterServer.Close()
-		masterServer, err = daemon.StartMasterServer(socketPath, realEmbedder, indexQueue)
-		if err != nil {
-			logger.Error("Failed to restart master daemon with embedder", "error", err)
-			os.Exit(1)
-		}
-		defer masterServer.Close()
+		masterServer.UpdateEmbedder(realEmbedder)
 	}
 
 	// Graceful shutdown

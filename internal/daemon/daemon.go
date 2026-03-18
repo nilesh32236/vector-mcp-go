@@ -52,25 +52,26 @@ func (s *Service) IndexProject(req IndexRequest, resp *IndexResponse) error {
 	return nil
 }
 
-// MasterServer manages the RPC server lifecycle.
+// MasterServer manages the RPC server lifecycle and allows updating its service.
 type MasterServer struct {
 	socketPath string
 	listener   net.Listener
+	svc        *Service
 }
 
 func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue chan string) (*MasterServer, error) {
-	// Clean up old socket if it exists
-	_ = os.Remove(socketPath)
-
 	svc := &Service{
 		Embedder:   embedder,
 		IndexQueue: indexQueue,
 	}
 
-	err := rpc.RegisterName("VectorDaemon", svc)
-	if err != nil {
-		return nil, err
-	}
+	// rpc.RegisterName is global for the default server.
+	// Since we only ever have one MasterServer in a process, we can register it once.
+	// However, to support updating the embedder later, we use a service pointer.
+	_ = rpc.RegisterName("VectorDaemon", svc)
+
+	// Clean up old socket if it exists
+	_ = os.Remove(socketPath)
 
 	l, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -90,7 +91,14 @@ func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue 
 	return &MasterServer{
 		socketPath: socketPath,
 		listener:   l,
+		svc:        svc,
 	}, nil
+}
+
+func (s *MasterServer) UpdateEmbedder(e indexer.Embedder) {
+	if s.svc != nil {
+		s.svc.Embedder = e
+	}
 }
 
 func (s *MasterServer) Close() {
