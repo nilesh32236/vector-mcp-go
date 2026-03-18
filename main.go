@@ -10,14 +10,14 @@ import (
 	"syscall"
 	"time"
 
-	"vector-mcp-go/internal/config"
-	"vector-mcp-go/internal/db"
-	"vector-mcp-go/internal/embedding"
-	"vector-mcp-go/internal/indexer"
-	"vector-mcp-go/internal/mcp"
-	"vector-mcp-go/internal/onnx"
-	"vector-mcp-go/internal/watcher"
-	"vector-mcp-go/internal/worker"
+	"github.com/nilesh32236/vector-mcp-go/internal/config"
+	"github.com/nilesh32236/vector-mcp-go/internal/db"
+	"github.com/nilesh32236/vector-mcp-go/internal/embedding"
+	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/mcp"
+	"github.com/nilesh32236/vector-mcp-go/internal/onnx"
+	"github.com/nilesh32236/vector-mcp-go/internal/watcher"
+	"github.com/nilesh32236/vector-mcp-go/internal/worker"
 )
 
 var (

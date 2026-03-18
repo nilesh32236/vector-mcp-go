@@ -16,8 +16,8 @@ import (
 	"time"
 
 	ignore "github.com/sabhiram/go-gitignore"
-	"vector-mcp-go/internal/config"
-	"vector-mcp-go/internal/db"
+	"github.com/nilesh32236/vector-mcp-go/internal/config"
+	"github.com/nilesh32236/vector-mcp-go/internal/db"
 )
 
 // IndexSummary provides a summary of the indexing operation.

@@ -32,19 +32,29 @@ The project is organized into modular internal packages for maintainability:
 
 ---
 
-## 🛠️ Setup
+## 🏗️ Setup & Installation
 
 ### Prerequisites
 1. **Go 1.21+**
 2. **ONNX Shared Library**: `libonnxruntime.so` (Linux). The server attempts to discover this in several standard locations.
 
 ### Installation
-```bash
-# Build the binary
-go build -o vector-mcp-go main.go
 
-# Initialize (downloads necessary models on first run)
-./vector-mcp-go status
+#### Method 1: Direct via GitHub (Recommended for Go Users)
+Install the latest version directly using `go install`:
+
+```bash
+go install github.com/nilesh32236/vector-mcp-go@latest
+```
+
+#### Method 2: Download Binary
+Download pre-built binaries for Linux, macOS, or Windows from the [GitHub Releases](https://github.com/nilesh32236/vector-mcp-go/releases) page.
+
+#### Method 3: From Source
+```bash
+git clone https://github.com/nilesh32236/vector-mcp-go.git
+cd vector-mcp-go
+go build -o vector-mcp-go main.go
 ```
 
 ### Environment Configuration

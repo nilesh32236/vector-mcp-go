@@ -1,9 +1,10 @@
-module vector-mcp-go
+module github.com/nilesh32236/vector-mcp-go
 
 go 1.26.1
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/joho/godotenv v1.5.1
 	github.com/mark3labs/mcp-go v0.45.0
 	github.com/philippgille/chromem-go v0.7.0
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
@@ -18,7 +19,6 @@ require (
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
-	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect

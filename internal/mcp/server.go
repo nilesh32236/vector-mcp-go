@@ -13,9 +13,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"vector-mcp-go/internal/config"
-	"vector-mcp-go/internal/db"
-	"vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/config"
+	"github.com/nilesh32236/vector-mcp-go/internal/db"
+	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 )
 
 // Server is the core MCP server that manages tools and handles requests.

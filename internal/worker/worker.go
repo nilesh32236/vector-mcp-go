@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"sync"
 
-	"vector-mcp-go/internal/config"
-	"vector-mcp-go/internal/db"
-	"vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/config"
+	"github.com/nilesh32236/vector-mcp-go/internal/db"
+	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 )
 
 // IndexWorker handles background indexing tasks.
