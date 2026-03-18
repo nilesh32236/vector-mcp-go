@@ -9,13 +9,63 @@ import (
 	"net/http"
 )
 
+type FunctionCall struct {
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"args"`
+}
+
+type FunctionResponse struct {
+	Name     string                 `json:"name"`
+	Response map[string]interface{} `json:"response"`
+}
+
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string            `json:"role"`
+	Content          string            `json:"content,omitempty"`
+	FunctionCall     *FunctionCall     `json:"function_call,omitempty"`
+	FunctionResponse *FunctionResponse `json:"function_response,omitempty"`
+}
+
+type CompletionResponse struct {
+	Text         string
+	FunctionCall *FunctionCall
+}
+
+type geminiFunctionCall struct {
+	FunctionName string                 `json:"name"`
+	Args         map[string]interface{} `json:"args"`
+}
+
+type geminiFunctionResponseContent struct {
+	Name     string                 `json:"name"`
+	Response map[string]interface{} `json:"response"`
 }
 
 type geminiPart struct {
-	Text string `json:"text"`
+	Text             string                         `json:"text,omitempty"`
+	FunctionCall     *geminiFunctionCall            `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFunctionResponseContent `json:"functionResponse,omitempty"`
+}
+
+type Tool struct {
+	FunctionDeclarations []FunctionDeclaration `json:"function_declarations"`
+}
+
+type FunctionDeclaration struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Parameters  Parameters `json:"parameters"`
+}
+
+type Parameters struct {
+	Type       string              `json:"type"`
+	Properties map[string]Property `json:"properties"`
+	Required   []string            `json:"required"`
+}
+
+type Property struct {
+	Type        string `json:"type"`
+	Description string `json:"description"`
 }
 
 type geminiContent struct {
@@ -30,20 +80,19 @@ type geminiSystemInstruction struct {
 type geminiRequest struct {
 	SystemInstruction *geminiSystemInstruction `json:"system_instruction,omitempty"`
 	Contents          []geminiContent          `json:"contents"`
+	Tools             []Tool                   `json:"tools,omitempty"`
 }
 
 type geminiResponse struct {
 	Candidates []struct {
 		Content struct {
-			Parts []struct {
-				Text string `json:"text"`
-			} `json:"parts"`
+			Parts []geminiPart `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
 }
 
 // GenerateGeminiCompletion calls the Google Gemini REST API to generate a response.
-func GenerateGeminiCompletion(ctx context.Context, apiKey string, model string, systemPrompt string, messages []Message, endpointURL string) (string, error) {
+func GenerateGeminiCompletion(ctx context.Context, apiKey string, model string, systemPrompt string, messages []Message, tools []Tool, endpointURL string) (CompletionResponse, error) {
 	if endpointURL == "" {
 		endpointURL = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
 	}
@@ -58,30 +107,55 @@ func GenerateGeminiCompletion(ctx context.Context, apiKey string, model string, 
 		}
 	}
 
+	if len(tools) > 0 {
+		reqBody.Tools = tools
+	}
+
 	for _, msg := range messages {
 		// Gemini uses "user" and "model" roles
 		role := msg.Role
-		if role == "assistant" {
+		if role == "assistant" || role == "function" {
 			role = "model"
 		}
 
+		var parts []geminiPart
+
+		if msg.FunctionCall != nil {
+			parts = append(parts, geminiPart{
+				FunctionCall: &geminiFunctionCall{
+					FunctionName: msg.FunctionCall.Name,
+					Args:         msg.FunctionCall.Args,
+				},
+			})
+		} else if msg.FunctionResponse != nil {
+			role = "user" // Function responses are sent back as the user role in Gemini
+			parts = append(parts, geminiPart{
+				FunctionResponse: &geminiFunctionResponseContent{
+					Name:     msg.FunctionResponse.Name,
+					Response: msg.FunctionResponse.Response,
+				},
+			})
+		} else {
+			parts = append(parts, geminiPart{
+				Text: msg.Content,
+			})
+		}
+
 		reqBody.Contents = append(reqBody.Contents, geminiContent{
-			Role: role,
-			Parts: []geminiPart{
-				{Text: msg.Content},
-			},
+			Role:  role,
+			Parts: parts,
 		})
 	}
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal gemini request: %w", err)
+		return CompletionResponse{}, fmt.Errorf("failed to marshal gemini request: %w", err)
 	}
 
 	reqURL := fmt.Sprintf("%s?key=%s", endpointURL, apiKey)
 	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return "", fmt.Errorf("failed to create http request: %w", err)
+		return CompletionResponse{}, fmt.Errorf("failed to create http request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -89,23 +163,36 @@ func GenerateGeminiCompletion(ctx context.Context, apiKey string, model string, 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to execute http request: %w", err)
+		return CompletionResponse{}, fmt.Errorf("failed to execute http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("gemini api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return CompletionResponse{}, fmt.Errorf("gemini api returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var geminiResp geminiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
-		return "", fmt.Errorf("failed to decode gemini response: %w", err)
+		return CompletionResponse{}, fmt.Errorf("failed to decode gemini response: %w", err)
 	}
 
 	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("gemini api returned no content")
+		return CompletionResponse{}, fmt.Errorf("gemini api returned no content")
 	}
 
-	return geminiResp.Candidates[0].Content.Parts[0].Text, nil
+	part := geminiResp.Candidates[0].Content.Parts[0]
+
+	comp := CompletionResponse{}
+
+	if part.FunctionCall != nil {
+		comp.FunctionCall = &FunctionCall{
+			Name: part.FunctionCall.FunctionName,
+			Args: part.FunctionCall.Args,
+		}
+	} else {
+		comp.Text = part.Text
+	}
+
+	return comp, nil
 }
