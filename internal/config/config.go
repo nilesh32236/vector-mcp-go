@@ -17,10 +17,12 @@ type Config struct {
 	LogPath        string
 	ModelName      string
 	HFToken        string
-	Dimension      int
-	DisableWatcher bool
-	ApiPort        string
-	Logger         *slog.Logger
+	Dimension          int
+	DisableWatcher     bool
+	ApiPort            string
+	GeminiApiKey       string
+	DefaultGeminiModel string
+	Logger             *slog.Logger
 }
 
 func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Config {
@@ -93,18 +95,25 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		apiPort = "8080"
 	}
 
+	defaultGeminiModel := os.Getenv("GEMINI_DEFAULT_MODEL")
+	if defaultGeminiModel == "" {
+		defaultGeminiModel = "gemini-2.5-flash"
+	}
+
 	return &Config{
-		ProjectRoot:    projectRoot,
-		DataDir:        dataDir,
-		DbPath:         dbPath,
-		ModelsDir:      modelsDir,
-		LogPath:        logPath,
-		ModelName:      modelName,
-		HFToken:        os.Getenv("HF_TOKEN"),
-		Dimension:      1024,
-		DisableWatcher: disableWatcher,
-		ApiPort:        apiPort,
-		Logger:         logger,
+		ProjectRoot:        projectRoot,
+		DataDir:            dataDir,
+		DbPath:             dbPath,
+		ModelsDir:          modelsDir,
+		LogPath:            logPath,
+		ModelName:          modelName,
+		HFToken:            os.Getenv("HF_TOKEN"),
+		Dimension:          1024,
+		DisableWatcher:     disableWatcher,
+		ApiPort:            apiPort,
+		GeminiApiKey:       os.Getenv("GEMINI_API_KEY"),
+		DefaultGeminiModel: defaultGeminiModel,
+		Logger:             logger,
 	}
 }
 

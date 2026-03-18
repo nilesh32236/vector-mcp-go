@@ -27,8 +27,10 @@ func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 // Better yet, let's just create a real temp db store for the test
 func setupTestServer(t *testing.T) (*Server, func()) {
 	cfg := &config.Config{
-		ApiPort:   "8080",
-		Dimension: 1024,
+		ApiPort:            "8080",
+		Dimension:          1024,
+		GeminiApiKey:       "test-key",
+		DefaultGeminiModel: "gemini-test-model",
 	}
 
 	tempDir := t.TempDir()
@@ -203,5 +205,111 @@ func TestSearchEndpoint(t *testing.T) {
 		if resp[0].Metadata["type"] != "manual_context" {
 			t.Errorf("expected metadata type 'manual_context', got '%v'", resp[0].Metadata["type"])
 		}
+	}
+}
+
+func TestChatEndpoint(t *testing.T) {
+	srv, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	// 1. Insert dummy context
+	ctxReqBody := ContextRequest{
+		Text:   "The indexing worker processes files in the background.",
+		Source: "worker.go",
+		Metadata: map[string]string{
+			"path": "internal/worker/worker.go",
+		},
+	}
+	ctxBytes, _ := json.Marshal(ctxReqBody)
+	req1, _ := http.NewRequest("POST", "/api/context", bytes.NewReader(ctxBytes))
+	rr1 := httptest.NewRecorder()
+	srv.srv.Handler.ServeHTTP(rr1, req1)
+
+	// 2. Setup mock Gemini server
+	mockGemini := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify API Key
+		if r.URL.Query().Get("key") != "test-key" {
+			t.Errorf("expected API key 'test-key', got '%s'", r.URL.Query().Get("key"))
+		}
+
+		// Read and verify request body
+		var geminiReq map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&geminiReq)
+
+		sysInstr, ok := geminiReq["system_instruction"].(map[string]interface{})
+		if !ok {
+			t.Errorf("system_instruction is missing")
+		} else {
+			parts := sysInstr["parts"].([]interface{})
+			text := parts[0].(map[string]interface{})["text"].(string)
+			if !bytes.Contains([]byte(text), []byte("File: internal/worker/worker.go")) {
+				t.Errorf("system instruction does not contain expected file path context")
+			}
+		}
+
+		// Mock response
+		resp := `{
+			"candidates": [
+				{
+					"content": {
+						"parts": [{"text": "It processes files in the background."}]
+					}
+				}
+			]
+		}`
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(resp))
+	}))
+	defer mockGemini.Close()
+
+	// 3. Make chat request
+	chatBody := ChatRequest{
+		Messages: []ChatMessage{
+			{Role: "user", Content: "How does the indexing worker work?"},
+		},
+	}
+	chatBytes, _ := json.Marshal(chatBody)
+	req2, _ := http.NewRequest("POST", "/api/chat", bytes.NewReader(chatBytes))
+	req2.Header.Set("X-Test-Gemini-URL", mockGemini.URL)
+
+	rr2 := httptest.NewRecorder()
+	srv.srv.Handler.ServeHTTP(rr2, req2)
+
+	if status := rr2.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
+	}
+
+	var resp ChatResponse
+	if err := json.NewDecoder(rr2.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.ModelUsed != "gemini-test-model" {
+		t.Errorf("expected model 'gemini-test-model', got '%s'", resp.ModelUsed)
+	}
+	if resp.Content != "It processes files in the background." {
+		t.Errorf("expected generated content 'It processes files in the background.', got '%s'", resp.Content)
+	}
+}
+
+func TestChatEndpointNoApiKey(t *testing.T) {
+	srv, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	srv.cfg.GeminiApiKey = "" // Unset API key
+
+	chatBody := ChatRequest{
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+	chatBytes, _ := json.Marshal(chatBody)
+	req, _ := http.NewRequest("POST", "/api/chat", bytes.NewReader(chatBytes))
+
+	rr := httptest.NewRecorder()
+	srv.srv.Handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusNotImplemented {
+		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusNotImplemented)
 	}
 }
