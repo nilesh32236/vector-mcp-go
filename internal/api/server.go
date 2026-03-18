@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/nilesh32236/vector-mcp-go/internal/chat"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
@@ -20,18 +21,32 @@ type Server struct {
 	storeGetter StoreGetter
 	embedder    indexer.Embedder
 	srv         *http.Server
+	chatStore   *chat.Store
 }
 
 func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Embedder) *Server {
+	chatStore, err := chat.NewStore(cfg.DataDir)
+	if err != nil && cfg.Logger != nil {
+		cfg.Logger.Error("Failed to initialize chat store", "error", err)
+	}
+
 	mux := http.NewServeMux()
 
 	server := &Server{
 		cfg:         cfg,
 		storeGetter: storeGetter,
 		embedder:    embedder,
+		chatStore:   chatStore,
 	}
 
 	mux.HandleFunc("GET /api/health", server.handleHealth)
+
+	// Chat sessions CRUD
+	mux.HandleFunc("GET /api/sessions", server.handleListSessions)
+	mux.HandleFunc("POST /api/sessions", server.handleCreateSession)
+	mux.HandleFunc("GET /api/sessions/{id}", server.handleGetSession)
+	mux.HandleFunc("DELETE /api/sessions/{id}", server.handleDeleteSession)
+
 	mux.HandleFunc("POST /api/search", server.handleSearch)
 	mux.HandleFunc("POST /api/context", server.handleContext)
 	mux.HandleFunc("POST /api/todo", server.handleTodo)
@@ -239,14 +254,110 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	if s.chatStore == nil {
+		http.Error(w, "Chat store not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	sessions, err := s.chatStore.ListSessions()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if sessions == nil {
+		sessions = []chat.Session{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sessions)
+}
+
+func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	if s.chatStore == nil {
+		http.Error(w, "Chat store not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	var req struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Title == "" {
+		req.Title = "New Chat"
+	}
+
+	session, err := s.chatStore.CreateSession(req.Title)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(session)
+}
+
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	if s.chatStore == nil {
+		http.Error(w, "Chat store not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Session ID is required", http.StatusBadRequest)
+		return
+	}
+
+	history, err := s.chatStore.GetSession(id)
+	if err != nil {
+		if err.Error() == "session not found" {
+			http.Error(w, "Session not found", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
+}
+
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	if s.chatStore == nil {
+		http.Error(w, "Chat store not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Session ID is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.chatStore.DeleteSession(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
 type ChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
 type ChatRequest struct {
-	Model    string        `json:"model"`
-	Messages []ChatMessage `json:"messages"`
+	SessionID string `json:"session_id"`
+	Model     string `json:"model"`
+	Message   string `json:"message"`
 }
 
 type ChatResponse struct {
@@ -261,9 +372,24 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.chatStore == nil {
+		http.Error(w, "Chat store not initialized", http.StatusInternalServerError)
+		return
+	}
+
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.SessionID == "" {
+		http.Error(w, "session_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Message == "" {
+		http.Error(w, "message cannot be empty", http.StatusBadRequest)
 		return
 	}
 
@@ -272,21 +398,28 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		model = s.cfg.DefaultGeminiModel
 	}
 
-	if len(req.Messages) == 0 {
-		http.Error(w, "messages array cannot be empty", http.StatusBadRequest)
+	// 1. Fetch History
+	history, err := s.chatStore.GetSession(req.SessionID)
+	if err != nil {
+		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
 
-	lastMessage := req.Messages[len(req.Messages)-1]
+	// 2. Append User Message
+	userMsg := llm.Message{Role: "user", Content: req.Message}
+	if err := s.chatStore.AppendMessage(req.SessionID, userMsg); err != nil {
+		http.Error(w, "Failed to append user message", http.StatusInternalServerError)
+		return
+	}
+	history.Messages = append(history.Messages, userMsg)
 
-	// 1. Embed the last message
-	emb, err := s.embedder.Embed(r.Context(), lastMessage.Content)
+	// 3. RAG Search on new message
+	emb, err := s.embedder.Embed(r.Context(), req.Message)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// 2. Search for relevant context
 	store, err := s.storeGetter(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -299,7 +432,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Construct context string
 	var contextBuilder string
 	for _, rec := range records {
 		path := ""
@@ -316,36 +448,101 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 4. Create system prompt
 	systemPrompt := "You are an expert AI coding assistant. Use the provided codebase context to answer the user's question. If the answer is not in the context, say so. \n\nContext:\n" + contextBuilder
 
-	// 5. Map messages to llm.Message
-	var llmMessages []llm.Message
-	for _, msg := range req.Messages {
-		llmMessages = append(llmMessages, llm.Message{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
+	// 4. Tools config
+	tools := []llm.Tool{
+		{
+			FunctionDeclarations: []llm.FunctionDeclaration{
+				{
+					Name:        "save_manual_context",
+					Description: "Saves client requirements, architectural rules, or manual notes to the vector database for future memory.",
+					Parameters: llm.Parameters{
+						Type: "OBJECT",
+						Properties: map[string]llm.Property{
+							"content": {
+								Type:        "STRING",
+								Description: "The formatted text to save",
+							},
+						},
+						Required: []string{"content"},
+					},
+				},
+			},
+		},
 	}
 
-	// 6. Call Gemini
-	// Allow overriding endpoint for testing
 	endpointURL := ""
 	if h := r.Header.Get("X-Test-Gemini-URL"); h != "" {
 		endpointURL = h
 	}
 
-	responseContent, err := llm.GenerateGeminiCompletion(r.Context(), s.cfg.GeminiApiKey, model, systemPrompt, llmMessages, endpointURL)
+	// 5. Call Gemini
+	resp, err := llm.GenerateGeminiCompletion(r.Context(), s.cfg.GeminiApiKey, model, systemPrompt, history.Messages, tools, endpointURL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// 7. Return response
+	// 6. Handle Function Calling loop
+	if resp.FunctionCall != nil && resp.FunctionCall.Name == "save_manual_context" {
+		contentInter, ok := resp.FunctionCall.Args["content"]
+		if ok {
+			contentStr, _ := contentInter.(string)
+
+			// Save to LanceDB
+			emb, _ := s.embedder.Embed(r.Context(), contentStr)
+			meta := map[string]string{
+				"type":   "manual_context",
+				"source": "agentic_memory",
+			}
+			id := fmt.Sprintf("manual_%d", time.Now().UnixNano())
+			store.Insert(r.Context(), []db.Record{{
+				ID:        id,
+				Content:   contentStr,
+				Embedding: emb,
+				Metadata:  meta,
+			}})
+
+			// Append FunctionCall to history
+			fnCallMsg := llm.Message{
+				Role:         "assistant",
+				FunctionCall: resp.FunctionCall,
+			}
+			s.chatStore.AppendMessage(req.SessionID, fnCallMsg)
+			history.Messages = append(history.Messages, fnCallMsg)
+
+			// Append FunctionResponse to history
+			fnRespMsg := llm.Message{
+				Role: "function",
+				FunctionResponse: &llm.FunctionResponse{
+					Name: "save_manual_context",
+					Response: map[string]interface{}{
+						"status": "success",
+						"message": "Context saved successfully to Global Brain.",
+					},
+				},
+			}
+			s.chatStore.AppendMessage(req.SessionID, fnRespMsg)
+			history.Messages = append(history.Messages, fnRespMsg)
+
+			// Call Gemini again
+			resp, err = llm.GenerateGeminiCompletion(r.Context(), s.cfg.GeminiApiKey, model, systemPrompt, history.Messages, tools, endpointURL)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
+	// 7. Append Assistant final message
+	assistantMsg := llm.Message{Role: "assistant", Content: resp.Text}
+	s.chatStore.AppendMessage(req.SessionID, assistantMsg)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ChatResponse{
 		ModelUsed: model,
 		Role:      "assistant",
-		Content:   responseContent,
+		Content:   resp.Text,
 	})
 }

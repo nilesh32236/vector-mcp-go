@@ -26,14 +26,16 @@ func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 
 // Better yet, let's just create a real temp db store for the test
 func setupTestServer(t *testing.T) (*Server, func()) {
+	tempDir := t.TempDir()
+
 	cfg := &config.Config{
 		ApiPort:            "8080",
 		Dimension:          1024,
 		GeminiApiKey:       "test-key",
 		DefaultGeminiModel: "gemini-test-model",
+		DataDir:            tempDir,
 	}
 
-	tempDir := t.TempDir()
 	store, err := db.Connect(context.Background(), tempDir, "test_collection")
 	if err != nil {
 		t.Fatalf("failed to connect to db: %v", err)
@@ -212,6 +214,14 @@ func TestChatEndpoint(t *testing.T) {
 	srv, cleanup := setupTestServer(t)
 	defer cleanup()
 
+	// 0. Create a session first
+	req0, _ := http.NewRequest("POST", "/api/sessions", bytes.NewReader([]byte(`{"title": "Test Chat"}`)))
+	rr0 := httptest.NewRecorder()
+	srv.srv.Handler.ServeHTTP(rr0, req0)
+	var sess map[string]interface{}
+	json.NewDecoder(rr0.Body).Decode(&sess)
+	sessionID := sess["id"].(string)
+
 	// 1. Insert dummy context
 	ctxReqBody := ContextRequest{
 		Text:   "The indexing worker processes files in the background.",
@@ -225,8 +235,12 @@ func TestChatEndpoint(t *testing.T) {
 	rr1 := httptest.NewRecorder()
 	srv.srv.Handler.ServeHTTP(rr1, req1)
 
+	callCount := 0
+
 	// 2. Setup mock Gemini server
 	mockGemini := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+
 		// Verify API Key
 		if r.URL.Query().Get("key") != "test-key" {
 			t.Errorf("expected API key 'test-key', got '%s'", r.URL.Query().Get("key"))
@@ -247,7 +261,23 @@ func TestChatEndpoint(t *testing.T) {
 			}
 		}
 
-		// Mock response
+		// First call: Simulate a function call
+		if callCount == 1 {
+			resp := `{
+				"candidates": [
+					{
+						"content": {
+							"parts": [{"functionCall": {"name": "save_manual_context", "args": {"content": "This is important to remember"}}}]
+						}
+					}
+				]
+			}`
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(resp))
+			return
+		}
+
+		// Second call: Return final text
 		resp := `{
 			"candidates": [
 				{
@@ -264,9 +294,8 @@ func TestChatEndpoint(t *testing.T) {
 
 	// 3. Make chat request
 	chatBody := ChatRequest{
-		Messages: []ChatMessage{
-			{Role: "user", Content: "How does the indexing worker work?"},
-		},
+		SessionID: sessionID,
+		Message:   "How does the indexing worker work?",
 	}
 	chatBytes, _ := json.Marshal(chatBody)
 	req2, _ := http.NewRequest("POST", "/api/chat", bytes.NewReader(chatBytes))
@@ -290,6 +319,16 @@ func TestChatEndpoint(t *testing.T) {
 	if resp.Content != "It processes files in the background." {
 		t.Errorf("expected generated content 'It processes files in the background.', got '%s'", resp.Content)
 	}
+
+	if callCount != 2 {
+		t.Errorf("expected Gemini to be called 2 times (function call + final text), got %d", callCount)
+	}
+
+	// 4. Verify context was saved to LanceDB
+	store, _ := srv.storeGetter(context.Background())
+	if store.Count() != 2 { // 1 initial context + 1 saved via function call
+		t.Errorf("expected 2 records in store (1 initial + 1 function call), got %d", store.Count())
+	}
 }
 
 func TestChatEndpointNoApiKey(t *testing.T) {
@@ -299,9 +338,8 @@ func TestChatEndpointNoApiKey(t *testing.T) {
 	srv.cfg.GeminiApiKey = "" // Unset API key
 
 	chatBody := ChatRequest{
-		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
-		},
+		SessionID: "dummy-id",
+		Message:   "Hello",
 	}
 	chatBytes, _ := json.Marshal(chatBody)
 	req, _ := http.NewRequest("POST", "/api/chat", bytes.NewReader(chatBytes))
