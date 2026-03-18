@@ -10,23 +10,17 @@ before:
 builds:
   - env:
       - CGO_ENABLED=1
-      # Map Go targets to Zig targets for CC/CXX
-      - CC=zig cc -target {{ if eq .Arch "amd64" }}x86_64{{ else }}aarch64{{ end }}-{{ if eq .Os "darwin" }}macos{{ else if eq .Os "windows" }}windows-gnu{{ else }}linux-gnu{{ end }}
-      - CXX=zig c++ -target {{ if eq .Arch "amd64" }}x86_64{{ else }}aarch64{{ end }}-{{ if eq .Os "darwin" }}macos{{ else if eq .Os "windows" }}windows-gnu{{ else }}linux-gnu{{ end }}
+      # Map Go targets to Zig targets for CC/CXX (Linux Only)
+      - CC=zig cc -target {{ if eq .Arch "amd64" }}x86_64{{ else }}aarch64{{ end }}-linux-gnu
+      - CXX=zig c++ -target {{ if eq .Arch "amd64" }}x86_64{{ else }}aarch64{{ end }}-linux-gnu
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
     targets:
       - linux_amd64_v1
       - linux_arm64_v8.0
-      - darwin_amd64_v1
-      - darwin_arm64_v8.0
-      - windows_amd64_v1
-      - windows_arm64_v8.0
     main: ./main.go
     binary: vector-mcp-go
     flags:
@@ -44,10 +38,6 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
-    # use zip for windows archives
-    format_overrides:
-      - goos: windows
-        formats: [zip]
 
 checksum:
   name_template: 'checksums.txt'
