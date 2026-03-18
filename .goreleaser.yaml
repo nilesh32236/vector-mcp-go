@@ -10,9 +10,9 @@ before:
 builds:
   - env:
       - CGO_ENABLED=1
-      # Use zig cc for cross-compilation
-      - CC=zig cc -target {{ .Target }}
-      - CXX=zig c++ -target {{ .Target }}
+      # Map Go targets to Zig targets for CC/CXX
+      - CC=zig cc -target {{ if eq .Arch "amd64" }}x86_64{{ else }}aarch64{{ end }}-{{ if eq .Os "darwin" }}macos{{ else if eq .Os "windows" }}windows-gnu{{ else }}linux-gnu{{ end }}
+      - CXX=zig c++ -target {{ if eq .Arch "amd64" }}x86_64{{ else }}aarch64{{ end }}-{{ if eq .Os "darwin" }}macos{{ else if eq .Os "windows" }}windows-gnu{{ else }}linux-gnu{{ end }}
     goos:
       - linux
       - darwin
