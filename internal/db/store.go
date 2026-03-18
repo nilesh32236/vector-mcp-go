@@ -67,6 +67,10 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 		return nil, nil, nil
 	}
 
+	if topK > count {
+		topK = count
+	}
+
 	var allResults []chromem.Result
 	if len(projectIDs) == 0 {
 		res, err := s.collection.QueryEmbedding(ctx, queryEmbedding, topK, nil, nil)
@@ -246,4 +250,25 @@ func (s *Store) GetStatus(ctx context.Context, projectID string) (string, error)
 		return "", err
 	}
 	return res[0].Content, nil
+}
+
+func (s *Store) GetAllStatuses(ctx context.Context) (map[string]string, error) {
+	count := s.collection.Count()
+	if count == 0 {
+		return nil, nil
+	}
+
+	dummyEmb := make([]float32, 1024)
+	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"type": "project_status"}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	statuses := make(map[string]string)
+	for _, r := range res {
+		if projectID, ok := r.Metadata["project_id"]; ok {
+			statuses[projectID] = r.Content
+		}
+	}
+	return statuses, nil
 }

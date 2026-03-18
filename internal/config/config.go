@@ -10,15 +10,16 @@ import (
 )
 
 type Config struct {
-	ProjectRoot string
-	DataDir     string
-	DbPath      string
-	ModelsDir   string
-	LogPath     string
-	ModelName   string
-	HFToken     string
-	Dimension   int
-	Logger      *slog.Logger
+	ProjectRoot    string
+	DataDir        string
+	DbPath         string
+	ModelsDir      string
+	LogPath        string
+	ModelName      string
+	HFToken        string
+	Dimension      int
+	DisableWatcher bool
+	Logger         *slog.Logger
 }
 
 func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Config {
@@ -84,16 +85,19 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		modelName = "Xenova/bge-m3"
 	}
 
+	disableWatcher := os.Getenv("DISABLE_FILE_WATCHER") == "true"
+
 	return &Config{
-		ProjectRoot: projectRoot,
-		DataDir:     dataDir,
-		DbPath:      dbPath,
-		ModelsDir:   modelsDir,
-		LogPath:     logPath,
-		ModelName:   modelName,
-		HFToken:     os.Getenv("HF_TOKEN"),
-		Dimension:   1024,
-		Logger:      logger,
+		ProjectRoot:    projectRoot,
+		DataDir:        dataDir,
+		DbPath:         dbPath,
+		ModelsDir:      modelsDir,
+		LogPath:        logPath,
+		ModelName:      modelName,
+		HFToken:        os.Getenv("HF_TOKEN"),
+		Dimension:      1024,
+		DisableWatcher: disableWatcher,
+		Logger:         logger,
 	}
 }
 

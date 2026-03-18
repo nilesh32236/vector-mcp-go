@@ -77,7 +77,21 @@ export ONNX_LIB_PATH="/custom/path/to/libonnxruntime.so"
 | `find_duplicate_code` | Scan for logic duplication across namespaces. |
 | `get_codebase_skeleton` | View a topological tree of the project structure. |
 | `index_status` | Monitor indexing progress and database health. |
+| `retrieve_context` | Perform semantic search across the codebase using natural language. |
 | `delete_context` | Remove specific files or wipe entire project indices. |
+
+---
+
+## ⚙️ Configuration
+
+The following environment variables can be used to customize the server:
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `PROJECT_ROOT` | Absolute path to the project to index. | Current directory |
+| `DATA_DIR` | Base directory for DB and models. | `~/.local/share/vector-mcp-go` |
+| `DISABLE_FILE_WATCHER` | Set to `true` to disable the real-time file watcher. | `false` |
+| `MODEL_NAME` | ONNX-compatible model to use for embeddings. | `Xenova/bge-m3` |
 
 ---
 

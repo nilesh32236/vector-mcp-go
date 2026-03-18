@@ -78,7 +78,10 @@ func (fw *FileWatcher) watchRecursive(root string) {
 	fw.watcherMu.Lock()
 	defer fw.watcherMu.Unlock()
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if d != nil && d.IsDir() && !indexer.IsIgnoredDir(d.Name()) {
+		if d != nil && d.IsDir() {
+			if indexer.IsIgnoredDir(d.Name()) {
+				return filepath.SkipDir
+			}
 			fw.tracker.Add(path)
 		}
 		return nil
@@ -90,6 +93,9 @@ func (fw *FileWatcher) resetWatcher(newRoot string) {
 	if fw.currentRoot != "" {
 		filepath.WalkDir(fw.currentRoot, func(path string, d os.DirEntry, err error) error {
 			if d != nil && d.IsDir() {
+				if indexer.IsIgnoredDir(d.Name()) {
+					return filepath.SkipDir
+				}
 				fw.tracker.Remove(path)
 			}
 			return nil

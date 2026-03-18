@@ -53,21 +53,19 @@ func (w *IndexWorker) processPath(ctx context.Context, path string) {
 
 	w.logger.Info("Starting background indexing", "path", path)
 	w.progressMap.Store(path, "Initializing...")
-	if store, err := w.storeGetter(ctx); err == nil {
-		store.SetStatus(ctx, path, "Initializing...")
+	store, err := w.storeGetter(ctx)
+	if err != nil {
+		w.logger.Error("Background indexing failed: could not get store", "path", path, "error", err)
+		w.progressMap.Store(path, fmt.Sprintf("Error: could not get store: %v", err))
+		return
 	}
+	store.SetStatus(ctx, path, "Initializing...")
 
 	targetCfg := &config.Config{
 		ProjectRoot: path,
 		DbPath:      w.cfg.DbPath,
 		ModelsDir:   w.cfg.ModelsDir,
 		Logger:      w.cfg.Logger,
-	}
-
-	store, err := w.storeGetter(ctx)
-	if err != nil {
-		w.logger.Error("Background indexing failed: could not get store", "path", path, "error", err)
-		return
 	}
 
 	summary, err := indexer.IndexFullCodebase(ctx, targetCfg, store, w.embedder, w.progressMap, w.logger)

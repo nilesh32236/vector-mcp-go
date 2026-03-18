@@ -29,10 +29,10 @@ var (
 	resetChan   = make(chan string, 1)
 )
 
-func getStore(ctx context.Context, cfg *config.Config) (*db.Store, error) {
+func getStore(ctx context.Context, cfg *config.Config, forceRefresh bool) (*db.Store, error) {
 	dbMu.Lock()
 	defer dbMu.Unlock()
-	if globalStore != nil {
+	if globalStore != nil && !forceRefresh {
 		return globalStore, nil
 	}
 	store, err := db.Connect(ctx, cfg.DbPath, "project_context")
@@ -101,7 +101,10 @@ func main() {
 
 	embedder := &poolEmbedder{pool: embedPool}
 	storeGetter := func(ctx context.Context) (*db.Store, error) {
-		return getStore(ctx, cfg)
+		return getStore(ctx, cfg, false)
+	}
+	freshStoreGetter := func(ctx context.Context) (*db.Store, error) {
+		return getStore(ctx, cfg, true)
 	}
 
 	// Initialize worker
@@ -113,7 +116,7 @@ func main() {
 	if len(args) > 0 {
 		cmd := args[0]
 		if cmd == "status" || cmd == "health" {
-			_, err := getStore(ctx, cfg)
+			_, err := getStore(ctx, cfg, false)
 			if err != nil {
 				logger.Error("DB connection failed", "error", err)
 				os.Exit(1)
@@ -129,23 +132,27 @@ func main() {
 	}
 
 	if *indexFlag {
-		store, _ := getStore(ctx, cfg)
+		store, _ := getStore(ctx, cfg, false)
 		summary, _ := indexer.IndexFullCodebase(ctx, cfg, store, embedder, &progressMap, logger)
 		logger.Info("Standalone index complete", "summary", summary)
 		return
 	}
 
 	// Start file watcher
-	fw, err := watcher.NewFileWatcher(cfg, logger, resetChan, storeGetter, embedder)
-	if err != nil {
-		logger.Error("Failed to initialize file watcher", "error", err)
-		os.Exit(1)
+	if !cfg.DisableWatcher {
+		fw, err := watcher.NewFileWatcher(cfg, logger, resetChan, storeGetter, embedder)
+		if err != nil {
+			logger.Error("Failed to initialize file watcher", "error", err)
+			os.Exit(1)
+		}
+		go fw.Start(ctx)
+	} else {
+		logger.Info("File watcher is disabled via configuration (DISABLE_FILE_WATCHER=true)")
 	}
-	go fw.Start(ctx)
 
 	// Start MCP server
 	resolver := indexer.InitResolver(cfg.ProjectRoot)
-	srv := mcp.NewServer(cfg, logger, storeGetter, embedder, indexQueue, &progressMap, resetChan, resolver)
+	srv := mcp.NewServer(cfg, logger, storeGetter, freshStoreGetter, embedder, indexQueue, &progressMap, resetChan, resolver)
 	if err := srv.Serve(); err != nil {
 		logger.Error("Server error", "error", err)
 		os.Exit(1)
