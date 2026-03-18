@@ -19,6 +19,7 @@ type Config struct {
 	HFToken        string
 	Dimension      int
 	DisableWatcher bool
+	ApiPort        string
 	Logger         *slog.Logger
 }
 
@@ -87,6 +88,11 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 
 	disableWatcher := os.Getenv("DISABLE_FILE_WATCHER") == "true"
 
+	apiPort := os.Getenv("API_PORT")
+	if apiPort == "" {
+		apiPort = "8080"
+	}
+
 	return &Config{
 		ProjectRoot:    projectRoot,
 		DataDir:        dataDir,
@@ -97,6 +103,7 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		HFToken:        os.Getenv("HF_TOKEN"),
 		Dimension:      1024,
 		DisableWatcher: disableWatcher,
+		ApiPort:        apiPort,
 		Logger:         logger,
 	}
 }
