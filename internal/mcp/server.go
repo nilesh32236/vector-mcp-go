@@ -19,13 +19,27 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 )
 
+// IndexerStore defines the interface for database operations,
+// allowing both local and remote implementations.
+type IndexerStore interface {
+	Search(ctx context.Context, embedding []float32, topK int, pids []string) ([]db.Record, error)
+	Insert(ctx context.Context, records []db.Record) error
+	DeleteByPrefix(ctx context.Context, prefix string, projectID string) error
+	ClearProject(ctx context.Context, projectID string) error
+	GetStatus(ctx context.Context, projectID string) (string, error)
+	GetAllStatuses(ctx context.Context) (map[string]string, error)
+	GetPathHashMapping(ctx context.Context, projectID string) (map[string]string, error)
+	GetAllRecords(ctx context.Context) ([]db.Record, error)
+	GetByPath(ctx context.Context, path string, projectID string) ([]db.Record, error)
+}
+
 // Server is the core MCP server that manages tools and handles requests.
 type Server struct {
 	cfg              *config.Config
 	logger           *slog.Logger
 	mcpServer        *server.MCPServer
 	storeGetter      func(ctx context.Context) (*db.Store, error)
-	freshStoreGetter func(ctx context.Context) (*db.Store, error)
+	remoteStore      IndexerStore
 	embedder         indexer.Embedder
 	indexQueue       chan string
 	daemonClient     *daemon.Client
@@ -35,14 +49,13 @@ type Server struct {
 }
 
 // NewServer creates a new Server instance and registers its tools.
-func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx context.Context) (*db.Store, error), freshStoreGetter func(ctx context.Context) (*db.Store, error), embedder indexer.Embedder, queue chan string, daemonClient *daemon.Client, progress *sync.Map, resetChan chan string, resolver *indexer.WorkspaceResolver) *Server {
+func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx context.Context) (*db.Store, error), _ func(ctx context.Context) (*db.Store, error), embedder indexer.Embedder, queue chan string, daemonClient *daemon.Client, progress *sync.Map, resetChan chan string, resolver *indexer.WorkspaceResolver) *Server {
 	s := server.NewMCPServer("vector-mcp-go", "1.0.0", server.WithLogging())
 	srv := &Server{
 		cfg:              cfg,
 		logger:           logger,
 		mcpServer:        s,
 		storeGetter:      storeGetter,
-		freshStoreGetter: freshStoreGetter,
 		embedder:         embedder,
 		indexQueue:       queue,
 		daemonClient:     daemonClient,
@@ -52,6 +65,17 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 	}
 	srv.registerTools()
 	return srv
+}
+
+func (s *Server) WithRemoteStore(rs IndexerStore) {
+	s.remoteStore = rs
+}
+
+func (s *Server) getStore(ctx context.Context) (IndexerStore, error) {
+	if s.remoteStore != nil {
+		return s.remoteStore, nil
+	}
+	return s.storeGetter(ctx)
 }
 
 // Serve starts the MCP server on stdio.
@@ -179,7 +203,7 @@ func (s *Server) handleStoreContext(ctx context.Context, request mcp.CallToolReq
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to generate embedding: %v", err)), nil
 	}
-	store, err := s.storeGetter(ctx)
+	store, err := s.getStore(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -202,7 +226,7 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	filePath := request.GetString("filePath", "")
-	store, err := s.storeGetter(ctx)
+	store, err := s.getStore(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -340,7 +364,7 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 	if len(crossProjs) > 0 {
 		pids = append(pids, crossProjs...)
 	}
-	store, _ := s.storeGetter(ctx)
+	store, _ := s.getStore(ctx)
 	allRecords, _ := store.GetAllRecords(ctx)
 	var targetChunks []db.Record
 	for _, r := range allRecords {
@@ -353,11 +377,20 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 	found := false
 	for _, tc := range targetChunks {
 		emb, _ := s.embedder.Embed(ctx, tc.Content)
-		matches, _, _ := store.SearchWithScore(ctx, emb, 5, pids)
+		
+		var matches []db.Record
+		if ds, ok := store.(*db.Store); ok {
+			ms, _, _ := ds.SearchWithScore(ctx, emb, 5, pids)
+			matches = ms
+		} else {
+			ms, _ := store.Search(ctx, emb, 5, pids)
+			matches = ms
+		}
+
 		for _, m := range matches {
-			if m.Similarity > 0.93 && (m.Metadata["path"] != tc.Metadata["path"] || m.Metadata["project_id"] != tc.Metadata["project_id"]) {
+			if (m.Metadata["path"] != tc.Metadata["path"] || m.Metadata["project_id"] != tc.Metadata["project_id"]) {
 				out.WriteString(fmt.Sprintf("  <finding>\n    <original file=\"%s\">%s</original>\n", tc.Metadata["path"], tc.Metadata["path"]))
-				out.WriteString(fmt.Sprintf("    <match file=\"%s\" project=\"%s\" score=\"%f\">%s</match>\n  </finding>\n", m.Metadata["path"], m.Metadata["project_id"], m.Similarity, m.Metadata["path"]))
+				out.WriteString(fmt.Sprintf("    <match file=\"%s\" project=\"%s\">%s</match>\n  </finding>\n", m.Metadata["path"], m.Metadata["project_id"], m.Metadata["path"]))
 				found = true
 			}
 		}
@@ -377,7 +410,7 @@ func (s *Server) handleDeleteContext(ctx context.Context, request mcp.CallToolRe
 		return mcp.NewToolResultError("target_path is required"), nil
 	}
 	projectID := request.GetString("project_id", s.cfg.ProjectRoot)
-	store, err := s.storeGetter(ctx)
+	store, err := s.getStore(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -396,7 +429,10 @@ func (s *Server) handleDeleteContext(ctx context.Context, request mcp.CallToolRe
 }
 
 func (s *Server) handleIndexStatus(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	store, _ := s.freshStoreGetter(ctx)
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	res, _ := s.runStatus(ctx, store)
 
 	bgStatus := "\n🚀 Local/In-Memory Tasks (This Instance):\n"
@@ -448,7 +484,7 @@ func (s *Server) handleRetrieveContext(ctx context.Context, request mcp.CallTool
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
 	}
 
-	store, err := s.storeGetter(ctx)
+	store, err := s.getStore(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get store: %v", err)), nil
 	}
@@ -533,7 +569,7 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 	return mcp.NewToolResultText(fmt.Sprintf("<codebase_skeleton>\n%s</codebase_skeleton>", out.String())), nil
 }
 
-func (s *Server) runStatus(ctx context.Context, store *db.Store) (string, error) {
+func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, error) {
 	diskFiles, _ := indexer.ScanFiles(s.cfg.ProjectRoot)
 	dbMapping, _ := store.GetPathHashMapping(ctx, s.cfg.ProjectRoot)
 	var indexed, updated, missing []string

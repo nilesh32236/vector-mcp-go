@@ -32,7 +32,12 @@ var (
 	resetChan   = make(chan string, 1)
 )
 
-func getStore(ctx context.Context, cfg *config.Config, forceRefresh bool) (*db.Store, error) {
+func getStore(ctx context.Context, cfg *config.Config, forceRefresh bool, isMaster bool, socketPath string) (*db.Store, error) {
+	if !isMaster {
+		// Slave instances always use RemoteStore, no local connection.
+		return nil, nil // We'll handle RemoteStore separately in srv initialization or wrap it.
+	}
+
 	dbMu.Lock()
 	defer dbMu.Unlock()
 	if globalStore != nil && !forceRefresh {
@@ -77,9 +82,12 @@ func main() {
 	var isMaster bool
 	var daemonClient *daemon.Client
 	var embedder indexer.Embedder
+	var masterServer *daemon.MasterServer
+	var err error
 
 	// Try to listen on the socket to see if we are the master
-	masterServer, err := daemon.StartMasterServer(socketPath, nil, indexQueue)
+	// Pass nil for store initially, we'll update it after connecting.
+	masterServer, err = daemon.StartMasterServer(socketPath, nil, indexQueue, nil)
 	if err == nil {
 		isMaster = true
 		logger.Info("Starting as MASTER instance", "socket", socketPath)
@@ -92,7 +100,7 @@ func main() {
 		cfg.DisableWatcher = true
 	}
 
-	// 2. Conditional Initialization
+	// 2. Master-only Initialization (Heavy RAM usage here)
 	if isMaster {
 		if err := onnx.Init(); err != nil {
 			logger.Error("Failed to initialize ONNX", "error", err)
@@ -110,31 +118,47 @@ func main() {
 			os.Exit(1)
 		}
 		embedPool = pool
-		// We don't close embedPool here because we need it for the daemon and server.
-		// It will be closed on process exit.
 
 		realEmbedder := &poolEmbedder{pool: embedPool}
 		embedder = realEmbedder
 
-		// Update daemon with real embedder
-		masterServer.UpdateEmbedder(realEmbedder)
-	}
-
-	// Initialize dependencies
-	storeGetter := func(ctx context.Context) (*db.Store, error) {
-		return getStore(ctx, cfg, false)
-	}
-	freshStoreGetter := func(ctx context.Context) (*db.Store, error) {
-		return getStore(ctx, cfg, true)
-	}
-
-	// Start API server
-	apiSrv := api.NewServer(cfg, storeGetter, embedder)
-	go func() {
-		if err := apiSrv.Start(); err != nil {
-			logger.Error("API server error", "error", err)
+		// Initialize store for Master
+		store, err := getStore(ctx, cfg, false, true, socketPath)
+		if err != nil {
+			logger.Error("Failed to initialize store", "error", err)
+			os.Exit(1)
 		}
-	}()
+
+		// Update daemon with real embedder and store
+		masterServer.UpdateEmbedder(realEmbedder)
+		masterServer.UpdateStore(store)
+	}
+
+	// 3. Define store getters that handle local/remote transparency
+	var remoteStore *daemon.RemoteStore
+	if !isMaster {
+		remoteStore = daemon.NewRemoteStore(socketPath)
+	}
+
+	storeGetter := func(ctx context.Context) (*db.Store, error) {
+		if isMaster {
+			return getStore(ctx, cfg, false, true, socketPath)
+		}
+		// This is a bit of a hack because srv expects *db.Store,
+		// but we'll modify internal/mcp/server.go to handle indexer.Store interface or similar if needed.
+		// For now, we'll keep it as is and see if we can cast or change the type.
+		return nil, fmt.Errorf("slave instance cannot use local store getter")
+	}
+
+	// Start API server (Master only, or Slaves can proxy if needed, but usually MCP is the main interface)
+	if isMaster {
+		apiSrv := api.NewServer(cfg, storeGetter, embedder)
+		go func() {
+			if err := apiSrv.Start(); err != nil {
+				logger.Error("API server error", "error", err)
+			}
+		}()
+	}
 
 	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -142,14 +166,6 @@ func main() {
 	go func() {
 		sig := <-sigChan
 		logger.Info("Received signal, shutting down", "signal", sig)
-
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-
-		if err := apiSrv.Shutdown(shutdownCtx); err != nil {
-			logger.Error("API server shutdown error", "error", err)
-		}
-
 		cancel()
 		if isMaster && masterServer != nil {
 			masterServer.Close()
@@ -164,29 +180,13 @@ func main() {
 		go idxWorker.Start(ctx)
 	}
 
-	// CLI logic
-	args := flag.Args()
-	if len(args) > 0 {
-		cmd := args[0]
-		if cmd == "status" || cmd == "health" {
-			_, err := getStore(ctx, cfg, false)
-			if err != nil {
-				logger.Error("DB connection failed", "error", err)
-				os.Exit(1)
-			}
-			if cmd == "status" {
-				fmt.Println("CLI status/health not yet refactored into modular CLI package.")
-			}
-			return
-		}
-	}
-
+	// Standalone indexing logic
 	if *indexFlag {
 		if !isMaster {
 			logger.Error("Standalone indexing can only be run when no other instance is active (Master only)")
 			os.Exit(1)
 		}
-		store, _ := getStore(ctx, cfg, false)
+		store, _ := getStore(ctx, cfg, false, true, socketPath)
 		summary, _ := indexer.IndexFullCodebase(ctx, cfg, store, embedder, &progressMap, logger)
 		logger.Info("Standalone index complete", "summary", summary)
 		return
@@ -194,7 +194,10 @@ func main() {
 
 	// Start file watcher
 	if !cfg.DisableWatcher && isMaster {
-		fw, err := watcher.NewFileWatcher(cfg, logger, resetChan, storeGetter, embedder)
+		store, _ := getStore(ctx, cfg, false, true, socketPath)
+		// watcher expects a store getter, let's wrap it
+		sg := func(ctx context.Context) (*db.Store, error) { return store, nil }
+		fw, err := watcher.NewFileWatcher(cfg, logger, resetChan, sg, embedder)
 		if err != nil {
 			logger.Error("Failed to initialize file watcher", "error", err)
 			os.Exit(1)
@@ -206,7 +209,12 @@ func main() {
 
 	// Start MCP server
 	resolver := indexer.InitResolver(cfg.ProjectRoot)
-	srv := mcp.NewServer(cfg, logger, storeGetter, freshStoreGetter, embedder, indexQueue, daemonClient, &progressMap, resetChan, resolver)
+	// We need to pass the remote store to the MCP server if we are a slave.
+	srv := mcp.NewServer(cfg, logger, storeGetter, nil, embedder, indexQueue, daemonClient, &progressMap, resetChan, resolver)
+	if !isMaster {
+		srv.WithRemoteStore(remoteStore)
+	}
+
 	if err := srv.Serve(); err != nil {
 		logger.Error("Server error", "error", err)
 		os.Exit(1)
