@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -19,6 +20,7 @@ type Config struct {
 	HFToken        string
 	Dimension          int
 	DisableWatcher     bool
+	EmbedderPoolSize   int
 	ApiPort            string
 	GeminiApiKey       string
 	DefaultGeminiModel string
@@ -85,14 +87,21 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 
 	modelName := os.Getenv("MODEL_NAME")
 	if modelName == "" {
-		modelName = "Xenova/bge-m3"
+		modelName = "BAAI/bge-small-en-v1.5"
 	}
 
 	disableWatcher := os.Getenv("DISABLE_FILE_WATCHER") == "true"
 
+	embedderPoolSize := 1
+	if v := os.Getenv("EMBEDDER_POOL_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			embedderPoolSize = n
+		}
+	}
+
 	apiPort := os.Getenv("API_PORT")
 	if apiPort == "" {
-		apiPort = "8080"
+		apiPort = "47821"
 	}
 
 	defaultGeminiModel := os.Getenv("GEMINI_DEFAULT_MODEL")
@@ -110,6 +119,7 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		HFToken:            os.Getenv("HF_TOKEN"),
 		Dimension:          1024,
 		DisableWatcher:     disableWatcher,
+		EmbedderPoolSize:   embedderPoolSize,
 		ApiPort:            apiPort,
 		GeminiApiKey:       os.Getenv("GEMINI_API_KEY"),
 		DefaultGeminiModel: defaultGeminiModel,

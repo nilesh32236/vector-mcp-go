@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/rpc"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
@@ -14,9 +15,10 @@ import (
 
 // Service defines the RPC methods available on the Master.
 type Service struct {
-	Embedder   indexer.Embedder
-	IndexQueue chan string
-	Store      *db.Store
+	Embedder    indexer.Embedder
+	IndexQueue  chan string
+	Store       *db.Store
+	ProgressMap *sync.Map
 }
 
 type EmbedRequest struct {
@@ -203,6 +205,21 @@ func (s *Service) GetByPath(req DeleteRequest, resp *SearchResponse) error {
 	return nil
 }
 
+type ProgressResponse struct {
+	Progress map[string]string
+}
+
+func (s *Service) GetProgress(_ StatusRequest, resp *ProgressResponse) error {
+	resp.Progress = make(map[string]string)
+	if s.ProgressMap != nil {
+		s.ProgressMap.Range(func(k, v interface{}) bool {
+			resp.Progress[k.(string)] = v.(string)
+			return true
+		})
+	}
+	return nil
+}
+
 // MasterServer manages the RPC server lifecycle and allows updating its service.
 type MasterServer struct {
 	socketPath string
@@ -210,11 +227,12 @@ type MasterServer struct {
 	svc        *Service
 }
 
-func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue chan string, store *db.Store) (*MasterServer, error) {
+func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue chan string, store *db.Store, progressMap *sync.Map) (*MasterServer, error) {
 	svc := &Service{
-		Embedder:   embedder,
-		IndexQueue: indexQueue,
-		Store:      store,
+		Embedder:    embedder,
+		IndexQueue:  indexQueue,
+		Store:       store,
+		ProgressMap: progressMap,
 	}
 
 	// rpc.RegisterName is global for the default server.
@@ -222,7 +240,12 @@ func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue 
 	// However, to support updating the embedder later, we use a service pointer.
 	_ = rpc.RegisterName("VectorDaemon", svc)
 
-	// Clean up old socket if it exists
+	// Check if a master is already listening on the socket before removing it.
+	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
+		conn.Close()
+		return nil, fmt.Errorf("master already running on %s", socketPath)
+	}
+	// Socket exists but is stale (no one listening) — safe to remove.
 	_ = os.Remove(socketPath)
 
 	l, err := net.Listen("unix", socketPath)
@@ -288,6 +311,20 @@ func (c *Client) TriggerIndex(path string) error {
 		return err
 	}
 	return nil
+}
+
+func (c *Client) GetProgress() (map[string]string, error) {
+	client, err := rpc.Dial("unix", c.socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	var resp ProgressResponse
+	if err := client.Call("VectorDaemon.GetProgress", StatusRequest{}, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Progress, nil
 }
 
 // RemoteEmbedder implements indexer.Embedder by delegating to the Master.

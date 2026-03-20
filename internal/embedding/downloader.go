@@ -8,32 +8,67 @@ import (
 	"path/filepath"
 )
 
-const (
-	OnnxURL      = "https://huggingface.co/Xenova/bge-m3/resolve/main/onnx/model_quantized.onnx"
-	TokenizerURL = "https://huggingface.co/Xenova/bge-m3/resolve/main/tokenizer.json"
-)
+type ModelConfig struct {
+	OnnxURL      string
+	TokenizerURL string
+	Filename     string
+	Dimension    int
+}
 
-func EnsureModel(modelsDir string) (string, error) {
-	modelPath := filepath.Join(modelsDir, "bge-m3-q4.onnx")
-	tokenizerPath := filepath.Join(modelsDir, "tokenizer.json")
+var Models = map[string]ModelConfig{
+	"Xenova/bge-m3": {
+		OnnxURL:      "https://huggingface.co/Xenova/bge-m3/resolve/main/onnx/model_quantized.onnx",
+		TokenizerURL: "https://huggingface.co/Xenova/bge-m3/resolve/main/tokenizer.json",
+		Filename:     "bge-m3-q4.onnx",
+		Dimension:    1024,
+	},
+	"BAAI/bge-small-en-v1.5": {
+		OnnxURL:      "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_quantized.onnx",
+		TokenizerURL: "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/tokenizer.json",
+		Filename:     "bge-small-en-v1.5-q4.onnx",
+		Dimension:    384,
+	},
+	"BAAI/bge-base-en-v1.5": {
+		OnnxURL:      "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_quantized.onnx",
+		TokenizerURL: "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/tokenizer.json",
+		Filename:     "bge-base-en-v1.5-q4.onnx",
+		Dimension:    768,
+	},
+}
+
+func GetModelConfig(modelName string) (ModelConfig, error) {
+	mc, ok := Models[modelName]
+	if !ok {
+		return ModelConfig{}, fmt.Errorf("unsupported model %q, choose from: Xenova/bge-m3, BAAI/bge-small-en-v1.5, BAAI/bge-base-en-v1.5", modelName)
+	}
+	return mc, nil
+}
+
+func EnsureModel(modelsDir, modelName string) (ModelConfig, error) {
+	mc, err := GetModelConfig(modelName)
+	if err != nil {
+		return mc, err
+	}
+
+	modelPath := filepath.Join(modelsDir, mc.Filename)
+	tokenizerPath := filepath.Join(modelsDir, mc.Filename+".tokenizer.json")
 
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Model not found at %s. Downloading BGE-M3 (quantized)...\n", modelPath)
-		if err := downloadFile(OnnxURL, modelPath); err != nil {
-			return "", fmt.Errorf("failed to download model: %w", err)
+		fmt.Fprintf(os.Stderr, "Downloading %s model...\n", modelName)
+		if err := downloadFile(mc.OnnxURL, modelPath); err != nil {
+			return mc, fmt.Errorf("failed to download model: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Model downloaded successfully!\n")
 	}
 
 	if _, err := os.Stat(tokenizerPath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Tokenizer not found at %s. Downloading...\n", tokenizerPath)
-		if err := downloadFile(TokenizerURL, tokenizerPath); err != nil {
-			return "", fmt.Errorf("failed to download tokenizer: %w", err)
+		fmt.Fprintf(os.Stderr, "Downloading %s tokenizer...\n", modelName)
+		if err := downloadFile(mc.TokenizerURL, tokenizerPath); err != nil {
+			return mc, fmt.Errorf("failed to download tokenizer: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Tokenizer downloaded successfully!\n")
 	}
 
-	return modelPath, nil
+	mc.TokenizerURL = tokenizerPath // reuse field to pass resolved path
+	return mc, nil
 }
 
 func downloadFile(url string, dest string) error {

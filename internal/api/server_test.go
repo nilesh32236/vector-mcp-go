@@ -36,7 +36,7 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		DataDir:            tempDir,
 	}
 
-	store, err := db.Connect(context.Background(), tempDir, "test_collection")
+	store, err := db.Connect(context.Background(), tempDir, "test_collection", 1024)
 	if err != nil {
 		t.Fatalf("failed to connect to db: %v", err)
 	}

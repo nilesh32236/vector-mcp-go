@@ -32,7 +32,7 @@ func TestWorkerStatusUpdate(t *testing.T) {
 		Logger:      logger,
 	}
 
-	store, _ := db.Connect(ctx, dbPath, "test_collection")
+	store, _ := db.Connect(ctx, dbPath, "test_collection", 1024)
 	progressMap := &sync.Map{}
 
 	w := &IndexWorker{

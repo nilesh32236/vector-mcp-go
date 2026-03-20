@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
+	mcp_server "github.com/mark3labs/mcp-go/server"
 	"github.com/nilesh32236/vector-mcp-go/internal/chat"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
@@ -22,9 +24,10 @@ type Server struct {
 	embedder    indexer.Embedder
 	srv         *http.Server
 	chatStore   *chat.Store
+	mcpServer   *mcp_server.MCPServer
 }
 
-func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Embedder) *Server {
+func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Embedder, mcpServer *mcp_server.MCPServer) *Server {
 	chatStore, err := chat.NewStore(cfg.DataDir)
 	if err != nil && cfg.Logger != nil {
 		cfg.Logger.Error("Failed to initialize chat store", "error", err)
@@ -37,9 +40,35 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 		storeGetter: storeGetter,
 		embedder:    embedder,
 		chatStore:   chatStore,
+		mcpServer:   mcpServer,
 	}
 
 	mux.HandleFunc("GET /api/health", server.handleHealth)
+
+	// MCP HTTP transport (Streamable-HTTP specification)
+	if mcpServer != nil {
+		mcpHandler := mcp_server.NewStreamableHTTPServer(mcpServer)
+
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("MCP request: %s %s", r.Method, r.URL.String())
+
+			// CORS headers are essential for browser-based clients
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Authorization, MCP-Protocol-Version")
+			w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			mcpHandler.ServeHTTP(w, r)
+		}
+
+		mux.HandleFunc("/sse", handler)
+		mux.HandleFunc("/message", handler)
+	}
 
 	// Chat sessions CRUD
 	mux.HandleFunc("GET /api/sessions", server.handleListSessions)
@@ -518,7 +547,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				FunctionResponse: &llm.FunctionResponse{
 					Name: "save_manual_context",
 					Response: map[string]interface{}{
-						"status": "success",
+						"status":  "success",
 						"message": "Context saved successfully to Global Brain.",
 					},
 				},

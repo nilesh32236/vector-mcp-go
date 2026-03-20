@@ -20,18 +20,18 @@ type Embedder struct {
 	inputIdsTensor      *onnxruntime_go.Tensor[int64]
 	attentionMaskTensor *onnxruntime_go.Tensor[int64]
 	outputTensor        *onnxruntime_go.Tensor[float32]
+	dimension           int
 }
 
 type EmbedderPool struct {
 	pool chan *Embedder
 }
 
-func NewEmbedderPool(ctx context.Context, modelsDir string, size int) (*EmbedderPool, error) {
+func NewEmbedderPool(ctx context.Context, modelsDir string, size int, mc ModelConfig) (*EmbedderPool, error) {
 	pool := make(chan *Embedder, size)
 	for i := 0; i < size; i++ {
-		emb, err := NewEmbedder(modelsDir)
+		emb, err := NewEmbedder(modelsDir, mc)
 		if err != nil {
-			// Clean up already created embedders
 			close(pool)
 			for e := range pool {
 				e.Close()
@@ -63,9 +63,10 @@ func (p *EmbedderPool) Close() {
 	}
 }
 
-func NewEmbedder(modelsDir string) (*Embedder, error) {
-	modelPath := filepath.Join(modelsDir, "bge-m3-q4.onnx")
-	tokenizerPath := filepath.Join(modelsDir, "tokenizer.json")
+func NewEmbedder(modelsDir string, mc ModelConfig) (*Embedder, error) {
+	modelPath := filepath.Join(modelsDir, mc.Filename)
+	tokenizerPath := mc.TokenizerURL // resolved path stored here by EnsureModel
+	dim := mc.Dimension
 
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("model file not found: %s", modelPath)
@@ -94,7 +95,7 @@ func NewEmbedder(modelsDir string) (*Embedder, error) {
 		return nil, err
 	}
 
-	outputShape := onnxruntime_go.NewShape(1, MaxSeqLength, 1024)
+	outputShape := onnxruntime_go.NewShape(1, MaxSeqLength, int64(dim))
 	outputTensor, err := onnxruntime_go.NewEmptyTensor[float32](outputShape)
 	if err != nil {
 		inputIdsTensor.Destroy()
@@ -122,6 +123,7 @@ func NewEmbedder(modelsDir string) (*Embedder, error) {
 		inputIdsTensor:      inputIdsTensor,
 		attentionMaskTensor: attentionMaskTensor,
 		outputTensor:        outputTensor,
+		dimension:           dim,
 	}, nil
 }
 
@@ -171,8 +173,8 @@ func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err e
 	}
 
 	fullOutput := e.outputTensor.GetData()
-	embedding := make([]float32, 1024)
-	copy(embedding, fullOutput[:1024])
+	embedding := make([]float32, e.dimension)
+	copy(embedding, fullOutput[:e.dimension])
 
 	return embedding, nil
 }

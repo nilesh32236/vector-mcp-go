@@ -43,7 +43,7 @@ func getStore(ctx context.Context, cfg *config.Config, forceRefresh bool, isMast
 	if globalStore != nil && !forceRefresh {
 		return globalStore, nil
 	}
-	store, err := db.Connect(ctx, cfg.DbPath, "project_context")
+	store, err := db.Connect(ctx, cfg.DbPath, "project_context", cfg.Dimension)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +69,7 @@ func main() {
 	modelsDirFlag := flag.String("models-dir", "", "Specific directory for models")
 	dbPathFlag := flag.String("db-path", "", "Specific path for the database")
 	indexFlag := flag.Bool("index", false, "Run full codebase indexing and exit")
+	daemonFlag := flag.Bool("daemon", false, "Run as background daemon (master worker) without MCP stdio server")
 	flag.Parse()
 
 	cfg := config.LoadConfig(*dataDirFlag, *modelsDirFlag, *dbPathFlag)
@@ -87,7 +88,7 @@ func main() {
 
 	// Try to listen on the socket to see if we are the master
 	// Pass nil for store initially, we'll update it after connecting.
-	masterServer, err = daemon.StartMasterServer(socketPath, nil, indexQueue, nil)
+	masterServer, err = daemon.StartMasterServer(socketPath, nil, indexQueue, nil, &progressMap)
 	if err == nil {
 		isMaster = true
 		logger.Info("Starting as MASTER instance", "socket", socketPath)
@@ -107,12 +108,14 @@ func main() {
 			os.Exit(1)
 		}
 
-		if _, err := embedding.EnsureModel(cfg.ModelsDir); err != nil {
+		mc, err := embedding.EnsureModel(cfg.ModelsDir, cfg.ModelName)
+		if err != nil {
 			logger.Error("Failed to ensure models exist", "error", err)
 			os.Exit(1)
 		}
+		cfg.Dimension = mc.Dimension
 
-		pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, 2)
+		pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, cfg.EmbedderPoolSize, mc)
 		if err != nil {
 			logger.Error("Failed to initialize embedder pool", "error", err)
 			os.Exit(1)
@@ -135,11 +138,6 @@ func main() {
 	}
 
 	// 3. Define store getters that handle local/remote transparency
-	var remoteStore *daemon.RemoteStore
-	if !isMaster {
-		remoteStore = daemon.NewRemoteStore(socketPath)
-	}
-
 	storeGetter := func(ctx context.Context) (*db.Store, error) {
 		if isMaster {
 			return getStore(ctx, cfg, false, true, socketPath)
@@ -150,9 +148,18 @@ func main() {
 		return nil, fmt.Errorf("slave instance cannot use local store getter")
 	}
 
+	// Start MCP server
+	resolver := indexer.InitResolver(cfg.ProjectRoot)
+	// We need to pass the remote store to the MCP server if we are a slave.
+	srv := mcp.NewServer(cfg, logger, storeGetter, nil, embedder, indexQueue, daemonClient, &progressMap, resetChan, resolver)
+	if !isMaster {
+		remoteStore := daemon.NewRemoteStore(socketPath)
+		srv.WithRemoteStore(remoteStore)
+	}
+
 	// Start API server (Master only, or Slaves can proxy if needed, but usually MCP is the main interface)
 	if isMaster {
-		apiSrv := api.NewServer(cfg, storeGetter, embedder)
+		apiSrv := api.NewServer(cfg, storeGetter, embedder, srv.MCPServer)
 		go func() {
 			if err := apiSrv.Start(); err != nil {
 				logger.Error("API server error", "error", err)
@@ -207,12 +214,11 @@ func main() {
 		logger.Info("File watcher is disabled (Slave instance or explicit config)")
 	}
 
-	// Start MCP server
-	resolver := indexer.InitResolver(cfg.ProjectRoot)
-	// We need to pass the remote store to the MCP server if we are a slave.
-	srv := mcp.NewServer(cfg, logger, storeGetter, nil, embedder, indexQueue, daemonClient, &progressMap, resetChan, resolver)
-	if !isMaster {
-		srv.WithRemoteStore(remoteStore)
+	if *daemonFlag {
+		logger.Info("Daemon mode active - background workers running. Waiting for signal...")
+		// Just wait for the context to be canceled or signal to be received.
+		<-ctx.Done()
+		return
 	}
 
 	if err := srv.Serve(); err != nil {

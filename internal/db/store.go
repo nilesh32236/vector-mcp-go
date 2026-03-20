@@ -12,6 +12,7 @@ import (
 type Store struct {
 	db         *chromem.DB
 	collection *chromem.Collection
+	dimension  int
 }
 
 type Record struct {
@@ -22,7 +23,7 @@ type Record struct {
 	Similarity float32           `json:"similarity,omitempty"`
 }
 
-func Connect(ctx context.Context, dbPath string, collectionName string) (*Store, error) {
+func Connect(ctx context.Context, dbPath string, collectionName string, dimension int) (*Store, error) {
 	db, err := chromem.NewPersistentDB(dbPath, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create persistent DB: %w", err)
@@ -36,10 +37,21 @@ func Connect(ctx context.Context, dbPath string, collectionName string) (*Store,
 		}
 	}
 
-	return &Store{
-		db:         db,
-		collection: col,
-	}, nil
+	s := &Store{db: db, collection: col, dimension: dimension}
+
+	// Probe for dimension mismatch if the collection already has data.
+	if col.Count() > 0 {
+		probe := make([]float32, dimension)
+		probe[0] = 1.0 // non-zero so it's a valid normalized-ish vector
+		_, err := col.QueryEmbedding(ctx, probe, 1, nil, nil)
+		if err != nil && strings.Contains(err.Error(), "vectors must have the same length") {
+			return nil, fmt.Errorf(
+				"dimension mismatch detected: you have switched embedding models. "+
+					"Please delete your existing vector database at %q and restart", dbPath)
+		}
+	}
+
+	return s, nil
 }
 
 func (s *Store) Insert(ctx context.Context, records []Record) error {
@@ -125,7 +137,7 @@ func (s *Store) DeleteByPrefix(ctx context.Context, prefix string, projectID str
 	}
 
 	// Fetch all IDs for this project to check paths
-	dummyEmb := make([]float32, 1024)
+	dummyEmb := make([]float32, s.dimension)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"project_id": projectID}, nil)
 	if err != nil {
 		return err
@@ -152,7 +164,7 @@ func (s *Store) GetPathHashMapping(ctx context.Context, projectID string) (map[s
 		return make(map[string]string), nil
 	}
 
-	dummyEmb := make([]float32, 1024)
+	dummyEmb := make([]float32, s.dimension)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"project_id": projectID}, nil)
 	if err != nil {
 		return nil, err
@@ -168,7 +180,7 @@ func (s *Store) GetPathHashMapping(ctx context.Context, projectID string) (map[s
 }
 
 func (s *Store) GetFileHash(ctx context.Context, path string, projectID string) (string, error) {
-	dummyEmb := make([]float32, 1024)
+	dummyEmb := make([]float32, s.dimension)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, 1, map[string]string{"path": path, "project_id": projectID}, nil)
 	if err != nil || len(res) == 0 {
 		return "", err
@@ -186,7 +198,7 @@ func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {
 		return nil, nil
 	}
 
-	dummyEmb := make([]float32, 1024)
+	dummyEmb := make([]float32, s.dimension)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, nil, nil)
 	if err != nil {
 		return nil, err
@@ -209,7 +221,7 @@ func (s *Store) GetByPath(ctx context.Context, path string, projectID string) ([
 		return nil, nil
 	}
 
-	dummyEmb := make([]float32, 1024)
+	dummyEmb := make([]float32, s.dimension)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"path": path, "project_id": projectID}, nil)
 	if err != nil {
 		return nil, err
@@ -231,7 +243,7 @@ func (s *Store) SetStatus(ctx context.Context, projectID string, status string) 
 	// Delete old status first
 	s.collection.Delete(ctx, map[string]string{"type": "project_status", "project_id": projectID}, nil)
 
-	dummyEmb := make([]float32, 1024)
+	dummyEmb := make([]float32, s.dimension)
 	return s.Insert(ctx, []Record{{
 		ID:      id,
 		Content: status,
@@ -244,7 +256,7 @@ func (s *Store) SetStatus(ctx context.Context, projectID string, status string) 
 }
 
 func (s *Store) GetStatus(ctx context.Context, projectID string) (string, error) {
-	dummyEmb := make([]float32, 1024)
+	dummyEmb := make([]float32, s.dimension)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, 1, map[string]string{"type": "project_status", "project_id": projectID}, nil)
 	if err != nil || len(res) == 0 {
 		return "", err
@@ -258,7 +270,7 @@ func (s *Store) GetAllStatuses(ctx context.Context) (map[string]string, error) {
 		return nil, nil
 	}
 
-	dummyEmb := make([]float32, 1024)
+	dummyEmb := make([]float32, s.dimension)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"type": "project_status"}, nil)
 	if err != nil {
 		return nil, err

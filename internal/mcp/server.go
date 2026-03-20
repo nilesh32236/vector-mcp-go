@@ -37,7 +37,7 @@ type IndexerStore interface {
 type Server struct {
 	cfg              *config.Config
 	logger           *slog.Logger
-	mcpServer        *server.MCPServer
+	MCPServer        *server.MCPServer
 	storeGetter      func(ctx context.Context) (*db.Store, error)
 	remoteStore      IndexerStore
 	embedder         indexer.Embedder
@@ -54,7 +54,7 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 	srv := &Server{
 		cfg:              cfg,
 		logger:           logger,
-		mcpServer:        s,
+		MCPServer:        s,
 		storeGetter:      storeGetter,
 		embedder:         embedder,
 		indexQueue:       queue,
@@ -81,69 +81,71 @@ func (s *Server) getStore(ctx context.Context) (IndexerStore, error) {
 // Serve starts the MCP server on stdio.
 func (s *Server) Serve() error {
 	s.logger.Info("MCP Server listening on stdio...")
-	return server.ServeStdio(s.mcpServer)
+	return server.ServeStdio(s.MCPServer)
 }
 
 func (s *Server) registerTools() {
 	// 0. ping
-	s.mcpServer.AddTool(mcp.NewTool("ping", mcp.WithDescription("Check server connectivity")),
+	s.MCPServer.AddTool(mcp.NewTool("ping", mcp.WithDescription("Check server connectivity")),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultText("pong"), nil
 		})
 
 	// 1. trigger_project_index
-	s.mcpServer.AddTool(mcp.NewTool("trigger_project_index",
+	s.MCPServer.AddTool(mcp.NewTool("trigger_project_index",
 		mcp.WithDescription("Trigger a full background index of a project. Use this when you first open a project or after major changes to ensure the vector index is up to date."),
 		mcp.WithString("project_path", mcp.Description("Absolute path to the project root")),
 	), s.handleTriggerProjectIndex)
 
 	// 1.5 set_project_root
-	s.mcpServer.AddTool(mcp.NewTool("set_project_root",
+	s.MCPServer.AddTool(mcp.NewTool("set_project_root",
 		mcp.WithDescription("Dynamically switch the active project root and update the file watcher. Use this when moving between different codebases or monorepo packages."),
 		mcp.WithString("project_path", mcp.Description("Absolute path to the new project root")),
 	), s.handleSetProjectRoot)
 
 	// 2. store_context
-	s.mcpServer.AddTool(mcp.NewTool("store_context",
+	s.MCPServer.AddTool(mcp.NewTool("store_context",
 		mcp.WithDescription("Store general project rules, architectural decisions, or shared context for other agents to read. This helps maintain consistency across different AI sessions."),
 		mcp.WithString("text", mcp.Description("The text context to store.")),
 		mcp.WithString("project_id", mcp.Description("The project this context belongs to. Defaults to the current project.")),
 	), s.handleStoreContext)
 
 	// 3. get_related_context
-	s.mcpServer.AddTool(mcp.NewTool("get_related_context",
+	s.MCPServer.AddTool(mcp.NewTool("get_related_context",
 		mcp.WithDescription("Retrieve context for a file and its local dependencies, optionally cross-referencing other projects. Use this to understand how a specific file fits into the larger codebase."),
 		mcp.WithString("filePath", mcp.Description("The relative path of the file to analyze")),
 	), s.handleGetRelatedContext)
 
 	// 3. find_duplicate_code
-	s.mcpServer.AddTool(mcp.NewTool("find_duplicate_code",
+	s.MCPServer.AddTool(mcp.NewTool("find_duplicate_code",
 		mcp.WithDescription("Scans a specific path to find duplicated logic across namespaces. Use this during refactoring to identify consolidation opportunities."),
 		mcp.WithString("target_path", mcp.Description("The relative path to check")),
 	), s.handleFindDuplicateCode)
 
 	// 4. delete_context
-	s.mcpServer.AddTool(mcp.NewTool("delete_context",
+	s.MCPServer.AddTool(mcp.NewTool("delete_context",
 		mcp.WithDescription("Delete specific shared memory context, or completely wipe a project's vector index."),
 		mcp.WithString("target_path", mcp.Description("The exact file path, context ID, or 'ALL' to clear the whole project.")),
 		mcp.WithString("project_id", mcp.Description("The project ID to target. Defaults to the current project.")),
 	), s.handleDeleteContext)
 
 	// 5. index_status
-	s.mcpServer.AddTool(mcp.NewTool("index_status", mcp.WithDescription("Check index status and background progress. Use this to verify if the server is still indexing or if it's ready for queries.")),
+	s.MCPServer.AddTool(mcp.NewTool("index_status", mcp.WithDescription("Check index status and background progress. Use this to verify if the server is still indexing or if it's ready for queries.")),
 		s.handleIndexStatus)
 
 	// 5.5 retrieve_context
-	s.mcpServer.AddTool(mcp.NewTool("retrieve_context",
+	s.MCPServer.AddTool(mcp.NewTool("retrieve_context",
 		mcp.WithDescription("Semantic search across the indexed codebase using natural language. Returns the most relevant code chunks."),
 		mcp.WithString("query", mcp.Description("The natural language search query")),
 		mcp.WithNumber("topK", mcp.Description("Number of results to return (default 5)")),
-		// Simple description for the array parameter as the SDK might have different WithArray signature
-		mcp.WithArray("cross_reference_projects", mcp.Description("Optional list of project IDs to search across")),
+		mcp.WithArray("cross_reference_projects",
+			mcp.Description("Optional list of project IDs to search across"),
+			mcp.WithStringItems(),
+		),
 	), s.handleRetrieveContext)
 
 	// 6. get_codebase_skeleton
-	s.mcpServer.AddTool(mcp.NewTool("get_codebase_skeleton",
+	s.MCPServer.AddTool(mcp.NewTool("get_codebase_skeleton",
 		mcp.WithDescription("Returns a topological tree map of the directory structure. Use this to progressively explore large codebases by specifying sub-directories and depths."),
 		mcp.WithString("target_path", mcp.Description("Relative or absolute path to the directory to map (optional, defaults to project root).")),
 		mcp.WithNumber("max_depth", mcp.Description("Maximum depth of the tree to generate (optional, defaults to 3).")),
@@ -271,11 +273,15 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 	var omittedFiles []string
 	out.WriteString(fmt.Sprintf("  <file path=\"%s\">\n    <metadata>\n", filePath))
 	var depList []string
-	for d := range allImportStrings { depList = append(depList, d) }
+	for d := range allImportStrings {
+		depList = append(depList, d)
+	}
 	depListJSON, _ := json.Marshal(depList)
 	out.WriteString(fmt.Sprintf("      <dependencies>%s</dependencies>\n", string(depListJSON)))
 	var symList []string
-	for s := range allSymbols { symList = append(symList, s) }
+	for s := range allSymbols {
+		symList = append(symList, s)
+	}
 	symListJSON, _ := json.Marshal(symList)
 	out.WriteString(fmt.Sprintf("      <symbols>%s</symbols>\n", string(symListJSON)))
 	out.WriteString("    </metadata>\n")
@@ -310,22 +316,30 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 					fileChunks = append(fileChunks, dr)
 					var dps []string
 					if err := json.Unmarshal([]byte(dr.Metadata["relationships"]), &dps); err == nil {
-						for _, d := range dps { fileDeps[d] = true }
+						for _, d := range dps {
+							fileDeps[d] = true
+						}
 					}
 					var sys []string
 					if err := json.Unmarshal([]byte(dr.Metadata["symbols"]), &sys); err == nil {
-						for _, s := range sys { fileSymbols[s] = true }
+						for _, s := range sys {
+							fileSymbols[s] = true
+						}
 					}
 				}
 			}
 			if len(fileChunks) > 0 {
 				out.WriteString("    <metadata>\n")
 				var fdList []string
-				for d := range fileDeps { fdList = append(fdList, d) }
+				for d := range fileDeps {
+					fdList = append(fdList, d)
+				}
 				fdJSON, _ := json.Marshal(fdList)
 				out.WriteString(fmt.Sprintf("      <dependencies>%s</dependencies>\n", string(fdJSON)))
 				var fsList []string
-				for s := range fileSymbols { fsList = append(fsList, s) }
+				for s := range fileSymbols {
+					fsList = append(fsList, s)
+				}
 				fsJSON, _ := json.Marshal(fsList)
 				out.WriteString(fmt.Sprintf("      <symbols>%s</symbols>\n", string(fsJSON)))
 				out.WriteString("    </metadata>\n")
@@ -377,7 +391,7 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 	found := false
 	for _, tc := range targetChunks {
 		emb, _ := s.embedder.Embed(ctx, tc.Content)
-		
+
 		var matches []db.Record
 		if ds, ok := store.(*db.Store); ok {
 			ms, _, _ := ds.SearchWithScore(ctx, emb, 5, pids)
@@ -388,7 +402,7 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 		}
 
 		for _, m := range matches {
-			if (m.Metadata["path"] != tc.Metadata["path"] || m.Metadata["project_id"] != tc.Metadata["project_id"]) {
+			if m.Metadata["path"] != tc.Metadata["path"] || m.Metadata["project_id"] != tc.Metadata["project_id"] {
 				out.WriteString(fmt.Sprintf("  <finding>\n    <original file=\"%s\">%s</original>\n", tc.Metadata["path"], tc.Metadata["path"]))
 				out.WriteString(fmt.Sprintf("    <match file=\"%s\" project=\"%s\">%s</match>\n  </finding>\n", m.Metadata["path"], m.Metadata["project_id"], m.Metadata["path"]))
 				found = true
@@ -435,35 +449,29 @@ func (s *Server) handleIndexStatus(ctx context.Context, request mcp.CallToolRequ
 	}
 	res, _ := s.runStatus(ctx, store)
 
-	bgStatus := "\n🚀 Local/In-Memory Tasks (This Instance):\n"
-	localTasks := make(map[string]bool)
-	hasLocal := false
-	s.progressMap.Range(func(key, value interface{}) bool {
-		bgStatus += fmt.Sprintf("- %s: %s\n", key, value)
-		localTasks[key.(string)] = true
-		hasLocal = true
-		return true
-	})
-	if !hasLocal {
-		bgStatus += "- No active background indexing on this instance.\n"
+	// Slaves fetch progress from master via RPC; master reads its own map.
+	progressData := make(map[string]string)
+	if s.daemonClient != nil {
+		if p, err := s.daemonClient.GetProgress(); err == nil {
+			progressData = p
+		}
+	} else {
+		s.progressMap.Range(func(k, v interface{}) bool {
+			progressData[k.(string)] = v.(string)
+			return true
+		})
 	}
 
-	globalStatus := "\n🛰️ Global/DB Tasks (All Instances):\n"
-	allStatuses, _ := store.GetAllStatuses(ctx)
-	hasGlobal := false
-	for pid, status := range allStatuses {
-		// If it's not in our local tasks but seems active in DB, report it
-		isIndexing := strings.Contains(status, "Indexing") || strings.Contains(status, "Initializing")
-		if !localTasks[pid] && isIndexing {
-			globalStatus += fmt.Sprintf("- %s: %s (Remote Process)\n", pid, status)
-			hasGlobal = true
+	bgStatus := "\n🚀 Background Indexing Tasks:\n"
+	if len(progressData) == 0 {
+		bgStatus += "- No active background indexing.\n"
+	} else {
+		for path, status := range progressData {
+			bgStatus += fmt.Sprintf("- %s: %s\n", path, status)
 		}
 	}
-	if !hasGlobal {
-		globalStatus += "- No active background indexing from other instances.\n"
-	}
 
-	return mcp.NewToolResultText(res + bgStatus + globalStatus), nil
+	return mcp.NewToolResultText(res + bgStatus), nil
 }
 
 func (s *Server) handleRetrieveContext(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -472,7 +480,6 @@ func (s *Server) handleRetrieveContext(ctx context.Context, request mcp.CallTool
 		return mcp.NewToolResultError("query is required"), nil
 	}
 	topK := int(request.GetFloat("topK", 5))
-
 
 	pids := request.GetStringSlice("cross_reference_projects", nil)
 	if len(pids) == 0 {
@@ -539,17 +546,31 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 	maxItems := 1500
 	truncated := false
 	err = filepath.WalkDir(targetPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil { return nil }
-		if path == targetPath { return nil }
+		if err != nil {
+			return nil
+		}
+		if path == targetPath {
+			return nil
+		}
 		relPath, err := filepath.Rel(targetPath, path)
-		if err != nil { return nil }
+		if err != nil {
+			return nil
+		}
 		depth := strings.Count(relPath, string(os.PathSeparator)) + 1
 		if d.IsDir() {
-			if indexer.IsIgnoredDir(d.Name()) { return filepath.SkipDir }
-			if depth > maxDepth { return filepath.SkipDir }
+			if indexer.IsIgnoredDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			if depth > maxDepth {
+				return filepath.SkipDir
+			}
 		} else {
-			if indexer.IsIgnoredFile(d.Name()) { return nil }
-			if depth > maxDepth { return nil }
+			if indexer.IsIgnoredFile(d.Name()) {
+				return nil
+			}
+			if depth > maxDepth {
+				return nil
+			}
 		}
 		if itemCount >= maxItems {
 			truncated = true

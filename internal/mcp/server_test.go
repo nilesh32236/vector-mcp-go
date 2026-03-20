@@ -31,7 +31,7 @@ func TestIndexStatusTool(t *testing.T) {
 		DbPath:      dbPath,
 	}
 
-	store, _ := db.Connect(ctx, dbPath, "test_collection")
+	store, _ := db.Connect(ctx, dbPath, "test_collection", 1024)
 	// Set status for local project and another project in DB
 	store.SetStatus(ctx, "/test/project", "Indexing: 73.2% (73/100) - Current: file.go")
 	store.SetStatus(ctx, "/other/project", "Indexing: 10.0% (1/10) - Current: remote.go")
@@ -84,7 +84,7 @@ func TestRetrieveContextTool(t *testing.T) {
 		DbPath:      dbPath,
 	}
 
-	store, _ := db.Connect(ctx, dbPath, "test_collection")
+	store, _ := db.Connect(ctx, dbPath, "test_collection", 1024)
 	
 	// Use the same embedding as the mock embedder
 	emb := make([]float32, 1024)
