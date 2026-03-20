@@ -19,6 +19,7 @@ type Embedder struct {
 	tokenizer           *tokenizer.Tokenizer
 	inputIdsTensor      *onnxruntime_go.Tensor[int64]
 	attentionMaskTensor *onnxruntime_go.Tensor[int64]
+	tokenTypeIdsTensor  *onnxruntime_go.Tensor[int64]
 	outputTensor        *onnxruntime_go.Tensor[float32]
 	dimension           int
 }
@@ -95,19 +96,28 @@ func NewEmbedder(modelsDir string, mc ModelConfig) (*Embedder, error) {
 		return nil, err
 	}
 
-	outputShape := onnxruntime_go.NewShape(1, MaxSeqLength, int64(dim))
-	outputTensor, err := onnxruntime_go.NewEmptyTensor[float32](outputShape)
+	tokenTypeIds := make([]int64, MaxSeqLength)
+	tokenTypeIdsTensor, err := onnxruntime_go.NewTensor(shape, tokenTypeIds)
 	if err != nil {
 		inputIdsTensor.Destroy()
 		attentionMaskTensor.Destroy()
 		return nil, err
 	}
 
-	inputs := []onnxruntime_go.Value{inputIdsTensor, attentionMaskTensor}
+	outputShape := onnxruntime_go.NewShape(1, MaxSeqLength, int64(dim))
+	outputTensor, err := onnxruntime_go.NewEmptyTensor[float32](outputShape)
+	if err != nil {
+		inputIdsTensor.Destroy()
+		attentionMaskTensor.Destroy()
+		tokenTypeIdsTensor.Destroy()
+		return nil, err
+	}
+
+	inputs := []onnxruntime_go.Value{inputIdsTensor, attentionMaskTensor, tokenTypeIdsTensor}
 	outputs := []onnxruntime_go.Value{outputTensor}
 
 	session, err := onnxruntime_go.NewAdvancedSession(modelPath,
-		[]string{"input_ids", "attention_mask"},
+		[]string{"input_ids", "attention_mask", "token_type_ids"},
 		[]string{"last_hidden_state"},
 		inputs, outputs, nil)
 	if err != nil {
@@ -122,6 +132,7 @@ func NewEmbedder(modelsDir string, mc ModelConfig) (*Embedder, error) {
 		tokenizer:           tk,
 		inputIdsTensor:      inputIdsTensor,
 		attentionMaskTensor: attentionMaskTensor,
+		tokenTypeIdsTensor:  tokenTypeIdsTensor,
 		outputTensor:        outputTensor,
 		dimension:           dim,
 	}, nil
@@ -156,14 +167,23 @@ func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err e
 
 	inputIdsData := e.inputIdsTensor.GetData()
 	attentionMaskData := e.attentionMaskTensor.GetData()
+	tokenTypeIdsData := e.tokenTypeIdsTensor.GetData()
+
+	typeIds := en.GetTypeIds()
 
 	for i := 0; i < MaxSeqLength; i++ {
 		if i < len(ids) {
 			inputIdsData[i] = int64(ids[i])
 			attentionMaskData[i] = int64(mask[i])
+			if i < len(typeIds) {
+				tokenTypeIdsData[i] = int64(typeIds[i])
+			} else {
+				tokenTypeIdsData[i] = 0
+			}
 		} else {
 			inputIdsData[i] = 0
 			attentionMaskData[i] = 0
+			tokenTypeIdsData[i] = 0
 		}
 	}
 
@@ -188,6 +208,9 @@ func (e *Embedder) Close() {
 	}
 	if e.attentionMaskTensor != nil {
 		e.attentionMaskTensor.Destroy()
+	}
+	if e.tokenTypeIdsTensor != nil {
+		e.tokenTypeIdsTensor.Destroy()
 	}
 	if e.outputTensor != nil {
 		e.outputTensor.Destroy()
