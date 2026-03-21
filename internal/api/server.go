@@ -152,8 +152,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// For the global brain search, we don't filter by project ID unless requested,
-	// but store.Search currently takes projectIDs. Passing an empty slice searches everything.
-	records, err := store.Search(r.Context(), emb, req.TopK, []string{})
+	// but store.HybridSearch currently takes projectIDs. Passing an empty slice searches everything.
+	records, err := store.HybridSearch(r.Context(), req.Query, emb, req.TopK, []string{})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -455,7 +455,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := store.Search(r.Context(), emb, 10, []string{})
+	records, err := store.HybridSearch(r.Context(), req.Message, emb, 10, []string{})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

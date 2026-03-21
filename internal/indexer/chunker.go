@@ -7,13 +7,20 @@ import (
 	"go/token"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+
+	"github.com/odvcencio/gotreesitter"
+	"github.com/odvcencio/gotreesitter/grammars"
 )
 
 type Chunk struct {
 	Content       string
 	Symbols       []string
 	Relationships []string
+	Type          string   // "function", "class", etc.
+	Calls         []string // Function calls made inside this block
+	FunctionScore float32
 }
 
 func CreateChunks(text string, filePath string) []Chunk {
@@ -24,7 +31,7 @@ func CreateChunks(text string, filePath string) []Chunk {
 	if ext == ".go" {
 		chunks = astChunkGo(text)
 	} else if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
-		chunks = chunkJavaScriptTypeScript(text, filePath)
+		chunks = treeSitterChunkJS(text, filePath)
 	} else {
 		chunks = fastChunk(text)
 	}
@@ -36,11 +43,256 @@ func CreateChunks(text string, filePath string) []Chunk {
 			scope = chunks[i].Symbols[0]
 		}
 
-		header := fmt.Sprintf("// File: %s\n// Scope/Entity: %s\n\n", filePath, scope)
+		callsStr := "None"
+		if len(chunks[i].Calls) > 0 {
+			callsStr = strings.Join(chunks[i].Calls, ", ")
+		}
+
+		header := fmt.Sprintf("// File: %s\n// Entity: %s\n// Type: %s\n// Calls: %s\n// Score: %.2f\n// Functionality: \n\n",
+			filePath, scope, chunks[i].Type, callsStr, chunks[i].FunctionScore)
 		chunks[i].Content = header + chunks[i].Content
 		chunks[i].Relationships = relationships
 	}
 	return chunks
+}
+
+func treeSitterChunkJS(content string, filePath string) []Chunk {
+	ext := filepath.Ext(filePath)
+	var lang *gotreesitter.Language
+	switch ext {
+	case ".ts":
+		lang = grammars.TypescriptLanguage()
+	case ".tsx":
+		lang = grammars.TsxLanguage()
+	default:
+		lang = grammars.JavascriptLanguage()
+	}
+
+	parser := gotreesitter.NewParser(lang)
+	tree, err := parser.Parse([]byte(content))
+	if err != nil {
+		return chunkJavaScriptTypeScript(content, filePath)
+	}
+
+	root := tree.RootNode()
+
+	// Queries for functions, classes, interfaces, etc.
+	queryStrings := []string{
+		`(export_statement (class_declaration (type_identifier) @name)) @entity`,
+		`(class_declaration (type_identifier) @name) @entity`,
+		`(export_statement (function_declaration (identifier) @name)) @entity`,
+		`(function_declaration (identifier) @name) @entity`,
+		`(export_statement (interface_declaration (type_identifier) @name)) @entity`,
+		`(interface_declaration (type_identifier) @name) @entity`,
+		`(method_definition (property_identifier) @name) @entity`,
+		`(variable_declarator (identifier) @name value: [(arrow_function) (function_expression)]) @entity`,
+		`(expression_statement) @entity`,
+	}
+
+	var rawChunks []Chunk
+	type chunkPos struct {
+		start, end uint32
+	}
+	var rawPositions []chunkPos
+
+	for _, qs := range queryStrings {
+		query, err := gotreesitter.NewQuery(qs, lang)
+		if err != nil {
+			continue
+		}
+
+		cursor := query.Exec(root, lang, []byte(content))
+		for {
+			match, ok := cursor.NextMatch()
+			if !ok {
+				break
+			}
+
+			for _, capture := range match.Captures {
+				if capture.Name == "entity" {
+					entityNode := capture.Node
+					var name string
+					for _, c := range match.Captures {
+						if c.Name == "name" && (c.Node.StartByte() >= entityNode.StartByte() && c.Node.EndByte() <= entityNode.EndByte()) {
+							name = c.Node.Text([]byte(content))
+							break
+						}
+					}
+
+					var entityType string
+					nodeToAnalyze := entityNode
+					if entityNode.Type(lang) == "export_statement" {
+						// Find the declaration inside
+						for _, child := range entityNode.Children() {
+							t := child.Type(lang)
+							if strings.HasSuffix(t, "_declaration") || t == "lexical_declaration" || t == "method_definition" || t == "variable_declarator" {
+								nodeToAnalyze = child
+								break
+							}
+						}
+					}
+
+					switch nodeToAnalyze.Type(lang) {
+					case "function_declaration":
+						entityType = "function"
+					case "class_declaration":
+						entityType = "class"
+					case "method_definition":
+						entityType = "method"
+					case "interface_declaration":
+						entityType = "interface"
+					case "type_alias_declaration":
+						entityType = "type"
+					case "enum_declaration":
+						entityType = "enum"
+					case "variable_declarator":
+						entityType = "variable"
+					case "expression_statement":
+						entityType = "call"
+					case "lexical_declaration":
+						// Further drill down lexical_declaration to see if it's a function variable
+						entityType = "variable"
+					default:
+						entityType = "entity"
+					}
+					chunkContent := entityNode.Text([]byte(content))
+
+					// Capture preceding comments/JSDoc
+					var docString string
+					prev := entityNode.PrevSibling()
+					for prev != nil && (prev.Type(lang) == "comment" || (prev.Type(lang) == " " || strings.TrimSpace(prev.Text([]byte(content))) == "")) {
+						if prev.Type(lang) == "comment" {
+							docString = prev.Text([]byte(content)) + "\n" + docString
+						}
+						prev = prev.PrevSibling()
+					}
+
+					if docString != "" {
+						chunkContent = docString + chunkContent
+					}
+					
+					calls := extractCalls(entityNode, content, lang)
+					
+					// Filter out own name from calls to avoid false usage positives
+					var filteredCalls []string
+					for _, c := range calls {
+						if c != name {
+							filteredCalls = append(filteredCalls, c)
+						}
+					}
+
+					score := calculateScore(chunkContent, entityNode, filteredCalls, content, lang)
+
+					rawChunks = append(rawChunks, Chunk{
+						Content:       strings.TrimSpace(chunkContent),
+						Symbols:       []string{name},
+						Type:          entityType,
+						Calls:         filteredCalls,
+						FunctionScore: score,
+					})
+					rawPositions = append(rawPositions, chunkPos{entityNode.StartByte(), entityNode.EndByte()})
+				}
+			}
+		}
+	}
+
+	// Filter out redundant overlaps (e.g. export_statement containing class_declaration)
+	// But keep methods inside classes as they are distinct semantic units.
+	var chunks []Chunk
+	for i, c1 := range rawChunks {
+		isRedundant := false
+		for j, c2 := range rawChunks {
+			if i == j {
+				continue
+			}
+			// If c1 is exactly the same as c2 (from different match branches)
+			if rawPositions[i].start == rawPositions[j].start && rawPositions[i].end == rawPositions[j].end {
+				if i > j { // Keep the first one
+					isRedundant = true
+					break
+				}
+				continue
+			}
+
+			// If c1 is inside c2
+			if rawPositions[i].start >= rawPositions[j].start && rawPositions[i].end <= rawPositions[j].end {
+				// Redundant if c2 is just an export wrapper for c1
+				if c2.Type == "export" && c1.Type != "method" && c1.Type != "function" && c1.Type != "class" {
+					isRedundant = true
+					break
+				}
+				// Redundant if they are same type and c2 is larger
+				if c1.Type == c2.Type && (rawPositions[i].end - rawPositions[i].start) < (rawPositions[j].end - rawPositions[j].start) {
+					isRedundant = true
+					break
+				}
+			}
+		}
+		if !isRedundant {
+			chunks = append(chunks, c1)
+		}
+	}
+
+	if len(chunks) == 0 {
+		return chunkJavaScriptTypeScript(content, filePath)
+	}
+
+	return chunks
+}
+
+func extractCalls(node *gotreesitter.Node, content string, lang *gotreesitter.Language) []string {
+	callQueryString := `
+		(identifier) @call_name
+		(property_identifier) @call_name
+	`
+	query, err := gotreesitter.NewQuery(callQueryString, lang)
+	if err != nil {
+		return nil
+	}
+
+	matches := query.ExecuteNode(node, lang, []byte(content))
+
+	uniqueCalls := make(map[string]bool)
+	for _, match := range matches {
+		for _, capture := range match.Captures {
+			if capture.Name == "call_name" {
+				callName := capture.Node.Text([]byte(content))
+				uniqueCalls[callName] = true
+			}
+		}
+	}
+
+	// Filter out the symbols of the chunk itself from its calls
+	// (Simplified: we'll just return all found identifiers for now to see if it works)
+	var calls []string
+	for c := range uniqueCalls {
+		calls = append(calls, c)
+	}
+	sort.Strings(calls)
+	return calls
+}
+
+func calculateScore(chunkContent string, node *gotreesitter.Node, calls []string, fullContent string, lang *gotreesitter.Language) float32 {
+	score := float32(1.0)
+
+	// Length penalty/bonus
+	lines := strings.Count(chunkContent, "\n") + 1
+	if lines < 3 {
+		score -= 0.3 // Boilerplate penalty
+	} else if lines > 10 {
+		score += 0.2
+	}
+
+	// Structural weight based on calls
+	score += float32(len(calls)) * 0.1
+
+	// Export boost
+	parent := node.Parent()
+	if parent != nil && (parent.Type(lang) == "export_statement" || strings.Contains(fullContent[max(0, int(node.StartByte())-20):node.StartByte()], "export")) {
+		score += 1.0
+	}
+
+	return score
 }
 
 func astChunkGo(text string) []Chunk {
@@ -164,6 +416,18 @@ func parseRelationships(text string, ext string) []string {
 		for _, m := range matches {
 			if len(m) > 1 {
 				relations = append(relations, m[1])
+			}
+		}
+
+		// Also extract named imports: import { A, B } from ...
+		namedImportRegex := regexp.MustCompile(`import\s*{([^}]+)}`)
+		namedMatches := namedImportRegex.FindAllStringSubmatch(text, -1)
+		for _, m := range namedMatches {
+			if len(m) > 1 {
+				names := strings.Split(m[1], ",")
+				for _, name := range names {
+					relations = append(relations, strings.TrimSpace(strings.Split(name, " as ")[0]))
+				}
 			}
 		}
 	} else if ext == ".go" {

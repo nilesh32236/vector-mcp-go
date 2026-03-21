@@ -14,6 +14,10 @@ A modular, high-performance Model Context Protocol (MCP) server for **local sema
     - **Relationship Mapping**: Traces imports and dependencies to provide holistic context.
     - **Semantic Chunking**: Intelligent overlap-based chunking preserves meaning across boundaries.
 - **Real-time Indexing**: Built-in debounced file watcher synchronizes the vector index as you save.
+- **Architectural Insights**: 
+    - **Dead Code Detection**: Identifies unused exported functions and classes.
+    - **Dependency Health**: Flags missing external packages in `package.json`.
+    - **Visual Mapping**: Generates Mermaid.js diagrams of project architecture.
 - **Multi-Instance Optimization**: Intelligent Master/Slave architecture ensures only one instance loads the heavy embedding models and runs the file watcher, drastically reducing RAM usage (~600MB → ~20MB for slave instances).
 - **Safety & Performance**: Non-blocking background workers and embedder resource pooling ensure server stability.
 
@@ -80,6 +84,10 @@ export ONNX_LIB_PATH="/custom/path/to/libonnxruntime.so"
 | `index_status` | Monitor indexing progress and database health. |
 | `retrieve_context` | Perform semantic search across the codebase using natural language. |
 | `delete_context` | Remove specific files or wipe entire project indices. |
+| `check_dependency_health` | Analyzes a directory's package.json against its indexed imports to identify missing dependencies in the manifest. |
+| `generate_jsdoc_prompt` | Generates a highly contextual prompt for an LLM to write professional JSDoc for a specific entity. |
+| `analyze_architecture` | Generates a Mermaid.js dependency graph between packages in a monorepo. |
+| `find_dead_code` | Identifies potentially dead code by finding exported symbols that are never imported or called. |
 
 ---
 

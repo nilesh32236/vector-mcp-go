@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ import (
 // allowing both local and remote implementations.
 type IndexerStore interface {
 	Search(ctx context.Context, embedding []float32, topK int, pids []string) ([]db.Record, error)
+	HybridSearch(ctx context.Context, query string, embedding []float32, topK int, pids []string) ([]db.Record, error)
 	Insert(ctx context.Context, records []db.Record) error
 	DeleteByPrefix(ctx context.Context, prefix string, projectID string) error
 	ClearProject(ctx context.Context, projectID string) error
@@ -31,6 +33,7 @@ type IndexerStore interface {
 	GetPathHashMapping(ctx context.Context, projectID string) (map[string]string, error)
 	GetAllRecords(ctx context.Context) ([]db.Record, error)
 	GetByPath(ctx context.Context, path string, projectID string) ([]db.Record, error)
+	GetByPrefix(ctx context.Context, prefix string, projectID string) ([]db.Record, error)
 }
 
 // Server is the core MCP server that manages tools and handles requests.
@@ -150,6 +153,30 @@ func (s *Server) registerTools() {
 		mcp.WithString("target_path", mcp.Description("Relative or absolute path to the directory to map (optional, defaults to project root).")),
 		mcp.WithNumber("max_depth", mcp.Description("Maximum depth of the tree to generate (optional, defaults to 3).")),
 	), s.handleGetCodebaseSkeleton)
+
+	// 7. check_dependency_health
+	s.MCPServer.AddTool(mcp.NewTool("check_dependency_health",
+		mcp.WithDescription("Analyzes a directory's package.json against its indexed imports to identify missing dependencies in the manifest."),
+		mcp.WithString("directory_path", mcp.Description("The path to the directory containing package.json and source files")),
+	), s.handleCheckDependencyHealth)
+
+	// 8. generate_jsdoc_prompt
+	s.MCPServer.AddTool(mcp.NewTool("generate_jsdoc_prompt",
+		mcp.WithDescription("Generates a highly contextual prompt for an LLM to write professional JSDoc for a specific entity."),
+		mcp.WithString("file_path", mcp.Description("The relative path of the file")),
+		mcp.WithString("entity_name", mcp.Description("The name of the function or class to document")),
+	), s.handleGenerateJSDocPrompt)
+
+	// 9. analyze_architecture
+	s.MCPServer.AddTool(mcp.NewTool("analyze_architecture",
+		mcp.WithDescription("Generates a Mermaid.js dependency graph between packages in a monorepo."),
+		mcp.WithString("monorepo_prefix", mcp.Description("Optional prefix for monorepo packages (e.g., '@herexa/')")),
+	), s.handleAnalyzeArchitecture)
+
+	// 10. find_dead_code
+	s.MCPServer.AddTool(mcp.NewTool("find_dead_code",
+		mcp.WithDescription("Identifies potentially dead code by finding exported symbols that are never imported or called."),
+	), s.handleFindDeadCode)
 }
 
 func (s *Server) handleTriggerProjectIndex(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -496,18 +523,17 @@ func (s *Server) handleRetrieveContext(ctx context.Context, request mcp.CallTool
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get store: %v", err)), nil
 	}
 
-	results, err := store.Search(ctx, emb, topK, pids)
+	results, err := store.HybridSearch(ctx, query, emb, topK, pids)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to search database: %v", err)), nil
 	}
 
 	if len(results) == 0 {
-
 		return mcp.NewToolResultText("No relevant context found."), nil
 	}
 
 	var out strings.Builder
-	out.WriteString("### Semantic Search Results:\n\n")
+	out.WriteString("### Hybrid Search Results (Lexical + Semantic):\n\n")
 	currentTokenCount := 0
 
 	for i, r := range results {
@@ -516,7 +542,14 @@ func (s *Server) handleRetrieveContext(ctx context.Context, request mcp.CallTool
 			out.WriteString("... (truncating further results to stay within context window)")
 			break
 		}
-		out.WriteString(fmt.Sprintf("#### Result %d: %s\n```\n%s\n```\n\n", i+1, r.Metadata["path"], r.Content))
+		out.WriteString(fmt.Sprintf("#### Result %d: %s\n", i+1, r.Metadata["path"]))
+		if syms := r.Metadata["symbols"]; syms != "" {
+			out.WriteString(fmt.Sprintf("- **Entities**: %s\n", syms))
+		}
+		if rels := r.Metadata["relationships"]; rels != "" {
+			out.WriteString(fmt.Sprintf("- **Relationships**: %s\n", rels))
+		}
+		out.WriteString(fmt.Sprintf("```\n%s\n```\n\n", r.Content))
 		currentTokenCount += tokens
 	}
 	return mcp.NewToolResultText(out.String()), nil
@@ -588,6 +621,335 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 		out.WriteString(fmt.Sprintf("... (tree truncated, reached %d item limit. Please target a deeper sub-directory)\n", maxItems))
 	}
 	return mcp.NewToolResultText(fmt.Sprintf("<codebase_skeleton>\n%s</codebase_skeleton>", out.String())), nil
+}
+
+func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	dirPath := request.GetString("directory_path", "")
+	if dirPath == "" {
+		return mcp.NewToolResultError("directory_path is required"), nil
+	}
+
+	absPath, err := filepath.Abs(dirPath)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Invalid path: %v", err)), nil
+	}
+
+	// 1. Read package.json
+	pkgJSONPath := filepath.Join(absPath, "package.json")
+	pkgData, err := os.ReadFile(pkgJSONPath)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to read package.json at %s: %v", pkgJSONPath, err)), nil
+	}
+
+	var pkg struct {
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	if err := json.Unmarshal(pkgData, &pkg); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to parse package.json: %v", err)), nil
+	}
+
+	depSet := make(map[string]bool)
+	for d := range pkg.Dependencies {
+		depSet[d] = true
+	}
+	for d := range pkg.DevDependencies {
+		depSet[d] = true
+	}
+
+	// 2. Fetch Chunks
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	relDirPath := config.GetRelativePath(absPath, s.cfg.ProjectRoot)
+	records, err := store.GetByPrefix(ctx, relDirPath, s.cfg.ProjectRoot)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch records: %v", err)), nil
+	}
+
+	// 3. Analyze Relationships
+	missingDeps := make(map[string][]string) // dep -> files
+	monorepoPrefix := "@herexa/"
+
+	for _, r := range records {
+		var rels []string
+		if relStr := r.Metadata["relationships"]; relStr != "" {
+			if err := json.Unmarshal([]byte(relStr), &rels); err == nil {
+				for _, dep := range rels {
+					// Check if it's an external NPM package
+					isExternal := !strings.HasPrefix(dep, ".") &&
+						!strings.HasPrefix(dep, "/") &&
+						!strings.HasPrefix(dep, monorepoPrefix)
+
+					if isExternal {
+						// Extract base package name (e.g., "lodash/fp" -> "lodash")
+						// Scoped packages like "@types/node" should be handled
+						pkgName := dep
+						parts := strings.Split(dep, "/")
+						if strings.HasPrefix(dep, "@") && len(parts) > 1 {
+							pkgName = parts[0] + "/" + parts[1]
+						} else {
+							pkgName = parts[0]
+						}
+
+						if !depSet[pkgName] {
+							missingDeps[pkgName] = append(missingDeps[pkgName], r.Metadata["path"])
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 4. Output Report
+	if len(missingDeps) == 0 {
+		return mcp.NewToolResultText("✅ Dependency Health Check: All external imports are correctly declared in package.json."), nil
+	}
+
+	var out strings.Builder
+	out.WriteString("## ⚠️ Dependency Health Report\n\n")
+	out.WriteString("The following external dependencies are imported but missing from `package.json`:\n\n")
+
+	// Sort keys for deterministic output
+	var deps []string
+	for d := range missingDeps {
+		deps = append(deps, d)
+	}
+	sort.Strings(deps)
+
+	for _, dep := range deps {
+		files := missingDeps[dep]
+		uniqueFiles := make(map[string]bool)
+		for _, f := range files {
+			uniqueFiles[f] = true
+		}
+		var sortedFiles []string
+		for f := range uniqueFiles {
+			sortedFiles = append(sortedFiles, f)
+		}
+		sort.Strings(sortedFiles)
+
+		out.WriteString(fmt.Sprintf("### `%s`\n", dep))
+		out.WriteString("Imported in:\n")
+		for _, f := range sortedFiles {
+			out.WriteString(fmt.Sprintf("- %s\n", f))
+		}
+		out.WriteString("\n")
+	}
+
+	return mcp.NewToolResultText(out.String()), nil
+}
+
+func (s *Server) handleGenerateJSDocPrompt(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	filePath := request.GetString("file_path", "")
+	entityName := request.GetString("entity_name", "")
+	if filePath == "" || entityName == "" {
+		return mcp.NewToolResultError("file_path and entity_name are required"), nil
+	}
+
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// Use LexicalSearch to find the entity in the file
+	records, err := store.GetByPath(ctx, filePath, s.cfg.ProjectRoot)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch records for file: %v", err)), nil
+	}
+
+	var match *db.Record
+	for _, r := range records {
+		var syms []string
+		if symStr := r.Metadata["symbols"]; symStr != "" {
+			if err := json.Unmarshal([]byte(symStr), &syms); err == nil {
+				for _, s := range syms {
+					if s == entityName {
+						match = &r
+						break
+					}
+				}
+			}
+		}
+		if match != nil {
+			break
+		}
+	}
+
+	if match == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Entity '%s' not found in file '%s'", entityName, filePath)), nil
+	}
+
+	// Construct Prompt
+	content := match.Content
+	calls := match.Metadata["calls"]
+	symbols := match.Metadata["symbols"]
+	relationships := match.Metadata["relationships"]
+
+	prompt := fmt.Sprintf(`Please write a professional JSDoc comment for the following code. 
+Architecture Context:
+- Entity: %s
+- Internal Calls made: %s
+- File Imports: %s
+
+Code:
+%s`, symbols, calls, relationships, content)
+
+	return mcp.NewToolResultText(prompt), nil
+}
+
+func (s *Server) handleAnalyzeArchitecture(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	monorepoPrefix := request.GetString("monorepo_prefix", "@herexa/")
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	records, err := store.GetAllRecords(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch all records: %v", err)), nil
+	}
+
+	// adjacency list: source_package -> target_package -> exists
+	adj := make(map[string]map[string]bool)
+
+	for _, r := range records {
+		path := r.Metadata["path"]
+		if path == "" {
+			continue
+		}
+
+		// Source package detection (e.g., apps/api/src/main.ts -> apps/api)
+		parts := strings.Split(path, string(os.PathSeparator))
+		if len(parts) < 2 {
+			continue
+		}
+		srcPkg := parts[0]
+		if len(parts) > 2 && (parts[0] == "apps" || parts[0] == "packages") {
+			srcPkg = parts[0] + "/" + parts[1]
+		}
+
+		// Relationships
+		var rels []string
+		if relStr := r.Metadata["relationships"]; relStr != "" {
+			if err := json.Unmarshal([]byte(relStr), &rels); err == nil {
+				for _, rel := range rels {
+					if strings.HasPrefix(rel, monorepoPrefix) {
+						targetPkg := rel
+						if adj[srcPkg] == nil {
+							adj[srcPkg] = make(map[string]bool)
+						}
+						adj[srcPkg][targetPkg] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Build Mermaid graph
+	var sb strings.Builder
+	sb.WriteString("graph TD\n")
+	
+	// Sort for deterministic output
+	var sources []string
+	for s := range adj {
+		sources = append(sources, s)
+	}
+	sort.Strings(sources)
+
+	for _, src := range sources {
+		var targets []string
+		for t := range adj[src] {
+			targets = append(targets, t)
+		}
+		sort.Strings(targets)
+		for _, target := range targets {
+			sb.WriteString(fmt.Sprintf("    \"%s\" --> \"%s\"\n", src, target))
+		}
+	}
+
+	return mcp.NewToolResultText(sb.String()), nil
+}
+
+func (s *Server) handleFindDeadCode(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	records, err := store.GetAllRecords(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch all records: %v", err)), nil
+	}
+
+	type exportedSymbol struct {
+		name string
+		path string
+	}
+	setA := make(map[string]exportedSymbol) // name -> info
+	setB := make(map[string]bool)           // name -> used
+
+	for _, r := range records {
+		// Set A: Exports (structural types only)
+		t := r.Metadata["type"]
+		if t == "function" || t == "class" || t == "variable" || t == "arrow_function" {
+			var syms []string
+			if err := json.Unmarshal([]byte(r.Metadata["symbols"]), &syms); err == nil {
+				for _, sym := range syms {
+					if sym != "" {
+						setA[sym] = exportedSymbol{name: sym, path: r.Metadata["path"]}
+					}
+				}
+			}
+		}
+
+		// Set B: Usage
+		// 1. Calls
+		var calls []string
+		if err := json.Unmarshal([]byte(r.Metadata["calls"]), &calls); err == nil {
+			for _, call := range calls {
+				setB[call] = true
+			}
+		}
+		// 2. Relationships (Imports)
+		var rels []string
+		if err := json.Unmarshal([]byte(r.Metadata["relationships"]), &rels); err == nil {
+			for _, rel := range rels {
+				setB[rel] = true
+			}
+		}
+	}
+
+	// Set Difference
+	var dead []exportedSymbol
+	for name, info := range setA {
+		if !setB[name] {
+			dead = append(dead, info)
+		}
+	}
+
+	if len(dead) == 0 {
+		return mcp.NewToolResultText("✅ Dead Code Check: No unused exported symbols found."), nil
+	}
+
+	// Sort for deterministic output
+	sort.Slice(dead, func(i, j int) bool {
+		if dead[i].path == dead[j].path {
+			return dead[i].name < dead[j].name
+		}
+		return dead[i].path < dead[j].path
+	})
+
+	var out strings.Builder
+	out.WriteString("## 🔎 Potential Dead Code Report\n\n")
+	out.WriteString("The following exported symbols are not explicitly used (imported or called) in the indexed codebase:\n\n")
+	for _, d := range dead {
+		out.WriteString(fmt.Sprintf("- **`%s`** in `%s`\n", d.name, d.path))
+	}
+
+	return mcp.NewToolResultText(out.String()), nil
 }
 
 func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, error) {

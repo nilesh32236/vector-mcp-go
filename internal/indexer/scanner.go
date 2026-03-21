@@ -190,16 +190,20 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 		}
 		relJSON, _ := json.Marshal(chunk.Relationships)
 		symJSON, _ := json.Marshal(chunk.Symbols)
+		callsJSON, _ := json.Marshal(chunk.Calls)
 		records = append(records, db.Record{
 			ID:        fmt.Sprintf("%s-%s-%d", cfg.ProjectRoot, relPath, time.Now().UnixNano()),
 			Content:   chunk.Content,
 			Embedding: emb,
 			Metadata: map[string]string{
-				"path":          relPath,
-				"project_id":    cfg.ProjectRoot,
-				"hash":          currentHash,
-				"relationships": string(relJSON),
-				"symbols":       string(symJSON),
+				"path":           relPath,
+				"project_id":     cfg.ProjectRoot,
+				"hash":           currentHash,
+				"relationships":  string(relJSON),
+				"symbols":        string(symJSON),
+				"type":           chunk.Type,
+				"calls":          string(callsJSON),
+				"function_score": fmt.Sprintf("%.2f", chunk.FunctionScore),
 			},
 		})
 	}

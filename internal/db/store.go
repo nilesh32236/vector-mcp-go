@@ -2,10 +2,12 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/philippgille/chromem-go"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -71,6 +73,139 @@ func (s *Store) Insert(ctx context.Context, records []Record) error {
 func (s *Store) Search(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string) ([]Record, error) {
 	records, _, err := s.SearchWithScore(ctx, queryEmbedding, topK, projectIDs)
 	return records, err
+}
+
+func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string) ([]Record, error) {
+	count := s.collection.Count()
+	if count == 0 {
+		return nil, nil
+	}
+
+	// Fetch all records for filtering
+	// Using QueryEmbedding with dummy embedding to get all records
+	dummyEmb := make([]float32, s.dimension)
+	var allResults []chromem.Result
+
+	if len(projectIDs) == 0 {
+		res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		allResults = res
+	} else {
+		for _, pid := range projectIDs {
+			res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"project_id": pid}, nil)
+			if err != nil {
+				return nil, err
+			}
+			allResults = append(allResults, res...)
+		}
+	}
+
+	var matches []Record
+	queryLower := strings.ToLower(query)
+
+	for _, doc := range allResults {
+		isMatch := false
+
+		// Check Symbols metadata (stored as JSON array)
+		if symsJSON, ok := doc.Metadata["symbols"]; ok {
+			var syms []string
+			if err := json.Unmarshal([]byte(symsJSON), &syms); err == nil {
+				for _, sym := range syms {
+					if strings.EqualFold(sym, query) || strings.Contains(strings.ToLower(sym), queryLower) {
+						isMatch = true
+						break
+					}
+				}
+			}
+		}
+
+		// Check Name metadata (just in case)
+		if name, ok := doc.Metadata["name"]; ok {
+			if strings.EqualFold(name, query) || strings.Contains(strings.ToLower(name), queryLower) {
+				isMatch = true
+			}
+		}
+
+		if isMatch {
+			matches = append(matches, Record{
+				ID:       doc.ID,
+				Content:  doc.Content,
+				Metadata: doc.Metadata,
+			})
+		}
+	}
+
+	if len(matches) > topK {
+		matches = matches[:topK]
+	}
+
+	return matches, nil
+}
+
+func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string) ([]Record, error) {
+	// 1. Vector Search (Fetch more for better RRF)
+	vectorResults, err := s.Search(ctx, queryEmbedding, topK*2, projectIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Lexical Search (Fetch more for better RRF)
+	lexicalResults, err := s.LexicalSearch(ctx, query, topK*2, projectIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Reciprocal Rank Fusion (RRF)
+	k := 60.0
+	scores := make(map[string]float64)
+	recordMap := make(map[string]Record)
+
+	for i, r := range vectorResults {
+		scores[r.ID] += 1.0 / (k + float64(i+1))
+		recordMap[r.ID] = r
+	}
+
+	for i, r := range lexicalResults {
+		scores[r.ID] += 1.0 / (k + float64(i+1))
+		recordMap[r.ID] = r
+	}
+
+	// 4. Boost & Sort
+	type ScoredRecord struct {
+		Record Record
+		Score  float64
+	}
+	var ranked []ScoredRecord
+	for id, score := range scores {
+		r := recordMap[id]
+
+		// Boost by FunctionScore
+		boost := 1.0
+		if fsStr, ok := r.Metadata["function_score"]; ok {
+			if fs, err := strconv.ParseFloat(fsStr, 32); err == nil {
+				boost = float64(fs)
+			}
+		}
+
+		ranked = append(ranked, ScoredRecord{
+			Record: r,
+			Score:  score * boost,
+		})
+	}
+
+	sort.Slice(ranked, func(i, j int) bool {
+		return ranked[i].Score > ranked[j].Score
+	})
+
+	// 5. Select topK
+	var finalResults []Record
+	for i := 0; i < len(ranked) && i < topK; i++ {
+		finalResults = append(finalResults, ranked[i].Record)
+	}
+
+	return finalResults, nil
 }
 
 func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string) ([]Record, []float32, error) {
@@ -234,6 +369,33 @@ func (s *Store) GetByPath(ctx context.Context, path string, projectID string) ([
 			Content:  doc.Content,
 			Metadata: doc.Metadata,
 		})
+	}
+	return records, nil
+}
+
+func (s *Store) GetByPrefix(ctx context.Context, prefix string, projectID string) ([]Record, error) {
+	count := s.collection.Count()
+	if count == 0 {
+		return nil, nil
+	}
+
+	// Fetch all records for this project
+	dummyEmb := make([]float32, s.dimension)
+	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"project_id": projectID}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var records []Record
+	for _, doc := range res {
+		path := doc.Metadata["path"]
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			records = append(records, Record{
+				ID:       doc.ID,
+				Content:  doc.Content,
+				Metadata: doc.Metadata,
+			})
+		}
 	}
 	return records, nil
 }

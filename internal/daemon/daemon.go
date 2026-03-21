@@ -43,6 +43,13 @@ type SearchRequest struct {
 	PIDs      []string
 }
 
+type HybridSearchRequest struct {
+	Query     string
+	Embedding []float32
+	TopK      int
+	PIDs      []string
+}
+
 type SearchResponse struct {
 	Records []db.Record
 }
@@ -105,6 +112,18 @@ func (s *Service) Search(req SearchRequest, resp *SearchResponse) error {
 		return fmt.Errorf("master store not initialized")
 	}
 	res, err := s.Store.Search(context.Background(), req.Embedding, req.TopK, req.PIDs)
+	if err != nil {
+		return err
+	}
+	resp.Records = res
+	return nil
+}
+
+func (s *Service) HybridSearch(req HybridSearchRequest, resp *SearchResponse) error {
+	if s.Store == nil {
+		return fmt.Errorf("master store not initialized")
+	}
+	res, err := s.Store.HybridSearch(context.Background(), req.Query, req.Embedding, req.TopK, req.PIDs)
 	if err != nil {
 		return err
 	}
@@ -198,6 +217,18 @@ func (s *Service) GetByPath(req DeleteRequest, resp *SearchResponse) error {
 		return fmt.Errorf("master store not initialized")
 	}
 	recs, err := s.Store.GetByPath(context.Background(), req.Prefix, req.ProjectID)
+	if err != nil {
+		return err
+	}
+	resp.Records = recs
+	return nil
+}
+
+func (s *Service) GetByPrefix(req DeleteRequest, resp *SearchResponse) error {
+	if s.Store == nil {
+		return fmt.Errorf("master store not initialized")
+	}
+	recs, err := s.Store.GetByPrefix(context.Background(), req.Prefix, req.ProjectID)
 	if err != nil {
 		return err
 	}
@@ -388,6 +419,12 @@ func (rs *RemoteStore) Search(ctx context.Context, embedding []float32, topK int
 	return resp.Records, err
 }
 
+func (rs *RemoteStore) HybridSearch(ctx context.Context, query string, embedding []float32, topK int, pids []string) ([]db.Record, error) {
+	var resp SearchResponse
+	err := rs.call("HybridSearch", HybridSearchRequest{Query: query, Embedding: embedding, TopK: topK, PIDs: pids}, &resp)
+	return resp.Records, err
+}
+
 func (rs *RemoteStore) Insert(ctx context.Context, records []db.Record) error {
 	var resp InsertResponse
 	return rs.call("Insert", InsertRequest{Records: records}, &resp)
@@ -430,6 +467,12 @@ func (rs *RemoteStore) GetAllRecords(ctx context.Context) ([]db.Record, error) {
 func (rs *RemoteStore) GetByPath(ctx context.Context, path string, projectID string) ([]db.Record, error) {
 	var resp SearchResponse
 	err := rs.call("GetByPath", DeleteRequest{Prefix: path, ProjectID: projectID}, &resp)
+	return resp.Records, err
+}
+
+func (rs *RemoteStore) GetByPrefix(ctx context.Context, prefix string, projectID string) ([]db.Record, error) {
+	var resp SearchResponse
+	err := rs.call("GetByPrefix", DeleteRequest{Prefix: prefix, ProjectID: projectID}, &resp)
 	return resp.Records, err
 }
 
