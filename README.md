@@ -88,12 +88,12 @@ export ONNX_LIB_PATH="/custom/path/to/libonnxruntime.so"
 | `find_duplicate_code`     | Scan for logic duplication across namespaces.                                                                     |
 | `get_codebase_skeleton`   | View a topological tree of the project structure.                                                                 |
 | `index_status`            | Monitor indexing progress and database health.                                                                    |
-| `retrieve_context`        | Perform semantic search across the codebase using natural language.                                               |
+| `search_codebase`         | Unified semantic and lexical search across the codebase. Replaces retrieve_context and retrieve_docs.             |
 | `delete_context`          | Remove specific files or wipe entire project indices.                                                             |
 | `check_dependency_health` | Analyzes a directory's package.json against its indexed imports to identify missing dependencies in the manifest. |
-| `generate_jsdoc_prompt`   | Generates a highly contextual prompt for an LLM to write professional JSDoc for a specific entity.                |
+| `generate_docstring_prompt`| Generates a highly contextual prompt for an LLM to write professional documentation for a specific entity, with optional language support. |
 | `analyze_architecture`    | Generates a Mermaid.js dependency graph between packages in a monorepo.                                           |
-| `find_dead_code`          | Identifies potentially dead code by finding exported symbols that are never imported or called.                   |
+| `find_dead_code`          | Identifies potentially dead code by finding exported symbols that are never imported or called. Supports exclusion paths and library mode. |
 
 ---
 

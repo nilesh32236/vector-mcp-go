@@ -88,9 +88,9 @@ func TestIndexStatusTool(t *testing.T) {
 	}
 }
 
-func TestRetrieveContextTool(t *testing.T) {
+func TestSearchCodebaseTool(t *testing.T) {
 	ctx := context.Background()
-	dbPath := "./test_retrieve_db"
+	dbPath := "./test_search_db"
 	os.RemoveAll(dbPath)
 	defer os.RemoveAll(dbPath)
 
@@ -140,14 +140,14 @@ func TestRetrieveContextTool(t *testing.T) {
 
 	// Test with query
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "retrieve_context"
+	req.Params.Name = "search_codebase"
 	req.Params.Arguments = map[string]interface{}{
 		"query": "hello world",
 	}
 
-	res, err := srv.handleRetrieveContext(ctx, req)
+	res, err := srv.handleSearchCodebase(ctx, req)
 	if err != nil {
-		t.Fatalf("HandleRetrieveContext failed: %v", err)
+		t.Fatalf("HandleSearchCodebase failed: %v", err)
 	}
 
 	content := res.Content[0].(mcp.TextContent).Text
@@ -277,19 +277,22 @@ export class SharedUtils {
 		}
 	})
 
-	t.Run("GenerateJSDocPrompt", func(t *testing.T) {
+	t.Run("GenerateDocstringPrompt", func(t *testing.T) {
 		req := mcp.CallToolRequest{}
 		req.Params.Arguments = map[string]interface{}{
 			"file_path":   "apps/api/main.ts",
 			"entity_name": "aliveFn",
 		}
-		res, err := srv.handleGenerateJSDocPrompt(ctx, req)
+		res, err := srv.handleGenerateDocstringPrompt(ctx, req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		content := res.Content[0].(mcp.TextContent).Text
 		if !strings.Contains(content, "SharedUtils") || !strings.Contains(content, "aliveFn") {
 			t.Errorf("expected architectural context in prompt, got: %s", content)
+		}
+		if !strings.Contains(content, "JSDoc comments") {
+			t.Errorf("expected JSDoc comments to be requested based on file extension, got: %s", content)
 		}
 	})
 
@@ -309,7 +312,11 @@ export class SharedUtils {
 	})
 
 	t.Run("FindDeadCode", func(t *testing.T) {
-		res, err := srv.handleFindDeadCode(ctx, mcp.CallToolRequest{})
+		req := mcp.CallToolRequest{}
+		req.Params.Arguments = map[string]interface{}{
+			"exclude_paths": []string{},
+		}
+		res, err := srv.handleFindDeadCode(ctx, req)
 		if err != nil {
 			t.Fatal(err)
 		}

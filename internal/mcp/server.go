@@ -75,6 +75,8 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 	return srv
 }
 
+// WithRemoteStore configures the server to use a remote IndexerStore
+// instead of dynamically fetching a local store on every request.
 func (s *Server) WithRemoteStore(rs IndexerStore) {
 	s.remoteStore = rs
 }
@@ -149,28 +151,6 @@ func (s *Server) registerTools() {
 	addTool(mcp.NewTool("index_status", mcp.WithDescription("Check index status and background progress. Use this to verify if the server is still indexing or if it's ready for queries.")),
 		s.handleIndexStatus)
 
-	// 5.5 retrieve_context
-	addTool(mcp.NewTool("retrieve_context",
-		mcp.WithDescription("Semantic search across the indexed codebase using natural language. Returns the most relevant code chunks."),
-		mcp.WithString("query", mcp.Description("The natural language search query")),
-		mcp.WithNumber("topK", mcp.Description("Number of results to return (default 5)")),
-		mcp.WithArray("cross_reference_projects",
-			mcp.Description("Optional list of project IDs to search across"),
-			mcp.WithStringItems(),
-		),
-	), s.handleRetrieveContext)
-
-	// 5.6 retrieve_docs
-	addTool(mcp.NewTool("retrieve_docs",
-		mcp.WithDescription("Semantic search across the indexed documentation (PDFs, MDs, TXTs) using natural language."),
-		mcp.WithString("query", mcp.Description("The natural language search query")),
-		mcp.WithNumber("topK", mcp.Description("Number of results to return (default 5)")),
-		mcp.WithArray("cross_reference_projects",
-			mcp.Description("Optional list of project IDs to search across"),
-			mcp.WithStringItems(),
-		),
-	), s.handleRetrieveDocs)
-
 	// 6. get_codebase_skeleton
 	addTool(mcp.NewTool("get_codebase_skeleton",
 		mcp.WithDescription("Returns a topological tree map of the directory structure. Use this to progressively explore large codebases by specifying sub-directories and depths."),
@@ -187,12 +167,13 @@ func (s *Server) registerTools() {
 		mcp.WithString("directory_path", mcp.Description("The path to the directory containing package.json and source files")),
 	), s.handleCheckDependencyHealth)
 
-	// 8. generate_jsdoc_prompt
-	addTool(mcp.NewTool("generate_jsdoc_prompt",
-		mcp.WithDescription("Generates a highly contextual prompt for an LLM to write professional JSDoc for a specific entity."),
+	// 8. generate_docstring_prompt
+	addTool(mcp.NewTool("generate_docstring_prompt",
+		mcp.WithDescription("Generates a highly contextual prompt for an LLM to write professional documentation for a specific entity."),
 		mcp.WithString("file_path", mcp.Description("The relative path of the file")),
 		mcp.WithString("entity_name", mcp.Description("The name of the function or class to document")),
-	), s.handleGenerateJSDocPrompt)
+		mcp.WithString("language", mcp.Description("Optional: The language of the file (e.g., 'Go', 'TypeScript', 'Python'). Extracted from file extension if omitted.")),
+	), s.handleGenerateDocstringPrompt)
 
 	// 9. analyze_architecture
 	addTool(mcp.NewTool("analyze_architecture",
@@ -203,6 +184,8 @@ func (s *Server) registerTools() {
 	// 10. find_dead_code
 	addTool(mcp.NewTool("find_dead_code",
 		mcp.WithDescription("Identifies potentially dead code by finding exported symbols that are never imported or called."),
+		mcp.WithArray("exclude_paths", mcp.Description("Optional list of file paths or patterns to exclude from dead code analysis."), mcp.WithStringItems()),
+		mcp.WithBoolean("is_library", mcp.Description("Optional: Set to true if analyzing a library where public exports are expected. Only flags unused symbols inside internal/ or marked as private.")),
 	), s.handleFindDeadCode)
 
 	// 11. filesystem_grep
@@ -215,9 +198,9 @@ func (s *Server) registerTools() {
 
 	// 12. search_codebase
 	addTool(mcp.NewTool("search_codebase",
-		mcp.WithDescription("Unified semantic and lexical search across the codebase with advanced filtering."),
+		mcp.WithDescription("Unified semantic and lexical search across the codebase. Replaces retrieve_context and retrieve_docs."),
 		mcp.WithString("query", mcp.Description("The natural language search query")),
-		mcp.WithString("category", mcp.Description("Optional: 'code' or 'document'. Defaults to searching both.")),
+		mcp.WithString("category", mcp.Description("Optional: 'code' or 'document'. Handles both 'code' and 'document' retrieval. Defaults to searching both.")),
 		mcp.WithNumber("topK", mcp.Description("Number of results to return (default 10)")),
 		mcp.WithString("path_filter", mcp.Description("Optional: Only search files whose path contains this string")),
 		mcp.WithNumber("min_score", mcp.Description("Optional: Minimum similarity score (0.0 to 1.0) to include a result")),
@@ -625,124 +608,6 @@ func (s *Server) handleIndexStatus(ctx context.Context, request mcp.CallToolRequ
 	return mcp.NewToolResultText(res + bgStatus), nil
 }
 
-func (s *Server) handleRetrieveContext(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	query := request.GetString("query", "")
-	if query == "" {
-		return mcp.NewToolResultError("query is required"), nil
-	}
-	topK := int(request.GetFloat("topK", 5))
-
-	pids := request.GetStringSlice("cross_reference_projects", nil)
-	if len(pids) == 0 {
-		pids = []string{s.cfg.ProjectRoot}
-	}
-
-	emb, err := s.embedder.Embed(ctx, query)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
-	}
-
-	store, err := s.getStore(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to get store: %v", err)), nil
-	}
-
-	results, err := store.HybridSearch(ctx, query, emb, topK, pids, "code")
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to search database: %v", err)), nil
-	}
-
-	if len(results) == 0 {
-		return mcp.NewToolResultText("No relevant context found."), nil
-	}
-
-	var out strings.Builder
-	out.WriteString("### Hybrid Search Results (Lexical + Semantic):\n\n")
-	currentTokenCount := 0
-
-	for i, r := range results {
-		tokens := indexer.EstimateTokens(r.Content)
-		if currentTokenCount+tokens > indexer.MaxContextTokens {
-			out.WriteString("... (truncating further results to stay within context window)")
-			break
-		}
-
-		lineRange := ""
-		if start, ok := r.Metadata["start_line"]; ok {
-			if end, ok := r.Metadata["end_line"]; ok {
-				lineRange = fmt.Sprintf(" (Lines %s-%s)", start, end)
-			}
-		}
-
-		out.WriteString(fmt.Sprintf("#### Result %d: %s%s\n", i+1, r.Metadata["path"], lineRange))
-		if syms := r.Metadata["symbols"]; syms != "" {
-			out.WriteString(fmt.Sprintf("- **Entities**: %s\n", syms))
-		}
-		if rels := r.Metadata["relationships"]; rels != "" {
-			out.WriteString(fmt.Sprintf("- **Relationships**: %s\n", rels))
-		}
-		out.WriteString(fmt.Sprintf("```\n%s\n```\n\n", r.Content))
-		currentTokenCount += tokens
-	}
-	return mcp.NewToolResultText(out.String()), nil
-}
-
-func (s *Server) handleRetrieveDocs(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	query := request.GetString("query", "")
-	if query == "" {
-		return mcp.NewToolResultError("query is required"), nil
-	}
-	topK := int(request.GetFloat("topK", 5))
-
-	pids := request.GetStringSlice("cross_reference_projects", nil)
-	if len(pids) == 0 {
-		pids = []string{s.cfg.ProjectRoot}
-	}
-
-	emb, err := s.embedder.Embed(ctx, query)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
-	}
-
-	store, err := s.getStore(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to get store: %v", err)), nil
-	}
-
-	results, err := store.HybridSearch(ctx, query, emb, topK, pids, "document")
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to search database: %v", err)), nil
-	}
-
-	if len(results) == 0 {
-		return mcp.NewToolResultText("No relevant context found."), nil
-	}
-
-	var out strings.Builder
-	out.WriteString("### Document Search Results:\n\n")
-	currentTokenCount := 0
-
-	for i, r := range results {
-		tokens := indexer.EstimateTokens(r.Content)
-		if currentTokenCount+tokens > indexer.MaxContextTokens {
-			out.WriteString("... (truncating further results to stay within context window)")
-			break
-		}
-
-		lineRange := ""
-		if start, ok := r.Metadata["start_line"]; ok {
-			if end, ok := r.Metadata["end_line"]; ok {
-				lineRange = fmt.Sprintf(" (Lines %s-%s)", start, end)
-			}
-		}
-
-		out.WriteString(fmt.Sprintf("#### Result %d: %s%s\n", i+1, r.Metadata["path"], lineRange))
-		out.WriteString(fmt.Sprintf("```\n%s\n```\n\n", r.Content))
-		currentTokenCount += tokens
-	}
-	return mcp.NewToolResultText(out.String()), nil
-}
-
 func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -986,11 +851,35 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 	return mcp.NewToolResultText(out.String()), nil
 }
 
-func (s *Server) handleGenerateJSDocPrompt(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleGenerateDocstringPrompt(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	filePath := request.GetString("file_path", "")
 	entityName := request.GetString("entity_name", "")
+	language := request.GetString("language", "")
+
 	if filePath == "" || entityName == "" {
 		return mcp.NewToolResultError("file_path and entity_name are required"), nil
+	}
+
+	if language == "" {
+		ext := strings.ToLower(filepath.Ext(filePath))
+		switch ext {
+		case ".go":
+			language = "Go"
+		case ".ts", ".js", ".tsx", ".jsx":
+			language = "TypeScript/JavaScript"
+		case ".py":
+			language = "Python"
+		}
+	}
+
+	docStyle := "professional documentation comment"
+	switch strings.ToLower(language) {
+	case "go":
+		docStyle = "Godoc comments"
+	case "typescript/javascript", "typescript", "javascript", "ts", "js":
+		docStyle = "JSDoc comments"
+	case "python":
+		docStyle = "Python docstrings (PEP 257 format)"
 	}
 
 	store, err := s.getStore(ctx)
@@ -1032,14 +921,14 @@ func (s *Server) handleGenerateJSDocPrompt(ctx context.Context, request mcp.Call
 	symbols := match.Metadata["symbols"]
 	relationships := match.Metadata["relationships"]
 
-	prompt := fmt.Sprintf(`Please write a professional JSDoc comment for the following code. 
+	prompt := fmt.Sprintf(`Please write a professional %s for the following code.
 Architecture Context:
 - Entity: %s
 - Internal Calls made: %s
 - File Imports: %s
 
 Code:
-%s`, symbols, calls, relationships, content)
+%s`, docStyle, symbols, calls, relationships, content)
 
 	return mcp.NewToolResultText(prompt), nil
 }
@@ -1117,7 +1006,34 @@ func (s *Server) handleAnalyzeArchitecture(ctx context.Context, request mcp.Call
 	return mcp.NewToolResultText(sb.String()), nil
 }
 
-func (s *Server) handleFindDeadCode(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleFindDeadCode(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var excludePaths []string
+	hasExcludePaths := false
+	if args, ok := request.Params.Arguments.(map[string]interface{}); ok {
+		if rawPaths, ok := args["exclude_paths"].([]interface{}); ok {
+			hasExcludePaths = true
+			for _, p := range rawPaths {
+				if strP, ok := p.(string); ok {
+					excludePaths = append(excludePaths, strP)
+				}
+			}
+		} else if request.GetStringSlice("exclude_paths", nil) != nil {
+			hasExcludePaths = true
+			excludePaths = request.GetStringSlice("exclude_paths", nil)
+		}
+	}
+
+	if !hasExcludePaths {
+		excludePaths = []string{"/api", "/routes", "/cmd", "main.go", "index.ts"}
+	}
+
+	isLibrary := false
+	if args, ok := request.Params.Arguments.(map[string]interface{}); ok {
+		if val, exists := args["is_library"].(bool); exists {
+			isLibrary = val
+		}
+	}
+
 	store, err := s.getStore(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -1136,14 +1052,36 @@ func (s *Server) handleFindDeadCode(ctx context.Context, _ mcp.CallToolRequest) 
 	setB := make(map[string]bool)           // name -> used
 
 	for _, r := range records {
+		filePath := r.Metadata["path"]
+
+		isExcluded := false
+		if !isLibrary {
+			for _, ep := range excludePaths {
+				if strings.Contains(filePath, ep) {
+					isExcluded = true
+					break
+				}
+			}
+		}
+
+		// If library, only consider internal/ or explicitly private
+		if isLibrary {
+			isInternal := strings.Contains(filePath, "internal/") || strings.Contains(filePath, "private/") || strings.HasPrefix(filepath.Base(filePath), "_")
+			if !isInternal {
+				isExcluded = true
+			}
+		}
+
 		// Set A: Exports (structural types only)
 		t := r.Metadata["type"]
-		if t == "function" || t == "class" || t == "variable" || t == "arrow_function" {
+		if !isExcluded && (t == "function" || t == "class" || t == "variable" || t == "arrow_function") {
 			var syms []string
 			if err := json.Unmarshal([]byte(r.Metadata["symbols"]), &syms); err == nil {
 				for _, sym := range syms {
 					if sym != "" {
-						setA[sym] = exportedSymbol{name: sym, path: r.Metadata["path"]}
+						// For libraries, if symbol starts with uppercase (Go) or isn't starting with _, it's public.
+						// Wait, if it's in internal/ it's already filtered above, but let's check if there are other rules
+						setA[sym] = exportedSymbol{name: sym, path: filePath}
 					}
 				}
 			}
@@ -1472,6 +1410,8 @@ func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, err
 	return out.String(), nil
 }
 
+// CallTool allows programmatic execution of a registered tool by its name.
+// It bypasses the standard MCP protocol layers for internal API usage.
 func (s *Server) CallTool(ctx context.Context, name string, args map[string]interface{}) (*mcp.CallToolResult, error) {
 	handler, ok := s.toolHandlers[name]
 	if !ok {
@@ -1486,6 +1426,7 @@ func (s *Server) CallTool(ctx context.Context, name string, args map[string]inte
 	return handler(ctx, req)
 }
 
+// ListTools returns all tools currently registered on the server.
 func (s *Server) ListTools() []mcp.Tool {
 	var tools []mcp.Tool
 	for _, t := range s.MCPServer.ListTools() {
