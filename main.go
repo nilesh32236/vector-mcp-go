@@ -160,7 +160,7 @@ func main() {
 	// Start MCP server
 	resolver := indexer.InitResolver(cfg.ProjectRoot)
 	// We need to pass the remote store to the MCP server if we are a slave.
-	srv := mcp.NewServer(cfg, logger, storeGetter, nil, embedder, indexQueue, daemonClient, &progressMap, resetChan, resolver)
+	srv := mcp.NewServer(cfg, logger, storeGetter, embedder, indexQueue, daemonClient, &progressMap, resetChan, resolver)
 	if !isMaster {
 		remoteStore := daemon.NewRemoteStore(socketPath)
 		srv.WithRemoteStore(remoteStore)

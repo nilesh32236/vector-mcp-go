@@ -376,10 +376,12 @@ func astChunkGo(text string) []Chunk {
 			}
 
 			if start >= 0 && end <= len(text) && start < end {
+				calls := extractCallsGo(x)
 				chunks = append(chunks, Chunk{
 					Content:   text[start:end],
 					Symbols:   []string{symbolName},
 					Type:      "function",
+					Calls:     calls,
 					StartLine: fset.Position(x.Pos()).Line,
 					EndLine:   fset.Position(x.End()).Line,
 				})
@@ -421,6 +423,44 @@ func astChunkGo(text string) []Chunk {
 	}
 
 	return chunks
+}
+
+func extractCallsGo(node ast.Node) []string {
+	uniqueCalls := make(map[string]bool)
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			// Handle simple function calls
+			if id, ok := x.Fun.(*ast.Ident); ok {
+				uniqueCalls[id.Name] = true
+			}
+			// Handle method calls (e.g., s.handleSomething)
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+				uniqueCalls[sel.Sel.Name] = true
+				// Also capture the full qualified name if it matches an exported pattern
+				if id, ok := sel.X.(*ast.Ident); ok {
+					uniqueCalls[fmt.Sprintf("%s.%s", id.Name, sel.Sel.Name)] = true
+				}
+			}
+		case *ast.Ident:
+			// Capture identifiers being passed as arguments or assigned
+			uniqueCalls[x.Name] = true
+		case *ast.SelectorExpr:
+			// Capture selected identifiers (e.g., server.handleSomething)
+			uniqueCalls[x.Sel.Name] = true
+			if id, ok := x.X.(*ast.Ident); ok {
+				uniqueCalls[fmt.Sprintf("%s.%s", id.Name, x.Sel.Name)] = true
+			}
+		}
+		return true
+	})
+
+	var calls []string
+	for c := range uniqueCalls {
+		calls = append(calls, c)
+	}
+	sort.Strings(calls)
+	return calls
 }
 
 func chunkJavaScriptTypeScript(content string, filePath string) []Chunk {
