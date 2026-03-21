@@ -15,9 +15,10 @@ import (
 	"sync"
 	"time"
 
-	ignore "github.com/sabhiram/go-gitignore"
+	"github.com/dslipak/pdf"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
+	ignore "github.com/sabhiram/go-gitignore"
 )
 
 // IndexSummary provides a summary of the indexing operation.
@@ -176,12 +177,40 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 		return Result{Skipped: true, RelPath: relPath}
 	}
 
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return Result{Err: err.Error(), RelPath: relPath}
+	var contentStr string
+	ext := strings.ToLower(filepath.Ext(path))
+	category := "code"
+	if ext == ".pdf" || ext == ".md" || ext == ".txt" {
+		category = "document"
 	}
 
-	chunks := CreateChunks(string(content), relPath)
+	if ext == ".pdf" {
+		r, err := pdf.Open(path)
+		if err != nil {
+			return Result{Err: fmt.Sprintf("failed to parse pdf: %v", err), RelPath: relPath}
+		}
+		var b strings.Builder
+		for i := 1; i <= r.NumPage(); i++ {
+			p := r.Page(i)
+			if p.V.IsNull() {
+				continue
+			}
+			text, err := p.GetPlainText(nil)
+			if err == nil {
+				b.WriteString(text)
+				b.WriteString("\n")
+			}
+		}
+		contentStr = b.String()
+	} else {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return Result{Err: err.Error(), RelPath: relPath}
+		}
+		contentStr = string(content)
+	}
+
+	chunks := CreateChunks(contentStr, relPath)
 	var records []db.Record
 	for _, chunk := range chunks {
 		emb, err := embedder.Embed(ctx, chunk.Content)
@@ -204,6 +233,7 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 				"type":           chunk.Type,
 				"calls":          string(callsJSON),
 				"function_score": fmt.Sprintf("%.2f", chunk.FunctionScore),
+				"category":       category,
 			},
 		})
 	}
@@ -228,7 +258,7 @@ func IndexSingleFile(ctx context.Context, path string, cfg *config.Config, store
 }
 
 var (
-	AllowExts = []string{".ts", ".tsx", ".js", ".jsx", ".prisma", ".json", ".css", ".html", ".md", ".env", ".yml", ".yaml", ".go", ".py", ".rs", ".sh", ".txt"}
+	AllowExts = []string{".ts", ".tsx", ".js", ".jsx", ".prisma", ".json", ".css", ".html", ".md", ".env", ".yml", ".yaml", ".go", ".py", ".rs", ".sh", ".txt", ".pdf"}
 )
 
 func ScanFiles(root string) ([]string, error) {

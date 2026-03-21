@@ -23,8 +23,8 @@ import (
 // IndexerStore defines the interface for database operations,
 // allowing both local and remote implementations.
 type IndexerStore interface {
-	Search(ctx context.Context, embedding []float32, topK int, pids []string) ([]db.Record, error)
-	HybridSearch(ctx context.Context, query string, embedding []float32, topK int, pids []string) ([]db.Record, error)
+	Search(ctx context.Context, embedding []float32, topK int, pids []string, category string) ([]db.Record, error)
+	HybridSearch(ctx context.Context, query string, embedding []float32, topK int, pids []string, category string) ([]db.Record, error)
 	Insert(ctx context.Context, records []db.Record) error
 	DeleteByPrefix(ctx context.Context, prefix string, projectID string) error
 	ClearProject(ctx context.Context, projectID string) error
@@ -49,6 +49,7 @@ type Server struct {
 	progressMap      *sync.Map
 	watcherResetChan chan string
 	monorepoResolver *indexer.WorkspaceResolver
+	toolHandlers     map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)
 }
 
 // NewServer creates a new Server instance and registers its tools.
@@ -65,6 +66,7 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 		progressMap:      progress,
 		watcherResetChan: resetChan,
 		monorepoResolver: resolver,
+		toolHandlers:     make(map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)),
 	}
 	srv.registerTools()
 	return srv
@@ -88,56 +90,62 @@ func (s *Server) Serve() error {
 }
 
 func (s *Server) registerTools() {
+	// Helper to add tool and track handler
+	addTool := func(tool mcp.Tool, handler func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)) {
+		s.MCPServer.AddTool(tool, handler)
+		s.toolHandlers[tool.Name] = handler
+	}
+
 	// 0. ping
-	s.MCPServer.AddTool(mcp.NewTool("ping", mcp.WithDescription("Check server connectivity")),
+	addTool(mcp.NewTool("ping", mcp.WithDescription("Check server connectivity")),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultText("pong"), nil
 		})
 
 	// 1. trigger_project_index
-	s.MCPServer.AddTool(mcp.NewTool("trigger_project_index",
+	addTool(mcp.NewTool("trigger_project_index",
 		mcp.WithDescription("Trigger a full background index of a project. Use this when you first open a project or after major changes to ensure the vector index is up to date."),
 		mcp.WithString("project_path", mcp.Description("Absolute path to the project root")),
 	), s.handleTriggerProjectIndex)
 
 	// 1.5 set_project_root
-	s.MCPServer.AddTool(mcp.NewTool("set_project_root",
+	addTool(mcp.NewTool("set_project_root",
 		mcp.WithDescription("Dynamically switch the active project root and update the file watcher. Use this when moving between different codebases or monorepo packages."),
 		mcp.WithString("project_path", mcp.Description("Absolute path to the new project root")),
 	), s.handleSetProjectRoot)
 
 	// 2. store_context
-	s.MCPServer.AddTool(mcp.NewTool("store_context",
+	addTool(mcp.NewTool("store_context",
 		mcp.WithDescription("Store general project rules, architectural decisions, or shared context for other agents to read. This helps maintain consistency across different AI sessions."),
 		mcp.WithString("text", mcp.Description("The text context to store.")),
 		mcp.WithString("project_id", mcp.Description("The project this context belongs to. Defaults to the current project.")),
 	), s.handleStoreContext)
 
 	// 3. get_related_context
-	s.MCPServer.AddTool(mcp.NewTool("get_related_context",
+	addTool(mcp.NewTool("get_related_context",
 		mcp.WithDescription("Retrieve context for a file and its local dependencies, optionally cross-referencing other projects. Use this to understand how a specific file fits into the larger codebase."),
 		mcp.WithString("filePath", mcp.Description("The relative path of the file to analyze")),
 	), s.handleGetRelatedContext)
 
 	// 3. find_duplicate_code
-	s.MCPServer.AddTool(mcp.NewTool("find_duplicate_code",
+	addTool(mcp.NewTool("find_duplicate_code",
 		mcp.WithDescription("Scans a specific path to find duplicated logic across namespaces. Use this during refactoring to identify consolidation opportunities."),
 		mcp.WithString("target_path", mcp.Description("The relative path to check")),
 	), s.handleFindDuplicateCode)
 
 	// 4. delete_context
-	s.MCPServer.AddTool(mcp.NewTool("delete_context",
+	addTool(mcp.NewTool("delete_context",
 		mcp.WithDescription("Delete specific shared memory context, or completely wipe a project's vector index."),
 		mcp.WithString("target_path", mcp.Description("The exact file path, context ID, or 'ALL' to clear the whole project.")),
 		mcp.WithString("project_id", mcp.Description("The project ID to target. Defaults to the current project.")),
 	), s.handleDeleteContext)
 
 	// 5. index_status
-	s.MCPServer.AddTool(mcp.NewTool("index_status", mcp.WithDescription("Check index status and background progress. Use this to verify if the server is still indexing or if it's ready for queries.")),
+	addTool(mcp.NewTool("index_status", mcp.WithDescription("Check index status and background progress. Use this to verify if the server is still indexing or if it's ready for queries.")),
 		s.handleIndexStatus)
 
 	// 5.5 retrieve_context
-	s.MCPServer.AddTool(mcp.NewTool("retrieve_context",
+	addTool(mcp.NewTool("retrieve_context",
 		mcp.WithDescription("Semantic search across the indexed codebase using natural language. Returns the most relevant code chunks."),
 		mcp.WithString("query", mcp.Description("The natural language search query")),
 		mcp.WithNumber("topK", mcp.Description("Number of results to return (default 5)")),
@@ -147,34 +155,45 @@ func (s *Server) registerTools() {
 		),
 	), s.handleRetrieveContext)
 
+	// 5.6 retrieve_docs
+	addTool(mcp.NewTool("retrieve_docs",
+		mcp.WithDescription("Semantic search across the indexed documentation (PDFs, MDs, TXTs) using natural language."),
+		mcp.WithString("query", mcp.Description("The natural language search query")),
+		mcp.WithNumber("topK", mcp.Description("Number of results to return (default 5)")),
+		mcp.WithArray("cross_reference_projects",
+			mcp.Description("Optional list of project IDs to search across"),
+			mcp.WithStringItems(),
+		),
+	), s.handleRetrieveDocs)
+
 	// 6. get_codebase_skeleton
-	s.MCPServer.AddTool(mcp.NewTool("get_codebase_skeleton",
+	addTool(mcp.NewTool("get_codebase_skeleton",
 		mcp.WithDescription("Returns a topological tree map of the directory structure. Use this to progressively explore large codebases by specifying sub-directories and depths."),
 		mcp.WithString("target_path", mcp.Description("Relative or absolute path to the directory to map (optional, defaults to project root).")),
 		mcp.WithNumber("max_depth", mcp.Description("Maximum depth of the tree to generate (optional, defaults to 3).")),
 	), s.handleGetCodebaseSkeleton)
 
 	// 7. check_dependency_health
-	s.MCPServer.AddTool(mcp.NewTool("check_dependency_health",
+	addTool(mcp.NewTool("check_dependency_health",
 		mcp.WithDescription("Analyzes a directory's package.json against its indexed imports to identify missing dependencies in the manifest."),
 		mcp.WithString("directory_path", mcp.Description("The path to the directory containing package.json and source files")),
 	), s.handleCheckDependencyHealth)
 
 	// 8. generate_jsdoc_prompt
-	s.MCPServer.AddTool(mcp.NewTool("generate_jsdoc_prompt",
+	addTool(mcp.NewTool("generate_jsdoc_prompt",
 		mcp.WithDescription("Generates a highly contextual prompt for an LLM to write professional JSDoc for a specific entity."),
 		mcp.WithString("file_path", mcp.Description("The relative path of the file")),
 		mcp.WithString("entity_name", mcp.Description("The name of the function or class to document")),
 	), s.handleGenerateJSDocPrompt)
 
 	// 9. analyze_architecture
-	s.MCPServer.AddTool(mcp.NewTool("analyze_architecture",
+	addTool(mcp.NewTool("analyze_architecture",
 		mcp.WithDescription("Generates a Mermaid.js dependency graph between packages in a monorepo."),
 		mcp.WithString("monorepo_prefix", mcp.Description("Optional prefix for monorepo packages (e.g., '@herexa/')")),
 	), s.handleAnalyzeArchitecture)
 
 	// 10. find_dead_code
-	s.MCPServer.AddTool(mcp.NewTool("find_dead_code",
+	addTool(mcp.NewTool("find_dead_code",
 		mcp.WithDescription("Identifies potentially dead code by finding exported symbols that are never imported or called."),
 	), s.handleFindDeadCode)
 }
@@ -421,10 +440,10 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 
 		var matches []db.Record
 		if ds, ok := store.(*db.Store); ok {
-			ms, _, _ := ds.SearchWithScore(ctx, emb, 5, pids)
+			ms, _, _ := ds.SearchWithScore(ctx, emb, 5, pids, "")
 			matches = ms
 		} else {
-			ms, _ := store.Search(ctx, emb, 5, pids)
+			ms, _ := store.Search(ctx, emb, 5, pids, "")
 			matches = ms
 		}
 
@@ -523,7 +542,7 @@ func (s *Server) handleRetrieveContext(ctx context.Context, request mcp.CallTool
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get store: %v", err)), nil
 	}
 
-	results, err := store.HybridSearch(ctx, query, emb, topK, pids)
+	results, err := store.HybridSearch(ctx, query, emb, topK, pids, "code")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to search database: %v", err)), nil
 	}
@@ -549,6 +568,54 @@ func (s *Server) handleRetrieveContext(ctx context.Context, request mcp.CallTool
 		if rels := r.Metadata["relationships"]; rels != "" {
 			out.WriteString(fmt.Sprintf("- **Relationships**: %s\n", rels))
 		}
+		out.WriteString(fmt.Sprintf("```\n%s\n```\n\n", r.Content))
+		currentTokenCount += tokens
+	}
+	return mcp.NewToolResultText(out.String()), nil
+}
+
+func (s *Server) handleRetrieveDocs(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	query := request.GetString("query", "")
+	if query == "" {
+		return mcp.NewToolResultError("query is required"), nil
+	}
+	topK := int(request.GetFloat("topK", 5))
+
+	pids := request.GetStringSlice("cross_reference_projects", nil)
+	if len(pids) == 0 {
+		pids = []string{s.cfg.ProjectRoot}
+	}
+
+	emb, err := s.embedder.Embed(ctx, query)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
+	}
+
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get store: %v", err)), nil
+	}
+
+	results, err := store.HybridSearch(ctx, query, emb, topK, pids, "document")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to search database: %v", err)), nil
+	}
+
+	if len(results) == 0 {
+		return mcp.NewToolResultText("No relevant context found."), nil
+	}
+
+	var out strings.Builder
+	out.WriteString("### Document Search Results:\n\n")
+	currentTokenCount := 0
+
+	for i, r := range results {
+		tokens := indexer.EstimateTokens(r.Content)
+		if currentTokenCount+tokens > indexer.MaxContextTokens {
+			out.WriteString("... (truncating further results to stay within context window)")
+			break
+		}
+		out.WriteString(fmt.Sprintf("#### Result %d: %s\n", i+1, r.Metadata["path"]))
 		out.WriteString(fmt.Sprintf("```\n%s\n```\n\n", r.Content))
 		currentTokenCount += tokens
 	}
@@ -851,7 +918,7 @@ func (s *Server) handleAnalyzeArchitecture(ctx context.Context, request mcp.Call
 	// Build Mermaid graph
 	var sb strings.Builder
 	sb.WriteString("graph TD\n")
-	
+
 	// Sort for deterministic output
 	var sources []string
 	for s := range adj {
@@ -1005,4 +1072,26 @@ func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, err
 		out.WriteString(fmt.Sprintf("\n🛰️ Background Status (from DB): %s\n", status))
 	}
 	return out.String(), nil
+}
+
+func (s *Server) CallTool(ctx context.Context, name string, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	handler, ok := s.toolHandlers[name]
+	if !ok {
+		return nil, fmt.Errorf("tool not found: %s", name)
+	}
+
+	// Create a CallToolRequest from the args
+	req := mcp.CallToolRequest{}
+	req.Params.Name = name
+	req.Params.Arguments = args
+
+	return handler(ctx, req)
+}
+
+func (s *Server) ListTools() []mcp.Tool {
+	var tools []mcp.Tool
+	for _, t := range s.MCPServer.ListTools() {
+		tools = append(tools, t.Tool)
+	}
+	return tools
 }

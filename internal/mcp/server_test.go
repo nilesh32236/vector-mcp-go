@@ -51,12 +51,12 @@ func TestIndexStatusTool(t *testing.T) {
 	progressMap.Store("/test/project", "Indexing: 73.2% (73/100) - Current: file.go")
 
 	storeGetter := func(ctx context.Context) (*db.Store, error) { return store, nil }
-	
+
 	srv := &Server{
-		cfg:              cfg,
-		storeGetter:      storeGetter,
-		progressMap:      progressMap,
-		embedder:         &mockEmbedder{dim: 1024},
+		cfg:         cfg,
+		storeGetter: storeGetter,
+		progressMap: progressMap,
+		embedder:    &mockEmbedder{dim: 1024},
 	}
 
 	// Test HandleIndexStatus directly
@@ -66,7 +66,7 @@ func TestIndexStatusTool(t *testing.T) {
 	}
 
 	content := res.Content[0].(mcp.TextContent).Text
-	
+
 	// The output format was updated in handleIndexStatus
 	if !strings.Contains(content, "🚀 Background Indexing Tasks:") {
 		t.Errorf("expected '🚀 Background Indexing Tasks:' in output, got: %s", content)
@@ -88,7 +88,7 @@ func TestRetrieveContextTool(t *testing.T) {
 	}
 
 	store, _ := db.Connect(ctx, dbPath, "test_collection", 1024)
-	
+
 	// Use the same embedding as the mock embedder
 	emb := make([]float32, 1024)
 	emb[0] = 1.0
@@ -96,11 +96,11 @@ func TestRetrieveContextTool(t *testing.T) {
 	// Insert dummy record
 	err := store.Insert(ctx, []db.Record{
 		{
-			ID: "test-id-1",
-			Content: "func HelloWorld() { fmt.Println(\"Hello\") }",
+			ID:        "test-id-1",
+			Content:   "func HelloWorld() { fmt.Println(\"Hello\") }",
 			Embedding: emb,
 			Metadata: map[string]string{
-				"path": "hello.go",
+				"path":       "hello.go",
 				"project_id": "/test/project",
 			},
 		},
@@ -110,7 +110,7 @@ func TestRetrieveContextTool(t *testing.T) {
 	}
 
 	// Verify it's in DB
-	results, err := store.Search(ctx, emb, 1, []string{"/test/project"})
+	results, err := store.Search(ctx, emb, 1, []string{"/test/project"}, "")
 	if err != nil {
 		t.Fatalf("direct search failed: %v", err)
 	}
@@ -197,7 +197,7 @@ export class SharedUtils {
 	dbPath := filepath.Join(tempDir, "db")
 	dim := 384
 	store, _ := db.Connect(ctx, dbPath, "test_collection", dim)
-	
+
 	// Index files
 	mockEmb := &mockEmbedder{dim: dim}
 	files := []string{
@@ -212,7 +212,7 @@ export class SharedUtils {
 		for _, chunk := range chunks {
 			emb, _ := mockEmb.Embed(ctx, chunk.Content)
 			relPath := config.GetRelativePath(f, tempDir)
-			
+
 			relJSON, _ := json.Marshal(chunk.Relationships)
 			symJSON, _ := json.Marshal(chunk.Symbols)
 			callsJSON, _ := json.Marshal(chunk.Calls)

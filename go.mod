@@ -3,9 +3,12 @@ module github.com/nilesh32236/vector-mcp-go
 go 1.26.1
 
 require (
+	github.com/dslipak/pdf v0.0.2
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/mark3labs/mcp-go v0.45.0
+	github.com/odvcencio/gotreesitter v0.10.1
 	github.com/philippgille/chromem-go v0.7.0
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/sugarme/tokenizer v0.3.0
@@ -17,11 +20,9 @@ require (
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
-	github.com/odvcencio/gotreesitter v0.10.1 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/schollz/progressbar/v2 v2.15.0 // indirect

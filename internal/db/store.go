@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/philippgille/chromem-go"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/philippgille/chromem-go"
 )
 
 type Store struct {
@@ -70,12 +71,12 @@ func (s *Store) Insert(ctx context.Context, records []Record) error {
 	return s.collection.AddDocuments(ctx, docs, runtime.NumCPU())
 }
 
-func (s *Store) Search(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string) ([]Record, error) {
-	records, _, err := s.SearchWithScore(ctx, queryEmbedding, topK, projectIDs)
+func (s *Store) Search(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, error) {
+	records, _, err := s.SearchWithScore(ctx, queryEmbedding, topK, projectIDs, category)
 	return records, err
 }
 
-func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string) ([]Record, error) {
+func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string, category string) ([]Record, error) {
 	count := s.collection.Count()
 	if count == 0 {
 		return nil, nil
@@ -87,14 +88,22 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 	var allResults []chromem.Result
 
 	if len(projectIDs) == 0 {
-		res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, nil, nil)
+		var where map[string]string
+		if category != "" {
+			where = map[string]string{"category": category}
+		}
+		res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, where, nil)
 		if err != nil {
 			return nil, err
 		}
 		allResults = res
 	} else {
 		for _, pid := range projectIDs {
-			res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"project_id": pid}, nil)
+			where := map[string]string{"project_id": pid}
+			if category != "" {
+				where["category"] = category
+			}
+			res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, where, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -144,15 +153,15 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 	return matches, nil
 }
 
-func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string) ([]Record, error) {
+func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, error) {
 	// 1. Vector Search (Fetch more for better RRF)
-	vectorResults, err := s.Search(ctx, queryEmbedding, topK*2, projectIDs)
+	vectorResults, err := s.Search(ctx, queryEmbedding, topK*2, projectIDs, category)
 	if err != nil {
 		return nil, err
 	}
 
 	// 2. Lexical Search (Fetch more for better RRF)
-	lexicalResults, err := s.LexicalSearch(ctx, query, topK*2, projectIDs)
+	lexicalResults, err := s.LexicalSearch(ctx, query, topK*2, projectIDs, category)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +217,7 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 	return finalResults, nil
 }
 
-func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string) ([]Record, []float32, error) {
+func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, []float32, error) {
 	count := s.collection.Count()
 	if count == 0 {
 		return nil, nil, nil
@@ -220,7 +229,11 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 
 	var allResults []chromem.Result
 	if len(projectIDs) == 0 {
-		res, err := s.collection.QueryEmbedding(ctx, queryEmbedding, topK, nil, nil)
+		var where map[string]string
+		if category != "" {
+			where = map[string]string{"category": category}
+		}
+		res, err := s.collection.QueryEmbedding(ctx, queryEmbedding, topK, where, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -228,7 +241,11 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 	} else {
 		// Perform individual queries for each project to avoid truncation issues
 		for _, pid := range projectIDs {
-			res, err := s.collection.QueryEmbedding(ctx, queryEmbedding, topK, map[string]string{"project_id": pid}, nil)
+			where := map[string]string{"project_id": pid}
+			if category != "" {
+				where["category"] = category
+			}
+			res, err := s.collection.QueryEmbedding(ctx, queryEmbedding, topK, where, nil)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -407,8 +424,8 @@ func (s *Store) SetStatus(ctx context.Context, projectID string, status string) 
 
 	dummyEmb := make([]float32, s.dimension)
 	return s.Insert(ctx, []Record{{
-		ID:      id,
-		Content: status,
+		ID:        id,
+		Content:   status,
 		Embedding: dummyEmb,
 		Metadata: map[string]string{
 			"type":       "project_status",

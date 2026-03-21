@@ -41,6 +41,7 @@ type SearchRequest struct {
 	Embedding []float32
 	TopK      int
 	PIDs      []string
+	Category  string
 }
 
 type HybridSearchRequest struct {
@@ -48,6 +49,7 @@ type HybridSearchRequest struct {
 	Embedding []float32
 	TopK      int
 	PIDs      []string
+	Category  string
 }
 
 type SearchResponse struct {
@@ -111,7 +113,7 @@ func (s *Service) Search(req SearchRequest, resp *SearchResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
 	}
-	res, err := s.Store.Search(context.Background(), req.Embedding, req.TopK, req.PIDs)
+	res, err := s.Store.Search(context.Background(), req.Embedding, req.TopK, req.PIDs, req.Category)
 	if err != nil {
 		return err
 	}
@@ -123,7 +125,7 @@ func (s *Service) HybridSearch(req HybridSearchRequest, resp *SearchResponse) er
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
 	}
-	res, err := s.Store.HybridSearch(context.Background(), req.Query, req.Embedding, req.TopK, req.PIDs)
+	res, err := s.Store.HybridSearch(context.Background(), req.Query, req.Embedding, req.TopK, req.PIDs, req.Category)
 	if err != nil {
 		return err
 	}
@@ -413,15 +415,15 @@ func (rs *RemoteStore) call(method string, req interface{}, resp interface{}) er
 	return client.Call("VectorDaemon."+method, req, resp)
 }
 
-func (rs *RemoteStore) Search(ctx context.Context, embedding []float32, topK int, pids []string) ([]db.Record, error) {
+func (rs *RemoteStore) Search(ctx context.Context, embedding []float32, topK int, pids []string, category string) ([]db.Record, error) {
 	var resp SearchResponse
-	err := rs.call("Search", SearchRequest{Embedding: embedding, TopK: topK, PIDs: pids}, &resp)
+	err := rs.call("Search", SearchRequest{Embedding: embedding, TopK: topK, PIDs: pids, Category: category}, &resp)
 	return resp.Records, err
 }
 
-func (rs *RemoteStore) HybridSearch(ctx context.Context, query string, embedding []float32, topK int, pids []string) ([]db.Record, error) {
+func (rs *RemoteStore) HybridSearch(ctx context.Context, query string, embedding []float32, topK int, pids []string, category string) ([]db.Record, error) {
 	var resp SearchResponse
-	err := rs.call("HybridSearch", HybridSearchRequest{Query: query, Embedding: embedding, TopK: topK, PIDs: pids}, &resp)
+	err := rs.call("HybridSearch", HybridSearchRequest{Query: query, Embedding: embedding, TopK: topK, PIDs: pids, Category: category}, &resp)
 	return resp.Records, err
 }
 

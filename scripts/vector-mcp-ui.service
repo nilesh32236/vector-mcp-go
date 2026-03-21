@@ -1,0 +1,16 @@
+[Unit]
+Description=Vector MCP Next.js Frontend
+After=network.target vector-mcp.service
+
+[Service]
+Type=simple
+User=nilesh
+Group=nilesh
+WorkingDirectory=/home/nilesh/Documents/vector-mcp-go/frontend-web
+EnvironmentFile=/home/nilesh/Documents/vector-mcp-go/frontend-web/.env
+ExecStart=/home/nilesh/.nvm/versions/node/v22.21.1/bin/npm start -- -p 47822
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

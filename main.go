@@ -159,7 +159,7 @@ func main() {
 
 	// Start API server (Master only, or Slaves can proxy if needed, but usually MCP is the main interface)
 	if isMaster {
-		apiSrv := api.NewServer(cfg, storeGetter, embedder, srv.MCPServer)
+		apiSrv := api.NewServer(cfg, storeGetter, embedder, srv)
 		go func() {
 			if err := apiSrv.Start(); err != nil {
 				logger.Error("API server error", "error", err)

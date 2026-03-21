@@ -18,6 +18,7 @@ Thumbs.db
 
 models/
 .data/
+data/
 lib/linux_amd64/
 lib/darwin_arm64/
 lib/darwin_amd64/
@@ -28,4 +29,3 @@ vector-mcp-go
 *.dylib
 *.a
 *.onnx
-*.json

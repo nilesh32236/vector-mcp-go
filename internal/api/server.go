@@ -14,6 +14,7 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 	"github.com/nilesh32236/vector-mcp-go/internal/llm"
+	"github.com/nilesh32236/vector-mcp-go/internal/mcp"
 )
 
 type StoreGetter func(ctx context.Context) (*db.Store, error)
@@ -24,10 +25,10 @@ type Server struct {
 	embedder    indexer.Embedder
 	srv         *http.Server
 	chatStore   *chat.Store
-	mcpServer   *mcp_server.MCPServer
+	mcpServer   *mcp.Server
 }
 
-func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Embedder, mcpServer *mcp_server.MCPServer) *Server {
+func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Embedder, mcpServer *mcp.Server) *Server {
 	chatStore, err := chat.NewStore(cfg.DataDir)
 	if err != nil && cfg.Logger != nil {
 		cfg.Logger.Error("Failed to initialize chat store", "error", err)
@@ -46,8 +47,8 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 	mux.HandleFunc("GET /api/health", server.handleHealth)
 
 	// MCP HTTP transport (Streamable-HTTP specification)
-	if mcpServer != nil {
-		mcpHandler := mcp_server.NewStreamableHTTPServer(mcpServer)
+	if mcpServer != nil && mcpServer.MCPServer != nil {
+		mcpHandler := mcp_server.NewStreamableHTTPServer(mcpServer.MCPServer)
 
 		handler := func(w http.ResponseWriter, r *http.Request) {
 			log.Printf("MCP request: %s %s", r.Method, r.URL.String())
@@ -81,10 +82,32 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 	mux.HandleFunc("POST /api/todo", server.handleTodo)
 	mux.HandleFunc("POST /api/chat", server.handleChat)
 
+	// New Tool Management Endpoints
+	mux.HandleFunc("GET /api/tools/status", server.handleIndexStatus)
+	mux.HandleFunc("POST /api/tools/index", server.handleTriggerIndex)
+	mux.HandleFunc("GET /api/tools/skeleton", server.handleGetSkeleton)
+	mux.HandleFunc("GET /api/tools/list", server.handleListTools)
+	mux.HandleFunc("POST /api/tools/call", server.handleCallTool)
+
 	addr := fmt.Sprintf(":%s", cfg.ApiPort)
+
+	corsMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, X-Requested-With, Accept, Origin")
+		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		mux.ServeHTTP(w, r)
+	})
+
 	server.srv = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: corsMux,
 	}
 
 	return server
@@ -117,8 +140,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 type SearchRequest struct {
-	Query string `json:"query"`
-	TopK  int    `json:"top_k"`
+	Query    string `json:"query"`
+	TopK     int    `json:"top_k"`
+	DocsOnly bool   `json:"docs_only"`
 }
 
 type SearchResponse struct {
@@ -153,7 +177,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	// For the global brain search, we don't filter by project ID unless requested,
 	// but store.HybridSearch currently takes projectIDs. Passing an empty slice searches everything.
-	records, err := store.HybridSearch(r.Context(), req.Query, emb, req.TopK, []string{})
+	var category string
+	if req.DocsOnly {
+		category = "document"
+	} else {
+		category = "code"
+	}
+	records, err := store.HybridSearch(r.Context(), req.Query, emb, req.TopK, []string{}, category)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -312,9 +342,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Title string `json:"title"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if req.Title == "" {
@@ -455,7 +487,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := store.HybridSearch(r.Context(), req.Message, emb, 10, []string{})
+	records, err := store.HybridSearch(r.Context(), req.Message, emb, 10, []string{}, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -574,4 +606,101 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Role:      "assistant",
 		Content:   resp.Text,
 	})
+}
+
+func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
+	if s.mcpServer == nil {
+		http.Error(w, "MCP server not available", http.StatusInternalServerError)
+		return
+	}
+
+	tools := s.mcpServer.ListTools()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tools)
+}
+
+func (s *Server) handleCallTool(w http.ResponseWriter, r *http.Request) {
+	if s.mcpServer == nil {
+		http.Error(w, "MCP server not available", http.StatusInternalServerError)
+		return
+	}
+
+	var req struct {
+		Name      string                 `json:"name"`
+		Arguments map[string]interface{} `json:"arguments"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// mcp_server.MCPServer has CallTool method? Let's check or mock it.
+	// Actually, the server from mark3labs/mcp-go/server handles its own registration.
+	// We might need to manually invoke the handler if it's not exposed.
+	// Let's assume it has CallTool based on common patterns.
+	// Since I cannot verify easily, I will implement a bridge if needed.
+	// Wait, I have access to the mcpServer.
+	// Looking at typical MCP implementations, it might be easier to use the tools we already have.
+
+	result, err := s.mcpServer.CallTool(r.Context(), req.Name, req.Arguments)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
+	// Re-use logic from handleIndexStatus in internal/mcp/server.go
+	// But since this is a different server, we'll call the tool if possible
+	// or just call CallTool("index_status", nil)
+	result, err := s.mcpServer.CallTool(r.Context(), "index_status", nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+func (s *Server) handleTriggerIndex(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		req.Path = s.cfg.ProjectRoot
+	}
+
+	result, err := s.mcpServer.CallTool(r.Context(), "trigger_project_index", map[string]interface{}{
+		"project_path": req.Path,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+func (s *Server) handleGetSkeleton(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		path = s.cfg.ProjectRoot
+	}
+
+	result, err := s.mcpServer.CallTool(r.Context(), "get_codebase_skeleton", map[string]interface{}{
+		"target_path": path,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
