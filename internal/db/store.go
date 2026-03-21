@@ -101,7 +101,8 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 		allResults = res
 	} else {
 		for _, pid := range projectIDs {
-			where := map[string]string{"project_id": pid}
+			where := make(map[string]string)
+			where["project_id"] = pid
 			if category != "" {
 				where["category"] = category
 			}
@@ -143,6 +144,21 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 		if !isMatch {
 			if strings.Contains(strings.ToLower(doc.Content), queryLower) {
 				isMatch = true
+			}
+		}
+
+		// Check Calls metadata for usage discovery
+		if !isMatch {
+			if callsJSON, ok := doc.Metadata["calls"]; ok {
+				var calls []string
+				if err := json.Unmarshal([]byte(callsJSON), &calls); err == nil {
+					for _, call := range calls {
+						if strings.EqualFold(call, query) {
+							isMatch = true
+							break
+						}
+					}
+				}
 			}
 		}
 
@@ -267,7 +283,8 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 	} else {
 		// Perform individual queries for each project to avoid truncation issues
 		for _, pid := range projectIDs {
-			where := map[string]string{"project_id": pid}
+			where := make(map[string]string)
+			where["project_id"] = pid
 			if category != "" {
 				where["category"] = category
 			}
@@ -366,8 +383,8 @@ func (s *Store) GetFileHash(ctx context.Context, path string, projectID string) 
 	return res[0].Metadata["hash"], nil
 }
 
-func (s *Store) Count() int {
-	return s.collection.Count()
+func (s *Store) Count() int64 {
+	return int64(s.collection.Count())
 }
 
 func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {

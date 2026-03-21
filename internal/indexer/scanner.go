@@ -51,6 +51,7 @@ func EstimateTokens(text string) int {
 // Embedder is an interface for generating vector embeddings from text.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
+	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 }
 
 // IndexFullCodebase performs a comprehensive index of the project directory.
@@ -221,31 +222,71 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 
 	chunks := CreateChunks(contentStr, relPath)
 	var records []db.Record
+	
+	// Prepare texts for batch embedding
+	var texts []string
 	for _, chunk := range chunks {
-		emb, err := embedder.Embed(ctx, chunk.Content)
-		if err != nil {
-			continue
+		texts = append(texts, chunk.Content)
+	}
+
+	if len(texts) > 0 {
+		embs, err := embedder.EmbedBatch(ctx, texts)
+		if err == nil {
+			for i, chunk := range chunks {
+				relJSON, _ := json.Marshal(chunk.Relationships)
+				symJSON, _ := json.Marshal(chunk.Symbols)
+				callsJSON, _ := json.Marshal(chunk.Calls)
+				records = append(records, db.Record{
+					ID:        fmt.Sprintf("%s-%s-%d-%d", cfg.ProjectRoot, relPath, time.Now().UnixNano(), i),
+					Content:   chunk.Content,
+					Embedding: embs[i],
+					Metadata: map[string]string{
+						"path":           relPath,
+						"project_id":     cfg.ProjectRoot,
+						"hash":           currentHash,
+						"relationships":  string(relJSON),
+						"symbols":        string(symJSON),
+						"type":           chunk.Type,
+						"calls":          string(callsJSON),
+						"function_score": fmt.Sprintf("%.2f", chunk.FunctionScore),
+						"category":       category,
+						"updated_at":     updatedAt,
+						"start_line":     strconv.Itoa(chunk.StartLine),
+						"end_line":       strconv.Itoa(chunk.EndLine),
+					},
+				})
+			}
+		} else {
+			// Fallback to single embedding if batch fails
+			for _, chunk := range chunks {
+				emb, err := embedder.Embed(ctx, chunk.Content)
+				if err != nil {
+					continue
+				}
+				relJSON, _ := json.Marshal(chunk.Relationships)
+				symJSON, _ := json.Marshal(chunk.Symbols)
+				callsJSON, _ := json.Marshal(chunk.Calls)
+				records = append(records, db.Record{
+					ID:        fmt.Sprintf("%s-%s-%d", cfg.ProjectRoot, relPath, time.Now().UnixNano()),
+					Content:   chunk.Content,
+					Embedding: emb,
+					Metadata: map[string]string{
+						"path":           relPath,
+						"project_id":     cfg.ProjectRoot,
+						"hash":           currentHash,
+						"relationships":  string(relJSON),
+						"symbols":        string(symJSON),
+						"type":           chunk.Type,
+						"calls":          string(callsJSON),
+						"function_score": fmt.Sprintf("%.2f", chunk.FunctionScore),
+						"category":       category,
+						"updated_at":     updatedAt,
+						"start_line":     strconv.Itoa(chunk.StartLine),
+						"end_line":       strconv.Itoa(chunk.EndLine),
+					},
+				})
+			}
 		}
-		relJSON, _ := json.Marshal(chunk.Relationships)
-		symJSON, _ := json.Marshal(chunk.Symbols)
-		callsJSON, _ := json.Marshal(chunk.Calls)
-		records = append(records, db.Record{
-			ID:        fmt.Sprintf("%s-%s-%d", cfg.ProjectRoot, relPath, time.Now().UnixNano()),
-			Content:   chunk.Content,
-			Embedding: emb,
-			Metadata: map[string]string{
-				"path":           relPath,
-				"project_id":     cfg.ProjectRoot,
-				"hash":           currentHash,
-				"relationships":  string(relJSON),
-				"symbols":        string(symJSON),
-				"type":           chunk.Type,
-				"calls":          string(callsJSON),
-				"function_score": fmt.Sprintf("%.2f", chunk.FunctionScore),
-				"category":       category,
-				"updated_at":     updatedAt,
-			},
-		})
 	}
 
 	if len(records) > 0 {

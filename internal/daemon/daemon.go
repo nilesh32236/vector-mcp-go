@@ -25,8 +25,16 @@ type EmbedRequest struct {
 	Text string
 }
 
+type EmbedBatchRequest struct {
+	Texts []string
+}
+
 type EmbedResponse struct {
 	Embedding []float32
+}
+
+type EmbedBatchResponse struct {
+	Embeddings [][]float32
 }
 
 type IndexRequest struct {
@@ -99,6 +107,15 @@ func (s *Service) Embed(req EmbedRequest, resp *EmbedResponse) error {
 	return nil
 }
 
+func (s *Service) EmbedBatch(req EmbedBatchRequest, resp *EmbedBatchResponse) error {
+	embs, err := s.Embedder.EmbedBatch(context.Background(), req.Texts)
+	if err != nil {
+		return err
+	}
+	resp.Embeddings = embs
+	return nil
+}
+
 func (s *Service) IndexProject(req IndexRequest, resp *IndexResponse) error {
 	select {
 	case s.IndexQueue <- req.Path:
@@ -130,6 +147,26 @@ func (s *Service) HybridSearch(req HybridSearchRequest, resp *SearchResponse) er
 		return err
 	}
 	resp.Records = res
+	return nil
+}
+
+func (s *Service) LexicalSearch(req HybridSearchRequest, resp *SearchResponse) error {
+	if s.Store == nil {
+		return fmt.Errorf("master store not initialized")
+	}
+	res, err := s.Store.LexicalSearch(context.Background(), req.Query, req.TopK, req.PIDs, req.Category)
+	if err != nil {
+		return err
+	}
+	resp.Records = res
+	return nil
+}
+
+func (s *Service) Count(req struct{}, resp *struct{ Count int64 }) error {
+	if s.Store == nil {
+		return fmt.Errorf("master store not initialized")
+	}
+	resp.Count = s.Store.Count()
 	return nil
 }
 
@@ -397,6 +434,32 @@ func (re *RemoteEmbedder) Embed(ctx context.Context, text string) ([]float32, er
 	}
 }
 
+func (re *RemoteEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	client, err := rpc.Dial("unix", re.socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to master daemon: %w", err)
+	}
+	defer client.Close()
+
+	var resp EmbedBatchResponse
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Call("VectorDaemon.EmbedBatch", EmbedBatchRequest{Texts: texts}, &resp)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+		return resp.Embeddings, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(60 * time.Second):
+		return nil, fmt.Errorf("embedding batch RPC timeout")
+	}
+}
+
 // RemoteStore implements db.Store methods by delegating to the Master via RPC.
 type RemoteStore struct {
 	socketPath string
@@ -476,6 +539,27 @@ func (rs *RemoteStore) GetByPrefix(ctx context.Context, prefix string, projectID
 	var resp SearchResponse
 	err := rs.call("GetByPrefix", DeleteRequest{Prefix: prefix, ProjectID: projectID}, &resp)
 	return resp.Records, err
+}
+
+func (rs *RemoteStore) LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string, category string) ([]db.Record, error) {
+	var resp SearchResponse
+	// We'll reuse HybridSearchRequest structure or create a new LexicalSearchRequest.
+	// For simplicity, let's just use HybridSearchRequest but the master will call LexicalSearch.
+	// Actually, let's create a LexicalSearchRequest for clarity if we want.
+	// For now, let's assume we use HybridSearchRequest.
+	err := rs.call("LexicalSearch", HybridSearchRequest{Query: query, TopK: topK, PIDs: projectIDs, Category: category}, &resp)
+	return resp.Records, err
+}
+
+func (rs *RemoteStore) Count() int64 {
+	var resp struct {
+		Count int64
+	}
+	err := rs.call("Count", struct{}{}, &resp)
+	if err != nil {
+		return 0
+	}
+	return resp.Count
 }
 
 func (rs *RemoteStore) SetStatus(ctx context.Context, projectID string, status string) error {

@@ -18,6 +18,14 @@ func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 	return make([]float32, 1024), nil
 }
 
+func (m *mockEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	results := make([][]float32, len(texts))
+	for i := range texts {
+		results[i] = make([]float32, 1024)
+	}
+	return results, nil
+}
+
 func TestWorkerStatusUpdate(t *testing.T) {
 	ctx := context.Background()
 	dbPath := "./test_worker_db"

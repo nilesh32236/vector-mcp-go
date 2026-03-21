@@ -21,6 +21,8 @@ type Chunk struct {
 	Type          string   // "function", "class", etc.
 	Calls         []string // Function calls made inside this block
 	FunctionScore float32
+	StartLine     int
+	EndLine       int
 }
 
 func CreateChunks(text string, filePath string) []Chunk {
@@ -78,14 +80,20 @@ func treeSitterChunkJS(content string, filePath string) []Chunk {
 
 	// Queries for functions, classes, interfaces, etc.
 	queryStrings := []string{
-		`(export_statement (class_declaration (type_identifier) @name)) @entity`,
-		`(class_declaration (type_identifier) @name) @entity`,
-		`(export_statement (function_declaration (identifier) @name)) @entity`,
-		`(function_declaration (identifier) @name) @entity`,
+		`(export_statement declaration: (class_declaration name: (type_identifier) @name)) @entity`,
+		`(class_declaration name: (type_identifier) @name) @entity`,
+		`(export_statement declaration: (function_declaration name: (identifier) @name)) @entity`,
+		`(function_declaration name: (identifier) @name) @entity`,
 		`(export_statement (interface_declaration (type_identifier) @name)) @entity`,
 		`(interface_declaration (type_identifier) @name) @entity`,
 		`(method_definition (property_identifier) @name) @entity`,
 		`(variable_declarator (identifier) @name value: [(arrow_function) (function_expression)]) @entity`,
+		`(lexical_declaration (variable_declarator (identifier) @name value: [(arrow_function) (function_expression)])) @entity`,
+		`(export_statement (lexical_declaration (variable_declarator (identifier) @name value: [(arrow_function) (function_expression)]))) @entity`,
+		`(export_statement (export_default_declaration value: (function_declaration name: (identifier)? @name)) @entity) @entity`,
+		`(export_statement (export_default_declaration value: [(arrow_function) (function_expression) (identifier) @name])) @entity`,
+		`(export_statement (export_default_declaration value: (call_expression) @name)) @entity`,
+		`(call_expression) @entity`,
 		`(expression_statement) @entity`,
 	}
 
@@ -121,13 +129,28 @@ func treeSitterChunkJS(content string, filePath string) []Chunk {
 
 					var entityType string
 					nodeToAnalyze := entityNode
+					
+					// Improved node drilling for export statements
 					if entityNode.Type(lang) == "export_statement" {
-						// Find the declaration inside
 						for _, child := range entityNode.Children() {
 							t := child.Type(lang)
-							if strings.HasSuffix(t, "_declaration") || t == "lexical_declaration" || t == "method_definition" || t == "variable_declarator" {
+							if strings.HasSuffix(t, "_declaration") || t == "lexical_declaration" || t == "method_definition" || t == "variable_declarator" || t == "export_default_declaration" {
 								nodeToAnalyze = child
 								break
+							}
+						}
+					}
+
+					if nodeToAnalyze.Type(lang) == "export_default_declaration" {
+						entityType = "export_default"
+						if name == "" {
+							// Use filename as name for anonymous defaults (common in Next.js pages)
+							base := filepath.Base(filePath)
+							name = strings.TrimSuffix(base, filepath.Ext(base))
+							if name == "page" || name == "layout" || name == "route" {
+								// For Next.js, include parent dir to differentiate
+								parent := filepath.Base(filepath.Dir(filePath))
+								name = parent + "_" + name
 							}
 						}
 					}
@@ -145,15 +168,25 @@ func treeSitterChunkJS(content string, filePath string) []Chunk {
 						entityType = "type"
 					case "enum_declaration":
 						entityType = "enum"
-					case "variable_declarator":
+					case "variable_declarator", "lexical_declaration":
 						entityType = "variable"
+						// Check if it's an arrow function component
+						if strings.Contains(entityNode.Text([]byte(content)), "=>") {
+							entityType = "component"
+						}
 					case "expression_statement":
 						entityType = "call"
-					case "lexical_declaration":
-						// Further drill down lexical_declaration to see if it's a function variable
-						entityType = "variable"
 					default:
-						entityType = "entity"
+						if entityType == "" {
+							entityType = "entity"
+						}
+					}
+					
+					// Detect React Components (Function name starting with Uppercase)
+					if (entityType == "function" || entityType == "export_default") && len(name) > 0 {
+						if name[0] >= 'A' && name[0] <= 'Z' {
+							entityType = "component"
+						}
 					}
 					chunkContent := entityNode.Text([]byte(content))
 
@@ -170,9 +203,9 @@ func treeSitterChunkJS(content string, filePath string) []Chunk {
 					if docString != "" {
 						chunkContent = docString + chunkContent
 					}
-					
+
 					calls := extractCalls(entityNode, content, lang)
-					
+
 					// Filter out own name from calls to avoid false usage positives
 					var filteredCalls []string
 					for _, c := range calls {
@@ -183,12 +216,25 @@ func treeSitterChunkJS(content string, filePath string) []Chunk {
 
 					score := calculateScore(chunkContent, entityNode, filteredCalls, content, lang)
 
+					startLine := int(entityNode.StartPoint().Row) + 1
+					endLine := int(entityNode.EndPoint().Row) + 1
+
+					// If we added docstring, adjust start line
+					if docString != "" {
+						startLine -= strings.Count(docString, "\n")
+						if startLine < 1 {
+							startLine = 1
+						}
+					}
+
 					rawChunks = append(rawChunks, Chunk{
 						Content:       strings.TrimSpace(chunkContent),
 						Symbols:       []string{name},
 						Type:          entityType,
 						Calls:         filteredCalls,
 						FunctionScore: score,
+						StartLine:     startLine,
+						EndLine:       endLine,
 					})
 					rawPositions = append(rawPositions, chunkPos{entityNode.StartByte(), entityNode.EndByte()})
 				}
@@ -222,7 +268,7 @@ func treeSitterChunkJS(content string, filePath string) []Chunk {
 					break
 				}
 				// Redundant if they are same type and c2 is larger
-				if c1.Type == c2.Type && (rawPositions[i].end - rawPositions[i].start) < (rawPositions[j].end - rawPositions[j].start) {
+				if c1.Type == c2.Type && (rawPositions[i].end-rawPositions[i].start) < (rawPositions[j].end-rawPositions[j].start) {
 					isRedundant = true
 					break
 				}
@@ -331,8 +377,11 @@ func astChunkGo(text string) []Chunk {
 
 			if start >= 0 && end <= len(text) && start < end {
 				chunks = append(chunks, Chunk{
-					Content: text[start:end],
-					Symbols: []string{symbolName},
+					Content:   text[start:end],
+					Symbols:   []string{symbolName},
+					Type:      "function",
+					StartLine: fset.Position(x.Pos()).Line,
+					EndLine:   fset.Position(x.End()).Line,
 				})
 			}
 			return false
@@ -354,8 +403,11 @@ func astChunkGo(text string) []Chunk {
 
 				if start >= 0 && end <= len(text) && start < end {
 					chunks = append(chunks, Chunk{
-						Content: text[start:end],
-						Symbols: symbols,
+						Content:   text[start:end],
+						Symbols:   symbols,
+						Type:      "type",
+						StartLine: fset.Position(x.Pos()).Line,
+						EndLine:   fset.Position(x.End()).Line,
 					})
 				}
 				return false
@@ -399,8 +451,10 @@ func chunkJavaScriptTypeScript(content string, filePath string) []Chunk {
 		}
 
 		chunks = append(chunks, Chunk{
-			Content: strings.TrimSpace(content[start:end]),
-			Symbols: []string{symbolName},
+			Content:   strings.TrimSpace(content[start:end]),
+			Symbols:   []string{symbolName},
+			StartLine: strings.Count(content[:start], "\n") + 1,
+			EndLine:   strings.Count(content[:end], "\n") + 1,
 		})
 	}
 
@@ -475,18 +529,22 @@ func semanticRegexChunk(text string) []Chunk {
 	var chunks []Chunk
 	var currentChunk strings.Builder
 	var currentSymbols []string
+	startLine := 1
 
 	exportRegex := regexp.MustCompile(`(?:export\s+)?(?:async\s+)?(?:function|class|interface|const|let|type|enum|def|func)\s+([a-zA-Z0-9_]+)`)
 
-	for _, line := range lines {
+	for i, line := range lines {
 		match := exportRegex.FindStringSubmatch(line)
 		if (len(match) > 1 && currentChunk.Len() > 3000) || currentChunk.Len() > 8000 {
 			chunks = append(chunks, Chunk{
-				Content: strings.TrimSpace(currentChunk.String()),
-				Symbols: append([]string{}, currentSymbols...),
+				Content:   strings.TrimSpace(currentChunk.String()),
+				Symbols:   append([]string{}, currentSymbols...),
+				StartLine: startLine,
+				EndLine:   i,
 			})
 			currentChunk.Reset()
 			currentSymbols = nil
+			startLine = i + 1
 		}
 
 		if len(match) > 1 {
@@ -498,8 +556,10 @@ func semanticRegexChunk(text string) []Chunk {
 
 	if currentChunk.Len() > 0 {
 		chunks = append(chunks, Chunk{
-			Content: strings.TrimSpace(currentChunk.String()),
-			Symbols: currentSymbols,
+			Content:   strings.TrimSpace(currentChunk.String()),
+			Symbols:   currentSymbols,
+			StartLine: startLine,
+			EndLine:   len(lines),
 		})
 	}
 
@@ -522,8 +582,14 @@ func fastChunk(text string) []Chunk {
 			end = len(runes)
 		}
 
+		content := string(runes[i:end])
+		startLine := strings.Count(string(runes[:i]), "\n") + 1
+		endLine := startLine + strings.Count(content, "\n")
+
 		chunks = append(chunks, Chunk{
-			Content: string(runes[i:end]),
+			Content:   content,
+			StartLine: startLine,
+			EndLine:   endLine,
 		})
 
 		if end == len(runes) {

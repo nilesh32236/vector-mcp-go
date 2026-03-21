@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
+	mcp_lib "github.com/mark3labs/mcp-go/mcp"
 	mcp_server "github.com/mark3labs/mcp-go/server"
 	"github.com/nilesh32236/vector-mcp-go/internal/chat"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
@@ -180,8 +182,6 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	var category string
 	if req.DocsOnly {
 		category = "document"
-	} else {
-		category = "code"
 	}
 	records, err := store.HybridSearch(r.Context(), req.Query, emb, req.TopK, []string{}, category)
 	if err != nil {
@@ -425,6 +425,7 @@ type ChatResponse struct {
 	ModelUsed string `json:"model_used"`
 	Role      string `json:"role"`
 	Content   string `json:"content"`
+	ToolCalls int    `json:"tool_calls"`
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -510,9 +511,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	systemPrompt := "You are an expert AI coding assistant. Use the provided codebase context to answer the user's question. If the answer is not in the context, say so. \n\nContext:\n" + contextBuilder
-
 	// 4. Tools config
-	tools := []llm.Tool{
+	var allTools []mcp_lib.Tool
+	if s.mcpServer != nil {
+		allTools = s.mcpServer.ListTools()
+	}
+
+	// Add default manual context tool
+	geminiTools := []llm.Tool{
 		{
 			FunctionDeclarations: []llm.FunctionDeclaration{
 				{
@@ -533,37 +539,83 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	for _, t := range allTools {
+		// Convert mcp.Tool to llm.FunctionDeclaration
+		fd := llm.FunctionDeclaration{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters: llm.Parameters{
+				Type:       "OBJECT",
+				Properties: make(map[string]llm.Property),
+				Required:   t.InputSchema.Required,
+			},
+		}
+
+		// Convert Schema Properties to llm Properties
+		for k, vInterface := range t.InputSchema.Properties {
+			v, ok := vInterface.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			propType := "STRING"
+			if tStr, ok := v["type"].(string); ok {
+				propType = strings.ToUpper(tStr)
+			}
+			desc := ""
+			if dStr, ok := v["description"].(string); ok {
+				desc = dStr
+			}
+			fd.Parameters.Properties[k] = llm.Property{
+				Type:        propType,
+				Description: desc,
+			}
+		}
+		geminiTools[0].FunctionDeclarations = append(geminiTools[0].FunctionDeclarations, fd)
+	}
+
 	endpointURL := ""
 	if h := r.Header.Get("X-Test-Gemini-URL"); h != "" {
 		endpointURL = h
 	}
 
-	// 5. Call Gemini
-	resp, err := llm.GenerateGeminiCompletion(r.Context(), s.cfg.GeminiApiKey, model, systemPrompt, history.Messages, tools, endpointURL)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	// 5. Chat & Tool Loop
+	var finalContent string
+	var i int
+	maxTurns := 10
+	for i = 0; i < maxTurns; i++ {
+		resp, err := llm.GenerateGeminiCompletion(r.Context(), s.cfg.GeminiApiKey, model, systemPrompt, history.Messages, geminiTools, endpointURL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-	// 6. Handle Function Calling loop
-	if resp.FunctionCall != nil && resp.FunctionCall.Name == "save_manual_context" {
-		contentInter, ok := resp.FunctionCall.Args["content"]
-		if ok {
-			contentStr, _ := contentInter.(string)
+		if resp.FunctionCall != nil {
+			// 1. Handle Built-in Tools
+			if resp.FunctionCall.Name == "save_manual_context" {
+				contentInter, ok := resp.FunctionCall.Args["content"]
+				if ok {
+					contentStr, _ := contentInter.(string)
+					emb, _ := s.embedder.Embed(r.Context(), contentStr)
+					meta := map[string]string{"type": "manual_context", "source": "agentic_memory"}
+					id := fmt.Sprintf("manual_%d", time.Now().UnixNano())
+					store.Insert(r.Context(), []db.Record{{ID: id, Content: contentStr, Embedding: emb, Metadata: meta}})
 
-			// Save to LanceDB
-			emb, _ := s.embedder.Embed(r.Context(), contentStr)
-			meta := map[string]string{
-				"type":   "manual_context",
-				"source": "agentic_memory",
+					fnCallMsg := llm.Message{Role: "assistant", FunctionCall: resp.FunctionCall}
+					s.chatStore.AppendMessage(req.SessionID, fnCallMsg)
+					history.Messages = append(history.Messages, fnCallMsg)
+					fnRespMsg := llm.Message{Role: "function", FunctionResponse: &llm.FunctionResponse{Name: "save_manual_context", Response: map[string]interface{}{"status": "success"}}}
+					s.chatStore.AppendMessage(req.SessionID, fnRespMsg)
+					history.Messages = append(history.Messages, fnRespMsg)
+					continue
+				}
 			}
-			id := fmt.Sprintf("manual_%d", time.Now().UnixNano())
-			store.Insert(r.Context(), []db.Record{{
-				ID:        id,
-				Content:   contentStr,
-				Embedding: emb,
-				Metadata:  meta,
-			}})
+
+			// 2. Executing MCP Tool
+			if s.mcpServer == nil {
+				http.Error(w, "MCP server not available for tool calling", http.StatusInternalServerError)
+				return
+			}
+			toolResult, err := s.mcpServer.CallTool(r.Context(), resp.FunctionCall.Name, resp.FunctionCall.Args)
 
 			// Append FunctionCall to history
 			fnCallMsg := llm.Message{
@@ -573,38 +625,45 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			s.chatStore.AppendMessage(req.SessionID, fnCallMsg)
 			history.Messages = append(history.Messages, fnCallMsg)
 
+			// Prepare Response
+			var resContent map[string]interface{}
+			if err != nil {
+				resContent = map[string]interface{}{"error": err.Error()}
+			} else {
+				// We expect toolResult to have Text or other content
+				resContent = map[string]interface{}{"result": toolResult.Content}
+			}
+
 			// Append FunctionResponse to history
 			fnRespMsg := llm.Message{
 				Role: "function",
 				FunctionResponse: &llm.FunctionResponse{
-					Name: "save_manual_context",
-					Response: map[string]interface{}{
-						"status":  "success",
-						"message": "Context saved successfully to Global Brain.",
-					},
+					Name:     resp.FunctionCall.Name,
+					Response: resContent,
 				},
 			}
 			s.chatStore.AppendMessage(req.SessionID, fnRespMsg)
 			history.Messages = append(history.Messages, fnRespMsg)
 
-			// Call Gemini again
-			resp, err = llm.GenerateGeminiCompletion(r.Context(), s.cfg.GeminiApiKey, model, systemPrompt, history.Messages, tools, endpointURL)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
+			// Continue loop to get final answer from Gemini
+			continue
 		}
+
+		// If no more function calls, we have our final text
+		finalContent = resp.Text
+		break
 	}
 
 	// 7. Append Assistant final message
-	assistantMsg := llm.Message{Role: "assistant", Content: resp.Text}
+	assistantMsg := llm.Message{Role: "assistant", Content: finalContent}
 	s.chatStore.AppendMessage(req.SessionID, assistantMsg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ChatResponse{
 		ModelUsed: model,
 		Role:      "assistant",
-		Content:   resp.Text,
+		Content:   finalContent,
+		ToolCalls: i,
 	})
 }
 

@@ -64,6 +64,15 @@ func (pe *poolEmbedder) Embed(ctx context.Context, text string) ([]float32, erro
 	return e.Embed(ctx, text)
 }
 
+func (pe *poolEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	e, err := pe.pool.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer pe.pool.Put(e)
+	return e.EmbedBatch(ctx, texts)
+}
+
 func main() {
 	dataDirFlag := flag.String("data-dir", "", "Base directory for DB and models")
 	modelsDirFlag := flag.String("models-dir", "", "Specific directory for models")

@@ -12,7 +12,7 @@ func TestStoreStatuses(t *testing.T) {
 	os.RemoveAll(dbPath)
 	defer os.RemoveAll(dbPath)
 
-	store, err := Connect(ctx, dbPath, "test_collection")
+	store, err := Connect(ctx, dbPath, "test_collection", 384)
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}

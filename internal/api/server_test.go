@@ -24,6 +24,18 @@ func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 	return emb, nil
 }
 
+func (m *mockEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	results := make([][]float32, len(texts))
+	for i, text := range texts {
+		emb, err := m.Embed(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		results[i] = emb
+	}
+	return results, nil
+}
+
 // Better yet, let's just create a real temp db store for the test
 func setupTestServer(t *testing.T) (*Server, func()) {
 	tempDir := t.TempDir()
@@ -47,7 +59,7 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 
 	emb := &mockEmbedder{dimension: 1024}
 
-	srv := NewServer(cfg, sg, emb)
+	srv := NewServer(cfg, sg, emb, nil)
 
 	cleanup := func() {
 		// nothing special to cleanup

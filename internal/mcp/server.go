@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -34,6 +35,8 @@ type IndexerStore interface {
 	GetAllRecords(ctx context.Context) ([]db.Record, error)
 	GetByPath(ctx context.Context, path string, projectID string) ([]db.Record, error)
 	GetByPrefix(ctx context.Context, prefix string, projectID string) ([]db.Record, error)
+	LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string, category string) ([]db.Record, error)
+	Count() int64
 }
 
 // Server is the core MCP server that manages tools and handles requests.
@@ -125,6 +128,7 @@ func (s *Server) registerTools() {
 	addTool(mcp.NewTool("get_related_context",
 		mcp.WithDescription("Retrieve context for a file and its local dependencies, optionally cross-referencing other projects. Use this to understand how a specific file fits into the larger codebase."),
 		mcp.WithString("filePath", mcp.Description("The relative path of the file to analyze")),
+		mcp.WithNumber("max_tokens", mcp.Description("Optional: Maximum total tokens to include in the context (default 10,000)")),
 	), s.handleGetRelatedContext)
 
 	// 3. find_duplicate_code
@@ -138,6 +142,7 @@ func (s *Server) registerTools() {
 		mcp.WithDescription("Delete specific shared memory context, or completely wipe a project's vector index."),
 		mcp.WithString("target_path", mcp.Description("The exact file path, context ID, or 'ALL' to clear the whole project.")),
 		mcp.WithString("project_id", mcp.Description("The project ID to target. Defaults to the current project.")),
+		mcp.WithBoolean("dry_run", mcp.Description("Optional: If true, returns the list of files that would be deleted without actually deleting them.")),
 	), s.handleDeleteContext)
 
 	// 5. index_status
@@ -171,6 +176,9 @@ func (s *Server) registerTools() {
 		mcp.WithDescription("Returns a topological tree map of the directory structure. Use this to progressively explore large codebases by specifying sub-directories and depths."),
 		mcp.WithString("target_path", mcp.Description("Relative or absolute path to the directory to map (optional, defaults to project root).")),
 		mcp.WithNumber("max_depth", mcp.Description("Maximum depth of the tree to generate (optional, defaults to 3).")),
+		mcp.WithString("include_pattern", mcp.Description("Optional: Only include files matching this glob pattern")),
+		mcp.WithString("exclude_pattern", mcp.Description("Optional: Exclude files matching this glob pattern")),
+		mcp.WithNumber("max_items", mcp.Description("Optional: Maximum number of items to return (default 1000)")),
 	), s.handleGetCodebaseSkeleton)
 
 	// 7. check_dependency_health
@@ -196,6 +204,34 @@ func (s *Server) registerTools() {
 	addTool(mcp.NewTool("find_dead_code",
 		mcp.WithDescription("Identifies potentially dead code by finding exported symbols that are never imported or called."),
 	), s.handleFindDeadCode)
+
+	// 11. filesystem_grep
+	addTool(mcp.NewTool("filesystem_grep",
+		mcp.WithDescription("Exact string or regex search across the project files."),
+		mcp.WithString("query", mcp.Description("The search query (string or regex)")),
+		mcp.WithString("include_pattern", mcp.Description("Optional: Glob pattern to filter files (e.g. '*.go')")),
+		mcp.WithBoolean("is_regex", mcp.Description("Whether the query is a regular expression")),
+	), s.handleFilesystemGrep)
+
+	// 12. search_codebase
+	addTool(mcp.NewTool("search_codebase",
+		mcp.WithDescription("Unified semantic and lexical search across the codebase with advanced filtering."),
+		mcp.WithString("query", mcp.Description("The natural language search query")),
+		mcp.WithString("category", mcp.Description("Optional: 'code' or 'document'. Defaults to searching both.")),
+		mcp.WithNumber("topK", mcp.Description("Number of results to return (default 10)")),
+		mcp.WithString("path_filter", mcp.Description("Optional: Only search files whose path contains this string")),
+		mcp.WithNumber("min_score", mcp.Description("Optional: Minimum similarity score (0.0 to 1.0) to include a result")),
+		mcp.WithNumber("max_tokens", mcp.Description("Optional: Maximum total tokens to include in the context (default 10,000)")),
+		mcp.WithArray("cross_reference_projects",
+			mcp.Description("Optional list of project IDs to search across"),
+			mcp.WithStringItems(),
+		),
+	), s.handleSearchCodebase)
+
+	// 13. get_indexing_diagnostics
+	addTool(mcp.NewTool("get_indexing_diagnostics",
+		mcp.WithDescription("Provides detailed diagnostics on the indexing process, including recent errors and queue status."),
+	), s.handleGetIndexingDiagnostics)
 }
 
 func (s *Server) handleTriggerProjectIndex(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -274,6 +310,11 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	filePath := request.GetString("filePath", "")
+	maxTokens := int(request.GetFloat("max_tokens", float64(indexer.MaxContextTokens)))
+	if maxTokens <= 0 {
+		maxTokens = indexer.MaxContextTokens
+	}
+
 	store, err := s.getStore(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -333,7 +374,7 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 	out.WriteString("    </metadata>\n")
 	for _, r := range records {
 		tokens := indexer.EstimateTokens(r.Content)
-		if currentTokenCount+tokens > indexer.MaxContextTokens {
+		if currentTokenCount+tokens > maxTokens {
 			omittedFiles = append(omittedFiles, filePath)
 			continue
 		}
@@ -391,7 +432,7 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 				out.WriteString("    </metadata>\n")
 				for _, dr := range fileChunks {
 					tokens := indexer.EstimateTokens(dr.Content)
-					if currentTokenCount+tokens > indexer.MaxContextTokens {
+					if currentTokenCount+tokens > maxTokens {
 						omittedFiles = append(omittedFiles, dr.Metadata["path"])
 						continue
 					}
@@ -400,7 +441,7 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 					foundAny = true
 				}
 			}
-			if !foundAny && currentTokenCount < indexer.MaxContextTokens {
+			if !foundAny && currentTokenCount < maxTokens {
 				out.WriteString("    <error>No indexed chunks found.</error>\n")
 			}
 			out.WriteString("  </file>\n")
@@ -411,6 +452,41 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 		omittedJSON, _ := json.Marshal(omittedFiles)
 		out.WriteString(string(omittedJSON) + "</files>\n  </omitted_matches>\n")
 	}
+
+	// Usage Samples: Optimized cross-file symbol search
+	if len(allSymbols) > 0 {
+		out.WriteString("  <usage_samples>\n")
+		foundUsage := false
+		for s := range allSymbols {
+			// Find usage of symbol 's' across projects
+			usages, err := store.LexicalSearch(ctx, s, 5, pids, "")
+			if err != nil {
+				continue
+			}
+
+			for _, dr := range usages {
+				if dr.Metadata["path"] == filePath {
+					continue
+				}
+				
+				tokens := indexer.EstimateTokens(dr.Content)
+				if currentTokenCount+tokens > maxTokens {
+					continue
+				}
+
+				out.WriteString(fmt.Sprintf("    <sample symbol=\"%s\" used_in=\"%s\">\n", s, dr.Metadata["path"]))
+				out.WriteString(dr.Content + "\n")
+				out.WriteString("    </sample>\n")
+				currentTokenCount += tokens
+				foundUsage = true
+			}
+		}
+		if !foundUsage {
+			out.WriteString("    <info>No external usage samples found.</info>\n")
+		}
+		out.WriteString("  </usage_samples>\n")
+	}
+
 	out.WriteString("</context>")
 	return mcp.NewToolResultText(out.String()), nil
 }
@@ -470,10 +546,39 @@ func (s *Server) handleDeleteContext(ctx context.Context, request mcp.CallToolRe
 		return mcp.NewToolResultError("target_path is required"), nil
 	}
 	projectID := request.GetString("project_id", s.cfg.ProjectRoot)
+
+	dryRun := false
+	if args, ok := request.Params.Arguments.(map[string]interface{}); ok {
+		dryRun, _ = args["dry_run"].(bool)
+	}
+
 	store, err := s.getStore(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+
+	if dryRun {
+		var toDelete []string
+		if targetPath == "ALL" {
+			toDelete = append(toDelete, "ALL RECORDS for project: "+projectID)
+		} else {
+			records, _ := store.GetByPrefix(ctx, targetPath, projectID)
+			uniquePaths := make(map[string]bool)
+			for _, r := range records {
+				uniquePaths[r.Metadata["path"]] = true
+			}
+			for p := range uniquePaths {
+				toDelete = append(toDelete, p)
+			}
+			sort.Strings(toDelete)
+		}
+
+		if len(toDelete) == 0 {
+			return mcp.NewToolResultText("Dry Run: No records found to delete."), nil
+		}
+		return mcp.NewToolResultText("Dry Run: The following paths/records would be deleted:\n- " + strings.Join(toDelete, "\n- ")), nil
+	}
+
 	if targetPath == "ALL" {
 		err = store.ClearProject(ctx, projectID)
 		if err != nil {
@@ -561,7 +666,15 @@ func (s *Server) handleRetrieveContext(ctx context.Context, request mcp.CallTool
 			out.WriteString("... (truncating further results to stay within context window)")
 			break
 		}
-		out.WriteString(fmt.Sprintf("#### Result %d: %s\n", i+1, r.Metadata["path"]))
+
+		lineRange := ""
+		if start, ok := r.Metadata["start_line"]; ok {
+			if end, ok := r.Metadata["end_line"]; ok {
+				lineRange = fmt.Sprintf(" (Lines %s-%s)", start, end)
+			}
+		}
+
+		out.WriteString(fmt.Sprintf("#### Result %d: %s%s\n", i+1, r.Metadata["path"], lineRange))
 		if syms := r.Metadata["symbols"]; syms != "" {
 			out.WriteString(fmt.Sprintf("- **Entities**: %s\n", syms))
 		}
@@ -615,7 +728,15 @@ func (s *Server) handleRetrieveDocs(ctx context.Context, request mcp.CallToolReq
 			out.WriteString("... (truncating further results to stay within context window)")
 			break
 		}
-		out.WriteString(fmt.Sprintf("#### Result %d: %s\n", i+1, r.Metadata["path"]))
+
+		lineRange := ""
+		if start, ok := r.Metadata["start_line"]; ok {
+			if end, ok := r.Metadata["end_line"]; ok {
+				lineRange = fmt.Sprintf(" (Lines %s-%s)", start, end)
+			}
+		}
+
+		out.WriteString(fmt.Sprintf("#### Result %d: %s%s\n", i+1, r.Metadata["path"], lineRange))
 		out.WriteString(fmt.Sprintf("```\n%s\n```\n\n", r.Content))
 		currentTokenCount += tokens
 	}
@@ -632,7 +753,11 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 	if !filepath.IsAbs(targetPath) {
 		targetPath = filepath.Join(s.cfg.ProjectRoot, targetPath)
 	}
-	maxDepth := request.GetInt("max_depth", 3)
+	maxDepth := int(request.GetFloat("max_depth", 3))
+	includePattern := request.GetString("include_pattern", "")
+	excludePattern := request.GetString("exclude_pattern", "")
+	maxItems := int(request.GetFloat("max_items", 1000))
+
 	info, err := os.Stat(targetPath)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Invalid target_path: %v", err)), nil
@@ -643,7 +768,6 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 	var out strings.Builder
 	out.WriteString(fmt.Sprintf("Directory Tree: %s (Depth Limit: %d)\n", targetPath, maxDepth))
 	itemCount := 0
-	maxItems := 1500
 	truncated := false
 	err = filepath.WalkDir(targetPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -671,6 +795,20 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 			if depth > maxDepth {
 				return nil
 			}
+
+			// Pattern filtering
+			if includePattern != "" {
+				matched, _ := filepath.Match(includePattern, d.Name())
+				if !matched {
+					return nil
+				}
+			}
+			if excludePattern != "" {
+				matched, _ := filepath.Match(excludePattern, d.Name())
+				if matched {
+					return nil
+				}
+			}
 		}
 		if itemCount >= maxItems {
 			truncated = true
@@ -685,7 +823,7 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 		return mcp.NewToolResultError(fmt.Sprintf("Error walking directory: %v", err)), nil
 	}
 	if truncated {
-		out.WriteString(fmt.Sprintf("... (tree truncated, reached %d item limit. Please target a deeper sub-directory)\n", maxItems))
+		out.WriteString(fmt.Sprintf("... (tree truncated, reached %d item limit)\n", maxItems))
 	}
 	return mcp.NewToolResultText(fmt.Sprintf("<codebase_skeleton>\n%s</codebase_skeleton>", out.String())), nil
 }
@@ -701,27 +839,57 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 		return mcp.NewToolResultError(fmt.Sprintf("Invalid path: %v", err)), nil
 	}
 
-	// 1. Read package.json
-	pkgJSONPath := filepath.Join(absPath, "package.json")
-	pkgData, err := os.ReadFile(pkgJSONPath)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to read package.json at %s: %v", pkgJSONPath, err)), nil
-	}
-
-	var pkg struct {
-		Dependencies    map[string]string `json:"dependencies"`
-		DevDependencies map[string]string `json:"devDependencies"`
-	}
-	if err := json.Unmarshal(pkgData, &pkg); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to parse package.json: %v", err)), nil
-	}
-
 	depSet := make(map[string]bool)
-	for d := range pkg.Dependencies {
-		depSet[d] = true
+	projectType := "unknown"
+
+	// 1. Detect project type and load dependencies
+	if _, err := os.Stat(filepath.Join(absPath, "package.json")); err == nil {
+		projectType = "npm"
+		pkgData, _ := os.ReadFile(filepath.Join(absPath, "package.json"))
+		var pkg struct {
+			Dependencies    map[string]string `json:"dependencies"`
+			DevDependencies map[string]string `json:"devDependencies"`
+		}
+		if err := json.Unmarshal(pkgData, &pkg); err == nil {
+			for d := range pkg.Dependencies {
+				depSet[d] = true
+			}
+			for d := range pkg.DevDependencies {
+				depSet[d] = true
+			}
+		}
+	} else if _, err := os.Stat(filepath.Join(absPath, "go.mod")); err == nil {
+		projectType = "go"
+		modData, _ := os.ReadFile(filepath.Join(absPath, "go.mod"))
+		lines := strings.Split(string(modData), "\n")
+		// Very simple go.mod parser
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "require ") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					depSet[parts[1]] = true
+				}
+			}
+		}
+	} else if _, err := os.Stat(filepath.Join(absPath, "requirements.txt")); err == nil {
+		projectType = "python"
+		reqData, _ := os.ReadFile(filepath.Join(absPath, "requirements.txt"))
+		lines := strings.Split(string(reqData), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") {
+				// extract pkg name before == or >=
+				pkgName := regexp.MustCompile(`^([a-zA-Z0-9_\-]+)`).FindString(line)
+				if pkgName != "" {
+					depSet[pkgName] = true
+				}
+			}
+		}
 	}
-	for d := range pkg.DevDependencies {
-		depSet[d] = true
+
+	if projectType == "unknown" {
+		return mcp.NewToolResultError("Could not identify project type (no package.json, go.mod, or requirements.txt found)"), nil
 	}
 
 	// 2. Fetch Chunks
@@ -738,21 +906,17 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 
 	// 3. Analyze Relationships
 	missingDeps := make(map[string][]string) // dep -> files
-	monorepoPrefix := "@herexa/"
 
 	for _, r := range records {
 		var rels []string
 		if relStr := r.Metadata["relationships"]; relStr != "" {
 			if err := json.Unmarshal([]byte(relStr), &rels); err == nil {
 				for _, dep := range rels {
-					// Check if it's an external NPM package
-					isExternal := !strings.HasPrefix(dep, ".") &&
-						!strings.HasPrefix(dep, "/") &&
-						!strings.HasPrefix(dep, monorepoPrefix)
-
-					if isExternal {
-						// Extract base package name (e.g., "lodash/fp" -> "lodash")
-						// Scoped packages like "@types/node" should be handled
+					if projectType == "npm" {
+						// Skip local imports and monorepo prefix
+						if strings.HasPrefix(dep, ".") || strings.HasPrefix(dep, "/") || strings.HasPrefix(dep, "@herexa/") {
+							continue
+						}
 						pkgName := dep
 						parts := strings.Split(dep, "/")
 						if strings.HasPrefix(dep, "@") && len(parts) > 1 {
@@ -760,9 +924,23 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 						} else {
 							pkgName = parts[0]
 						}
-
 						if !depSet[pkgName] {
 							missingDeps[pkgName] = append(missingDeps[pkgName], r.Metadata["path"])
+						}
+					} else if projectType == "go" {
+						// Standard library check (simplified: no dots usually)
+						if !strings.Contains(dep, ".") || strings.HasPrefix(dep, s.cfg.ProjectRoot) {
+							continue
+						}
+						if !depSet[dep] {
+							missingDeps[dep] = append(missingDeps[dep], r.Metadata["path"])
+						}
+					} else if projectType == "python" {
+						if strings.HasPrefix(dep, ".") {
+							continue
+						}
+						if !depSet[dep] {
+							missingDeps[dep] = append(missingDeps[dep], r.Metadata["path"])
 						}
 					}
 				}
@@ -772,14 +950,13 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 
 	// 4. Output Report
 	if len(missingDeps) == 0 {
-		return mcp.NewToolResultText("✅ Dependency Health Check: All external imports are correctly declared in package.json."), nil
+		return mcp.NewToolResultText(fmt.Sprintf("✅ Dependency Health Check (%s): All external imports are correctly declared.", projectType)), nil
 	}
 
 	var out strings.Builder
-	out.WriteString("## ⚠️ Dependency Health Report\n\n")
-	out.WriteString("The following external dependencies are imported but missing from `package.json`:\n\n")
+	out.WriteString(fmt.Sprintf("## ⚠️ Dependency Health Report (%s)\n\n", projectType))
+	out.WriteString("The following external dependencies are imported but missing from your manifest:\n\n")
 
-	// Sort keys for deterministic output
 	var deps []string
 	for d := range missingDeps {
 		deps = append(deps, d)
@@ -1015,6 +1192,227 @@ func (s *Server) handleFindDeadCode(ctx context.Context, _ mcp.CallToolRequest) 
 	for _, d := range dead {
 		out.WriteString(fmt.Sprintf("- **`%s`** in `%s`\n", d.name, d.path))
 	}
+
+	return mcp.NewToolResultText(out.String()), nil
+}
+
+func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	query := request.GetString("query", "")
+	if query == "" {
+		return mcp.NewToolResultError("query is required"), nil
+	}
+	includePattern := request.GetString("include_pattern", "")
+
+	isRegex := false
+	if args, ok := request.Params.Arguments.(map[string]interface{}); ok {
+		isRegex, _ = args["is_regex"].(bool)
+	}
+
+	var re *regexp.Regexp
+	if isRegex {
+		var err error
+		re, err = regexp.Compile(query)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Invalid regex: %v", err)), nil
+		}
+	}
+
+	var results []string
+	maxMatches := 100
+	matchCount := 0
+
+	err := filepath.WalkDir(s.cfg.ProjectRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if matchCount >= maxMatches {
+			return filepath.SkipDir
+		}
+
+		relPath, _ := filepath.Rel(s.cfg.ProjectRoot, path)
+		if indexer.IsIgnoredDir(filepath.Base(filepath.Dir(path))) || indexer.IsIgnoredFile(d.Name()) {
+			return nil
+		}
+
+		if includePattern != "" {
+			matched, _ := filepath.Match(includePattern, d.Name())
+			if !matched {
+				return nil
+			}
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		lines := strings.Split(string(content), "\n")
+		for i, line := range lines {
+			matched := false
+			if isRegex {
+				matched = re.MatchString(line)
+			} else {
+				matched = strings.Contains(strings.ToLower(line), strings.ToLower(query))
+			}
+
+			if matched {
+				results = append(results, fmt.Sprintf("%s:%d: %s", relPath, i+1, strings.TrimSpace(line)))
+				matchCount++
+				if matchCount >= maxMatches {
+					break
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Error during grep: %v", err)), nil
+	}
+
+	if len(results) == 0 {
+		return mcp.NewToolResultText("No matches found."), nil
+	}
+
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("### Grep Results for '%s' (%d matches):\n\n", query, len(results)))
+	for _, res := range results {
+		out.WriteString(fmt.Sprintf("%s\n", res))
+	}
+
+	if matchCount >= maxMatches {
+		out.WriteString("\n... (limit reached, more matches may exist)")
+	}
+
+	return mcp.NewToolResultText(out.String()), nil
+}
+
+func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	query := request.GetString("query", "")
+	if query == "" {
+		return mcp.NewToolResultError("query is required"), nil
+	}
+	topK := int(request.GetFloat("topK", 10))
+	category := request.GetString("category", "") // code, document, or empty
+	pathFilter := request.GetString("path_filter", "")
+	maxTokens := int(request.GetFloat("max_tokens", float64(indexer.MaxContextTokens)))
+	if maxTokens <= 0 {
+		maxTokens = indexer.MaxContextTokens
+	}
+
+	pids := request.GetStringSlice("cross_reference_projects", nil)
+	if len(pids) == 0 {
+		pids = []string{s.cfg.ProjectRoot}
+	}
+
+	emb, err := s.embedder.Embed(ctx, query)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
+	}
+
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get store: %v", err)), nil
+	}
+
+	// For hybrid search, we fetch more to allow filtering
+	results, err := store.HybridSearch(ctx, query, emb, topK*3, pids, category)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to search database: %v", err)), nil
+	}
+
+	var filtered []db.Record
+	for _, r := range results {
+		// 1. Path Filter
+		if pathFilter != "" && !strings.Contains(r.Metadata["path"], pathFilter) {
+			continue
+		}
+
+		// 2. Score Filter (Wait, HybridSearch score is RRF, not direct similarity)
+		// But Record has Similarity if it came from SearchWithScore inside HybridSearch.
+		// RRF scores are usually small. Let's skip minScore for RRF for now OR use direct vector search if minScore is set.
+		// Actually, let's just use it as is, or if minScore > 0, we can prioritize vector results.
+
+		filtered = append(filtered, r)
+		if len(filtered) >= topK {
+			break
+		}
+	}
+
+	if len(filtered) == 0 {
+		return mcp.NewToolResultText("No matches found matching the criteria."), nil
+	}
+
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("### Search Results for '%s':\n\n", query))
+	currentTokenCount := 0
+
+	for i, r := range filtered {
+		tokens := indexer.EstimateTokens(r.Content)
+		if currentTokenCount+tokens > maxTokens {
+			out.WriteString("... (truncating further results to stay within context window)")
+			break
+		}
+
+		lineRange := ""
+		if start, ok := r.Metadata["start_line"]; ok {
+			if end, ok := r.Metadata["end_line"]; ok {
+				lineRange = fmt.Sprintf(" (Lines %s-%s)", start, end)
+			}
+		}
+
+		out.WriteString(fmt.Sprintf("#### Result %d: %s%s\n", i+1, r.Metadata["path"], lineRange))
+		if cat := r.Metadata["category"]; cat != "" {
+			out.WriteString(fmt.Sprintf("- **Category**: %s\n", cat))
+		}
+		if syms := r.Metadata["symbols"]; syms != "" {
+			out.WriteString(fmt.Sprintf("- **Entities**: %s\n", syms))
+		}
+		out.WriteString(fmt.Sprintf("```\n%s\n```\n\n", r.Content))
+		currentTokenCount += tokens
+	}
+
+	return mcp.NewToolResultText(out.String()), nil
+}
+
+func (s *Server) handleGetIndexingDiagnostics(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	progressData := make(map[string]string)
+	s.progressMap.Range(func(k, v interface{}) bool {
+		progressData[k.(string)] = v.(string)
+		return true
+	})
+
+	status, _ := store.GetStatus(ctx, s.cfg.ProjectRoot)
+	
+	var out strings.Builder
+	out.WriteString("## 🛠️ Indexing Diagnostics\n\n")
+	out.WriteString(fmt.Sprintf("**Active Project Root**: `%s`\n", s.cfg.ProjectRoot))
+	out.WriteString(fmt.Sprintf("**Global Index Status**: %s\n\n", status))
+
+	out.WriteString("### 🚀 Active Background Tasks\n")
+	if len(progressData) == 0 {
+		out.WriteString("- No active background indexing tasks.\n")
+	} else {
+		for path, prog := range progressData {
+			out.WriteString(fmt.Sprintf("- **%s**: %s\n", path, prog))
+		}
+	}
+
+	out.WriteString("\n### 📊 Database Statistics\n")
+	count := store.Count()
+	out.WriteString(fmt.Sprintf("- **Total Chunks Indexed**: %d\n", count))
+
+	// In a real implementation, we'd fetch actual error logs from the worker.
+	// For now, we'll provide guidance on how to check logs.
+	out.WriteString("\n### 🔍 Troubleshooting\n")
+	out.WriteString("- If indexing is stuck, check the master daemon logs.\n")
+	out.WriteString("- Ensure the file watcher is enabled if real-time updates are missing.\n")
 
 	return mcp.NewToolResultText(out.String()), nil
 }

@@ -199,6 +199,18 @@ func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err e
 	return embedding, nil
 }
 
+func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	results := make([][]float32, len(texts))
+	for i, text := range texts {
+		emb, err := e.Embed(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		results[i] = emb
+	}
+	return results, nil
+}
+
 func (e *Embedder) Close() {
 	if e.session != nil {
 		e.session.Destroy()

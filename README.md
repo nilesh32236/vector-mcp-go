@@ -10,14 +10,14 @@ A modular, high-performance Model Context Protocol (MCP) server for **local sema
 - **Modular Architecture**: Refactored for scalability with dedicated packages for indexing, background tasks, and file monitoring.
 - **Dynamic Project Switching**: Switch active project roots on the fly using the `set_project_root` tool.
 - **Deep Code Analysis**:
-    - **Symbol Extraction**: Automatically identifies Go/TS/JS symbols for scoped retrieval.
-    - **Relationship Mapping**: Traces imports and dependencies to provide holistic context.
-    - **Semantic Chunking**: Intelligent overlap-based chunking preserves meaning across boundaries.
+  - **Symbol Extraction**: Automatically identifies Go/TS/JS symbols for scoped retrieval.
+  - **Relationship Mapping**: Traces imports and dependencies to provide holistic context.
+  - **Semantic Chunking**: Intelligent overlap-based chunking preserves meaning across boundaries.
 - **Real-time Indexing**: Built-in debounced file watcher synchronizes the vector index as you save.
-- **Architectural Insights**: 
-    - **Dead Code Detection**: Identifies unused exported functions and classes.
-    - **Dependency Health**: Flags missing external packages in `package.json`.
-    - **Visual Mapping**: Generates Mermaid.js diagrams of project architecture.
+- **Architectural Insights**:
+  - **Dead Code Detection**: Identifies unused exported functions and classes.
+  - **Dependency Health**: Flags missing external packages in `package.json`.
+  - **Visual Mapping**: Generates Mermaid.js diagrams of project architecture.
 - **Multi-Instance Optimization**: Intelligent Master/Slave architecture ensures only one instance loads the heavy embedding models and runs the file watcher, drastically reducing RAM usage (~600MB → ~20MB for slave instances).
 - **Safety & Performance**: Non-blocking background workers and embedder resource pooling ensure server stability.
 
@@ -40,12 +40,14 @@ The project is organized into modular internal packages for maintainability:
 ## 🏗️ Setup & Installation
 
 ### Prerequisites
+
 1. **Go 1.21+**
 2. **ONNX Shared Library**: `libonnxruntime.so` (Linux). The server attempts to discover this in several standard locations.
 
 ### Installation
 
 #### Method 1: Direct via GitHub (Recommended for Go Users)
+
 Install the latest version directly using `go install`:
 
 ```bash
@@ -53,9 +55,11 @@ go install github.com/nilesh32236/vector-mcp-go@latest
 ```
 
 #### Method 2: Download Binary
+
 Download pre-built binaries for Linux, macOS, or Windows from the [GitHub Releases](https://github.com/nilesh32236/vector-mcp-go/releases) page.
 
 #### Method 3: From Source
+
 ```bash
 git clone https://github.com/nilesh32236/vector-mcp-go.git
 cd vector-mcp-go
@@ -63,7 +67,9 @@ go build -o vector-mcp-go main.go
 ```
 
 ### Environment Configuration
+
 Optionally set `ONNX_LIB_PATH` if the library is in a custom location:
+
 ```bash
 export ONNX_LIB_PATH="/custom/path/to/libonnxruntime.so"
 ```
@@ -72,22 +78,22 @@ export ONNX_LIB_PATH="/custom/path/to/libonnxruntime.so"
 
 ## 🔌 MCP Tools
 
-| Tool | Description |
-| :--- | :--- |
-| `ping` | Check server connectivity. |
-| `set_project_root` | Dynamically switch the active project root and reset the file watcher. |
-| `trigger_project_index` | Manually trigger a full background index of a project path. |
-| `get_related_context` | Retrieve code chunks and dependencies for a specific file. |
-| `store_context` | Save architectural decisions, rules, or shared context globally. |
-| `find_duplicate_code` | Scan for logic duplication across namespaces. |
-| `get_codebase_skeleton` | View a topological tree of the project structure. |
-| `index_status` | Monitor indexing progress and database health. |
-| `retrieve_context` | Perform semantic search across the codebase using natural language. |
-| `delete_context` | Remove specific files or wipe entire project indices. |
+| Tool                      | Description                                                                                                       |
+| :------------------------ | :---------------------------------------------------------------------------------------------------------------- |
+| `ping`                    | Check server connectivity.                                                                                        |
+| `set_project_root`        | Dynamically switch the active project root and reset the file watcher.                                            |
+| `trigger_project_index`   | Manually trigger a full background index of a project path.                                                       |
+| `get_related_context`     | Retrieve code chunks and dependencies for a specific file.                                                        |
+| `store_context`           | Save architectural decisions, rules, or shared context globally.                                                  |
+| `find_duplicate_code`     | Scan for logic duplication across namespaces.                                                                     |
+| `get_codebase_skeleton`   | View a topological tree of the project structure.                                                                 |
+| `index_status`            | Monitor indexing progress and database health.                                                                    |
+| `retrieve_context`        | Perform semantic search across the codebase using natural language.                                               |
+| `delete_context`          | Remove specific files or wipe entire project indices.                                                             |
 | `check_dependency_health` | Analyzes a directory's package.json against its indexed imports to identify missing dependencies in the manifest. |
-| `generate_jsdoc_prompt` | Generates a highly contextual prompt for an LLM to write professional JSDoc for a specific entity. |
-| `analyze_architecture` | Generates a Mermaid.js dependency graph between packages in a monorepo. |
-| `find_dead_code` | Identifies potentially dead code by finding exported symbols that are never imported or called. |
+| `generate_jsdoc_prompt`   | Generates a highly contextual prompt for an LLM to write professional JSDoc for a specific entity.                |
+| `analyze_architecture`    | Generates a Mermaid.js dependency graph between packages in a monorepo.                                           |
+| `find_dead_code`          | Identifies potentially dead code by finding exported symbols that are never imported or called.                   |
 
 ---
 
@@ -95,14 +101,15 @@ export ONNX_LIB_PATH="/custom/path/to/libonnxruntime.so"
 
 The following environment variables can be used to customize the server:
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `PROJECT_ROOT` | Absolute path to the project to index. | Current directory |
-| `DATA_DIR` | Base directory for DB and models. | `~/.local/share/vector-mcp-go` |
-| `DISABLE_FILE_WATCHER` | Set to `true` to disable the real-time file watcher. | `false` |
-| `MODEL_NAME` | ONNX-compatible model to use for embeddings. | `Xenova/bge-m3` |
+| Variable               | Description                                          | Default                        |
+| :--------------------- | :--------------------------------------------------- | :----------------------------- |
+| `PROJECT_ROOT`         | Absolute path to the project to index.               | Current directory              |
+| `DATA_DIR`             | Base directory for DB and models.                    | `~/.local/share/vector-mcp-go` |
+| `DISABLE_FILE_WATCHER` | Set to `true` to disable the real-time file watcher. | `false`                        |
+| `MODEL_NAME`           | ONNX-compatible model to use for embeddings.         | `Xenova/bge-m3`                |
 
 ---
 
 ## ⚖️ License
+
 MIT
