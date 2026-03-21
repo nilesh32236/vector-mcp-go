@@ -38,6 +38,7 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 	chatStore, err := chat.NewStore(cfg.DataDir)
 	if err != nil && cfg.Logger != nil {
 		cfg.Logger.Error("Failed to initialize chat store", "error", err)
+		// We continue but some chat features might be disabled or return errors
 	}
 
 	mux := http.NewServeMux()

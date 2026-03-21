@@ -19,37 +19,37 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 )
 
-// IndexerStore defines the interface for database operations,
-// allowing both local and remote implementations to be used interchangeably.
-// This abstraction supports the Master/Slave architecture where slaves delegate
-// database operations to the master daemon via Unix sockets.
-type IndexerStore interface {
-	// Search performs a vector-based semantic search.
-	Search(ctx context.Context, embedding []float32, topK int, pids []string, category string) ([]db.Record, error)
-	// HybridSearch combines semantic and lexical search for improved accuracy.
-	HybridSearch(ctx context.Context, query string, embedding []float32, topK int, pids []string, category string) ([]db.Record, error)
-	// Insert adds new records to the vector database.
-	Insert(ctx context.Context, records []db.Record) error
-	// DeleteByPrefix removes records that match a specific path prefix.
-	DeleteByPrefix(ctx context.Context, prefix string, projectID string) error
-	// ClearProject removes all records associated with a specific project.
-	ClearProject(ctx context.Context, projectID string) error
-	// GetStatus retrieves the indexing status for a project.
-	GetStatus(ctx context.Context, projectID string) (string, error)
-	// GetAllStatuses returns the indexing status for all known projects.
-	GetAllStatuses(ctx context.Context) (map[string]string, error)
-	// GetPathHashMapping retrieves a map of file paths to their content hashes.
-	GetPathHashMapping(ctx context.Context, projectID string) (map[string]string, error)
-	// GetAllRecords returns all records from the database (use with caution).
-	GetAllRecords(ctx context.Context) ([]db.Record, error)
-	// GetByPath retrieves records associated with a specific file path.
-	GetByPath(ctx context.Context, path string, projectID string) ([]db.Record, error)
-	// GetByPrefix retrieves records starting with a specific path prefix.
-	GetByPrefix(ctx context.Context, prefix string, projectID string) ([]db.Record, error)
-	// LexicalSearch performs a keyword-based search.
+// Searcher defines the interface for searching the vector database.
+type Searcher interface {
+	Search(ctx context.Context, embedding []float32, topK int, projectIDs []string, category string) ([]db.Record, error)
+	HybridSearch(ctx context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]db.Record, error)
 	LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string, category string) ([]db.Record, error)
-	// Count returns the total number of records in the database.
+}
+
+// StatusProvider defines the interface for project status monitoring.
+type StatusProvider interface {
+	GetStatus(ctx context.Context, projectID string) (string, error)
+	GetAllStatuses(ctx context.Context) (map[string]string, error)
+}
+
+// StoreManager defines the interface for managing project data and record lifecycle.
+type StoreManager interface {
+	Insert(ctx context.Context, records []db.Record) error
+	DeleteByPrefix(ctx context.Context, prefix string, projectID string) error
+	ClearProject(ctx context.Context, projectID string) error
+	GetPathHashMapping(ctx context.Context, projectID string) (map[string]string, error)
+	GetAllRecords(ctx context.Context) ([]db.Record, error)
+	GetByPath(ctx context.Context, path string, projectID string) ([]db.Record, error)
+	GetByPrefix(ctx context.Context, prefix string, projectID string) ([]db.Record, error)
 	Count() int64
+}
+
+// IndexerStore defines the composite interface for database operations,
+// allowing both local and remote implementations to be used interchangeably.
+type IndexerStore interface {
+	Searcher
+	StatusProvider
+	StoreManager
 }
 
 // Server is the core MCP server implementation. It manages the lifecycle of
