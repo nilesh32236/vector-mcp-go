@@ -75,6 +75,8 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 	return srv
 }
 
+// WithRemoteStore configures the server to use a remote IndexerStore
+// instead of dynamically fetching a local store on every request.
 func (s *Server) WithRemoteStore(rs IndexerStore) {
 	s.remoteStore = rs
 }
@@ -1408,6 +1410,8 @@ func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, err
 	return out.String(), nil
 }
 
+// CallTool allows programmatic execution of a registered tool by its name.
+// It bypasses the standard MCP protocol layers for internal API usage.
 func (s *Server) CallTool(ctx context.Context, name string, args map[string]interface{}) (*mcp.CallToolResult, error) {
 	handler, ok := s.toolHandlers[name]
 	if !ok {
@@ -1422,6 +1426,7 @@ func (s *Server) CallTool(ctx context.Context, name string, args map[string]inte
 	return handler(ctx, req)
 }
 
+// ListTools returns all tools currently registered on the server.
 func (s *Server) ListTools() []mcp.Tool {
 	var tools []mcp.Tool
 	for _, t := range s.MCPServer.ListTools() {
