@@ -1,192 +1,195 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { getSession, sendChatMessage, Message } from "@/lib/api";
+import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
-import { Send, Loader2, Bot, User } from "lucide-react";
+import { Send, User, Bot, Loader2, Sparkles, Copy, Check, Zap } from "lucide-react";
+import { sendMessage, Message, getSessionMessages } from "@/lib/api";
 
-export default function ChatClient({ sessionId }: { sessionId: string }) {
+type ChatClientProps = {
+  sessionId: string;
+};
+
+export default function ChatClient({ sessionId }: ChatClientProps) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [model, setModel] = useState("gemini-2.5-flash");
   const [input, setInput] = useState("");
-  const endRef = useRef<HTMLDivElement>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSending, setIsSending] = useState(false);
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+  
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
   useEffect(() => {
-    fetchSession();
+    loadMessages();
   }, [sessionId]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, sending]);
+    scrollToBottom();
+  }, [messages, isSending]);
 
-  const fetchSession = async () => {
+  const loadMessages = async () => {
     try {
-      setLoading(true);
-      const session = await getSession(sessionId);
-      if (session && session.history) {
-        setMessages(session.history);
-      }
-    } catch (e) {
-      console.error(e);
+      setIsLoading(true);
+      const data = await getSessionMessages(sessionId);
+      setMessages(data);
+    } catch (err) {
+      console.error(err);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || sending) return;
+    if (!input.trim() || isSending) return;
 
-    const userMsg: Message = { role: "user", content: input };
-    setMessages((prev) => [...prev, userMsg]);
+    const userMessage: Message = {
+      role: "user",
+      content: input,
+      created_at: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
     setInput("");
-    setSending(true);
+    setIsSending(true);
 
     try {
-      const resp = await sendChatMessage(sessionId, userMsg.content, model);
-      const assistantMsg: Message = {
-        role: "assistant",
-        content: resp.content || resp.response || "",
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-    } catch (err: any) {
+      const response = await sendMessage(sessionId, input);
+      setMessages((prev) => [...prev, response]);
+    } catch (err) {
       console.error(err);
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: `**Error:** ${err.message}` },
-      ]);
     } finally {
-      setSending(false);
+      setIsSending(false);
     }
   };
 
-  if (loading) {
+  const copyToClipboard = (text: string, id: number) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="animate-spin text-blue-500" size={32} />
+      <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-400">
+        <Loader2 className="animate-spin text-brand-500" size={40} />
+        <p className="text-xs font-bold uppercase tracking-widest animate-pulse">Initializing Context...</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full bg-gray-950 text-gray-200">
+    <div className="flex flex-col h-full bg-background relative overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 bg-gray-900/80 backdrop-blur-md sticky top-0 z-10 w-full shadow-sm">
+      <header className="h-16 px-8 border-b border-(--border) flex items-center justify-between bg-background/80 backdrop-blur-md z-10">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-blue-500/20 flex items-center justify-center">
-            <Bot size={20} className="text-blue-400" />
+          <div className="w-8 h-8 rounded-lg bg-brand-500/10 flex items-center justify-center">
+            <Zap size={16} className="text-brand-600" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold tracking-tight leading-tight">
-              Global Brain Chat
-            </h2>
-            <div className="text-xs text-gray-500 font-mono">
-              Session: {sessionId.substring(0, 8)}
+            <h2 className="text-sm font-bold tracking-tight">Intelligence Engine</h2>
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Active Context</span>
             </div>
           </div>
         </div>
-        <select
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          className="bg-gray-800 text-sm border border-gray-700 rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500 transition-colors cursor-pointer"
-        >
-          <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-          <option value="gemini-3.1-pro">Gemini 3.1 Pro</option>
-        </select>
-      </div>
+        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
+          Session: {sessionId.substring(0, 8)}
+        </div>
+      </header>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 scroll-smooth">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-500 space-y-4">
-            <Bot size={48} className="text-gray-700" />
-            <p>No messages yet. Ask me anything about your docs or code!</p>
-          </div>
-        ) : (
-          messages.map((m, idx) => (
+      <div className="flex-1 overflow-y-auto px-4 py-8 md:px-8 space-y-8 custom-scrollbar" role="log" aria-live="polite">
+        {messages.map((msg, idx) => (
+          <div
+            key={idx}
+            className={`flex gap-4 md:gap-6 ${
+              msg.role === "user" ? "flex-row-reverse" : "flex-row"
+            } animate-in fade-in slide-in-from-bottom-2 duration-300`}
+          >
             <div
-              key={idx}
-              className={`flex ${
-                m.role === "user" ? "justify-end" : "justify-start"
+              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${
+                msg.role === "user" ? "bg-brand-600 text-white" : "bg-white dark:bg-gray-800 border border-(--border) text-brand-600"
               }`}
             >
-              <div className="max-w-[85%] flex gap-3">
-                {m.role === "assistant" && (
-                  <div className="w-8 h-8 shrink-0 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center mt-1">
-                    <Bot size={16} className="text-emerald-400" />
-                  </div>
-                )}
-
-                <div
-                  className={`rounded-2xl px-5 py-3 ${
-                    m.role === "user"
-                      ? "bg-blue-600 text-white rounded-br-none shadow-blue-900/20 shadow-lg"
-                      : "bg-gray-800/80 text-gray-200 rounded-bl-none shadow-md border border-gray-700/50"
-                  }`}
-                >
-                  {m.role === "user" ? (
-                    <div className="whitespace-pre-wrap">{m.content}</div>
-                  ) : (
-                    <div className="prose prose-invert prose-emerald max-w-none prose-p:leading-relaxed prose-pre:bg-gray-900/80 prose-pre:border prose-pre:border-gray-700 prose-a:text-blue-400">
-                      <ReactMarkdown>{m.content}</ReactMarkdown>
-                    </div>
-                  )}
-                </div>
-
-                {m.role === "user" && (
-                  <div className="w-8 h-8 shrink-0 rounded-full bg-blue-900/50 border border-blue-800 flex items-center justify-center mt-1">
-                    <User size={16} className="text-blue-200" />
-                  </div>
-                )}
-              </div>
+              {msg.role === "user" ? <User size={18} /> : <Bot size={18} />}
             </div>
-          ))
-        )}
-        {sending && (
-          <div className="flex justify-start">
-            <div className="max-w-[85%] flex gap-3">
-              <div className="w-8 h-8 shrink-0 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center mt-1">
-                <Bot size={16} className="text-emerald-400" />
+            <div className={`flex flex-col max-w-[85%] md:max-w-[75%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
+              <div 
+                className={`relative group p-4 rounded-2xl text-sm leading-relaxed shadow-sm transition-all ${
+                  msg.role === "user"
+                    ? "bg-brand-600 text-white rounded-tr-none"
+                    : "bg-white dark:bg-gray-900 border border-(--border) text-foreground rounded-tl-none hover:border-brand-500/30"
+                }`}
+              >
+                <div className="prose prose-sm dark:prose-invert max-w-none break-words prose-pre:bg-gray-950 prose-pre:border prose-pre:border-(--border) prose-pre:rounded-xl prose-code:text-brand-500 dark:prose-code:text-brand-400">
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                </div>
+                {msg.role === "assistant" && (
+                  <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button 
+                      onClick={() => copyToClipboard(msg.content, idx)}
+                      className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-400 hover:text-brand-500 transition-all"
+                    >
+                      {copiedId === idx ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                    </button>
+                  </div>
+                )}
               </div>
-              <div className="bg-gray-800/50 text-gray-400 rounded-2xl rounded-bl-none px-5 py-3 shadow-md border border-gray-700 flex items-center gap-3">
-                <Loader2 className="animate-spin" size={16} />
-                <span className="text-sm animate-pulse">
-                  Querying vectors and thinking...
-                </span>
-              </div>
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1.5 px-1">
+                {msg.role === "user" ? "You" : "Vector Engine"} • {new Date(msg.created_at || "").toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
+          </div>
+        ))}
+        {isSending && (
+          <div className="flex gap-4 md:gap-6 animate-pulse">
+            <div className="w-9 h-9 rounded-xl bg-gray-100 dark:bg-gray-800 flex items-center justify-center shrink-0 border border-(--border)">
+              <Bot size={18} className="text-brand-500 opacity-50" />
+            </div>
+            <div className="bg-white dark:bg-gray-900 border border-(--border) p-4 rounded-2xl rounded-tl-none flex gap-1.5">
+              <div className="w-1.5 h-1.5 bg-brand-500/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <div className="w-1.5 h-1.5 bg-brand-500/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <div className="w-1.5 h-1.5 bg-brand-500/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
             </div>
           </div>
         )}
-        <div ref={endRef} />
+        <div ref={messagesEndRef} className="h-4" />
       </div>
 
       {/* Input */}
-      <div className="p-4 sm:p-6 bg-gray-950 border-t border-gray-800/50 relative">
-        <form
-          onSubmit={handleSend}
-          className="max-w-4xl mx-auto relative flex items-center"
-        >
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            disabled={sending}
-            placeholder="Ask a question about your indexed files..."
-            className="w-full bg-gray-900/80 text-white border border-gray-700 rounded-full pl-6 pr-14 py-4 focus:outline-none focus:border-blue-500/70 focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner placeholder:text-gray-500 disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={!input.trim() || sending}
-            className="absolute right-2 top-2 bottom-2 aspect-square bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 transition-colors rounded-full flex items-center justify-center text-white shadow-md cursor-pointer"
-          >
-            {sending ? (
-              <Loader2 size={18} className="animate-spin" />
-            ) : (
-              <Send size={18} />
-            )}
-          </button>
+      <div className="px-4 pb-6 md:px-8 md:pb-8 bg-gradient-to-t from-background via-background to-transparent pt-4">
+        <form onSubmit={handleSend} className="max-w-4xl mx-auto relative group">
+          <div className="relative flex items-center bg-white dark:bg-gray-900 border border-(--border) rounded-2xl shadow-xl shadow-brand-500/5 transition-all focus-within:border-brand-500/50 focus-within:ring-4 focus-within:ring-brand-500/5 overflow-hidden">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Query the codebase engine..."
+              className="w-full pl-4 pr-14 py-4 bg-transparent outline-none text-sm font-medium placeholder:text-gray-400 placeholder:italic"
+              disabled={isSending}
+              aria-label="Chat input"
+            />
+            <button
+              type="submit"
+              disabled={!input.trim() || isSending}
+              className={`absolute right-2 p-2.5 rounded-xl transition-all ${
+                input.trim() && !isSending
+                  ? "bg-brand-600 text-white shadow-lg shadow-brand-500/20 hover:bg-brand-700 active:scale-95"
+                  : "bg-gray-100 dark:bg-gray-800 text-gray-400 grayscale cursor-not-allowed"
+              }`}
+              aria-label="Send message"
+            >
+              <Send size={18} strokeWidth={2.5} />
+            </button>
+          </div>
+          <p className="mt-2 text-[10px] text-gray-400 font-bold uppercase tracking-widest text-center">
+            System processed locally • v0.1.0
+          </p>
         </form>
       </div>
     </div>

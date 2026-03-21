@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -172,6 +173,14 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 		return Result{Err: err.Error(), RelPath: relPath}
 	}
 
+	// Capture modification time for recency boosting
+	var updatedAt string
+	if info, err := os.Stat(path); err == nil {
+		updatedAt = strconv.FormatInt(info.ModTime().Unix(), 10)
+	} else {
+		updatedAt = strconv.FormatInt(time.Now().Unix(), 10)
+	}
+
 	existingHash, _ := store.GetFileHash(ctx, relPath, cfg.ProjectRoot)
 	if existingHash == currentHash {
 		return Result{Skipped: true, RelPath: relPath}
@@ -234,6 +243,7 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 				"calls":          string(callsJSON),
 				"function_score": fmt.Sprintf("%.2f", chunk.FunctionScore),
 				"category":       category,
+				"updated_at":     updatedAt,
 			},
 		})
 	}

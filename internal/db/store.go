@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/philippgille/chromem-go"
 )
@@ -137,6 +139,13 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 			}
 		}
 
+		// Check actual content for small snippets/declarations
+		if !isMatch {
+			if strings.Contains(strings.ToLower(doc.Content), queryLower) {
+				isMatch = true
+			}
+		}
+
 		if isMatch {
 			matches = append(matches, Record{
 				ID:       doc.ID,
@@ -195,6 +204,23 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 		if fsStr, ok := r.Metadata["function_score"]; ok {
 			if fs, err := strconv.ParseFloat(fsStr, 32); err == nil {
 				boost = float64(fs)
+			}
+		}
+
+		// Apply recency boost for document category
+		if cat, ok := r.Metadata["category"]; ok && cat == "document" {
+			if updatedAtStr, ok := r.Metadata["updated_at"]; ok {
+				if updatedAt, err := strconv.ParseInt(updatedAtStr, 10, 64); err == nil {
+					now := time.Now().Unix()
+					ageDays := float64(now-updatedAt) / (24 * 60 * 60)
+					if ageDays < 0 {
+						ageDays = 0
+					}
+					// Half-life of 14 days, max boost of 1.5x
+					// Formula: 1.0 + 0.5 * 2^(-age/14)
+					recencyBoost := 1.0 + 0.5*math.Pow(2, -ageDays/14.0)
+					boost *= recencyBoost
+				}
 			}
 		}
 

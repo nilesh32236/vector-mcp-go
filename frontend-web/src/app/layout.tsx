@@ -14,8 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Vector MCP Global Brain",
-  description: "Chat with your codebase and documents",
+  title: "Vector MCP | Professional Codebase Explorer",
+  description:
+    "Accelerate your development with AI-powered codebase intelligence and documentation analysis.",
 };
 
 export default function RootLayout({
@@ -28,9 +29,13 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="h-full flex flex-row m-0 p-0 overflow-hidden bg-gray-950 text-gray-100">
+      <body className="h-full flex flex-row m-0 p-0 overflow-hidden bg-background text-foreground">
         <Sidebar />
-        <main className="flex-1 h-full overflow-hidden relative">
+        <main
+          id="main-content"
+          className="flex-1 h-full overflow-hidden relative"
+          role="main"
+        >
           {children}
         </main>
       </body>
