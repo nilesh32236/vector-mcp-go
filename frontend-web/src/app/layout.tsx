@@ -28,8 +28,12 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="h-full flex flex-row m-0 p-0 overflow-hidden bg-background text-foreground">
+      <body
+        className="h-full flex flex-row m-0 p-0 overflow-hidden bg-background text-foreground"
+        suppressHydrationWarning
+      >
         <Sidebar />
         <main
           id="main-content"

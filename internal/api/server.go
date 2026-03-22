@@ -90,6 +90,7 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 	mux.HandleFunc("POST /api/chat", server.handleChat)
 
 	// New Tool Management Endpoints
+	mux.HandleFunc("GET /api/tools/repos", server.handleListRepos)
 	mux.HandleFunc("GET /api/tools/status", server.handleIndexStatus)
 	mux.HandleFunc("POST /api/tools/index", server.handleTriggerIndex)
 	mux.HandleFunc("GET /api/tools/skeleton", server.handleGetSkeleton)

@@ -267,6 +267,42 @@ func (s *Server) handleTriggerIndex(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+// Repo represents an indexed project/repository.
+type Repo struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
+}
+
+// handleListRepos returns all projects that have been indexed (as found in statuses).
+func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
+	store, err := s.storeGetter(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	statuses, err := store.GetAllStatuses(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var repos []Repo
+	for path, status := range statuses {
+		repos = append(repos, Repo{
+			Path:   path,
+			Status: status,
+		})
+	}
+
+	if repos == nil {
+		repos = []Repo{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(repos)
+}
+
 // handleGetSkeleton proxy the 'get_codebase_skeleton' tool call.
 func (s *Server) handleGetSkeleton(w http.ResponseWriter, r *http.Request) {
 	if s.mcpServer == nil {

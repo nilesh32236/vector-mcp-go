@@ -2,7 +2,17 @@
 
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
-import { Send, User, Bot, Loader2, Sparkles, Copy, Check, Zap } from "lucide-react";
+import {
+  Send,
+  User,
+  Bot,
+  Loader2,
+  Sparkles,
+  Copy,
+  Check,
+  Zap,
+  Hammer,
+} from "lucide-react";
 import { sendMessage, Message, getSessionMessages } from "@/lib/api";
 
 type ChatClientProps = {
@@ -15,7 +25,7 @@ export default function ChatClient({ sessionId }: ChatClientProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
-  
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -76,7 +86,9 @@ export default function ChatClient({ sessionId }: ChatClientProps) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-400">
         <Loader2 className="animate-spin text-brand-500" size={40} />
-        <p className="text-xs font-bold uppercase tracking-widest animate-pulse">Initializing Context...</p>
+        <p className="text-xs font-bold uppercase tracking-widest animate-pulse">
+          Initializing Context...
+        </p>
       </div>
     );
   }
@@ -90,10 +102,14 @@ export default function ChatClient({ sessionId }: ChatClientProps) {
             <Zap size={16} className="text-brand-600" />
           </div>
           <div>
-            <h2 className="text-sm font-bold tracking-tight">Intelligence Engine</h2>
+            <h2 className="text-sm font-bold tracking-tight">
+              Intelligence Engine
+            </h2>
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Active Context</span>
+              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">
+                Active Context
+              </span>
             </div>
           </div>
         </div>
@@ -103,7 +119,11 @@ export default function ChatClient({ sessionId }: ChatClientProps) {
       </header>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-8 md:px-8 space-y-8 custom-scrollbar" role="log" aria-live="polite">
+      <div
+        className="flex-1 overflow-y-auto px-4 py-8 md:px-8 space-y-8 custom-scrollbar"
+        role="log"
+        aria-live="polite"
+      >
         {messages.map((msg, idx) => (
           <div
             key={idx}
@@ -113,35 +133,67 @@ export default function ChatClient({ sessionId }: ChatClientProps) {
           >
             <div
               className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${
-                msg.role === "user" ? "bg-brand-600 text-white" : "bg-white dark:bg-gray-800 border border-(--border) text-brand-600"
+                msg.role === "user"
+                  ? "bg-brand-600 text-white"
+                  : "bg-white dark:bg-gray-800 border border-(--border) text-brand-600"
               }`}
             >
               {msg.role === "user" ? <User size={18} /> : <Bot size={18} />}
             </div>
-            <div className={`flex flex-col max-w-[85%] md:max-w-[75%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
-              <div 
+            <div
+              className={`flex flex-col max-w-[85%] md:max-w-[75%] ${msg.role === "user" ? "items-end" : "items-start"}`}
+            >
+              <div
                 className={`relative group p-4 rounded-2xl text-sm leading-relaxed shadow-sm transition-all ${
                   msg.role === "user"
                     ? "bg-brand-600 text-white rounded-tr-none"
                     : "bg-white dark:bg-gray-900 border border-(--border) text-foreground rounded-tl-none hover:border-brand-500/30"
                 }`}
               >
-                <div className="prose prose-sm dark:prose-invert max-w-none break-words prose-pre:bg-gray-950 prose-pre:border prose-pre:border-(--border) prose-pre:rounded-xl prose-code:text-brand-500 dark:prose-code:text-brand-400">
+                <div className="prose prose-sm dark:prose-invert max-w-none wrap-break-word prose-pre:bg-gray-950 prose-pre:border prose-pre:border-(--border) prose-pre:rounded-xl prose-code:text-brand-500 dark:prose-code:text-brand-400">
                   <ReactMarkdown>{msg.content}</ReactMarkdown>
                 </div>
                 {msg.role === "assistant" && (
-                  <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button 
+                  <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {(msg.tool_count || 0) > 0 && (
+                      <div
+                        className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-brand-500/10 text-brand-600 text-[9px] font-bold uppercase tracking-tighter"
+                        title="Tools used during this response"
+                      >
+                        <Hammer size={10} />
+                        {msg.tool_count}{" "}
+                        {msg.tool_count === 1 ? "Tool" : "Tools"}
+                      </div>
+                    )}
+                    {(msg.docs_used || 0) > 0 && (
+                      <div
+                        className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 text-[9px] font-bold uppercase tracking-tighter"
+                        title="Knowledge chunks consulted"
+                      >
+                        <Sparkles size={10} />
+                        {msg.docs_used}{" "}
+                        {msg.docs_used === 1 ? "Source" : "Sources"}
+                      </div>
+                    )}
+                    <button
                       onClick={() => copyToClipboard(msg.content, idx)}
                       className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-400 hover:text-brand-500 transition-all"
                     >
-                      {copiedId === idx ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                      {copiedId === idx ? (
+                        <Check size={14} className="text-emerald-500" />
+                      ) : (
+                        <Copy size={14} />
+                      )}
                     </button>
                   </div>
                 )}
               </div>
               <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1.5 px-1">
-                {msg.role === "user" ? "You" : "Vector Engine"} • {new Date(msg.created_at || "").toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {msg.role === "user" ? "You" : "Vector Engine"} •{" "}
+                {new Date(msg.created_at || "").toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
               </span>
             </div>
           </div>
@@ -152,9 +204,18 @@ export default function ChatClient({ sessionId }: ChatClientProps) {
               <Bot size={18} className="text-brand-500 opacity-50" />
             </div>
             <div className="bg-white dark:bg-gray-900 border border-(--border) p-4 rounded-2xl rounded-tl-none flex gap-1.5">
-              <div className="w-1.5 h-1.5 bg-brand-500/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <div className="w-1.5 h-1.5 bg-brand-500/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <div className="w-1.5 h-1.5 bg-brand-500/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              <div
+                className="w-1.5 h-1.5 bg-brand-500/50 rounded-full animate-bounce"
+                style={{ animationDelay: "0ms" }}
+              />
+              <div
+                className="w-1.5 h-1.5 bg-brand-500/50 rounded-full animate-bounce"
+                style={{ animationDelay: "150ms" }}
+              />
+              <div
+                className="w-1.5 h-1.5 bg-brand-500/50 rounded-full animate-bounce"
+                style={{ animationDelay: "300ms" }}
+              />
             </div>
           </div>
         )}
@@ -162,8 +223,11 @@ export default function ChatClient({ sessionId }: ChatClientProps) {
       </div>
 
       {/* Input */}
-      <div className="px-4 pb-6 md:px-8 md:pb-8 bg-gradient-to-t from-background via-background to-transparent pt-4">
-        <form onSubmit={handleSend} className="max-w-4xl mx-auto relative group">
+      <div className="px-4 pb-6 md:px-8 md:pb-8 bg-linear-to-t from-background via-background to-transparent pt-4">
+        <form
+          onSubmit={handleSend}
+          className="max-w-4xl mx-auto relative group"
+        >
           <div className="relative flex items-center bg-white dark:bg-gray-900 border border-(--border) rounded-2xl shadow-xl shadow-brand-500/5 transition-all focus-within:border-brand-500/50 focus-within:ring-4 focus-within:ring-brand-500/5 overflow-hidden">
             <input
               type="text"
