@@ -85,6 +85,7 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 	}
 
 	parser := sitter.NewParser()
+	defer parser.Close()
 	parser.SetLanguage(lang)
 	tree := parser.Parse(nil, []byte(content))
 	if tree == nil {
@@ -128,62 +129,67 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 	seen := make(map[string]bool)
 
 	for _, qStr := range queries {
-		query, err := sitter.NewQuery([]byte(qStr), lang)
-		if err != nil {
-			continue
-		}
-
-		qc := sitter.NewQueryCursor()
-		qc.Exec(query, root)
-
-		for {
-			match, ok := qc.NextMatch()
-			if !ok {
-				break
+		func(q string) {
+			query, err := sitter.NewQuery([]byte(q), lang)
+			if err != nil {
+				return
 			}
+			defer query.Close()
 
-			var entityNode *sitter.Node
-			var nameNode *sitter.Node
+			qc := sitter.NewQueryCursor()
+			defer qc.Close()
 
-			for _, capture := range match.Captures {
-				captureName := query.CaptureNameForId(capture.Index)
-				if captureName == "entity" {
-					entityNode = capture.Node
-				} else if captureName == "name" || captureName == "hook_name" {
-					nameNode = capture.Node
+			qc.Exec(query, root)
+
+			for {
+				match, ok := qc.NextMatch()
+				if !ok {
+					break
 				}
-			}
 
-			if entityNode != nil {
-				start := entityNode.StartByte()
-				end := entityNode.EndByte()
-				key := fmt.Sprintf("%d-%d", start, end)
+				var entityNode *sitter.Node
+				var nameNode *sitter.Node
 
-				if !seen[key] {
-					seen[key] = true
-					
-					symbolName := "Unknown"
-					if nameNode != nil {
-						symbolName = nameNode.Content([]byte(content))
+				for _, capture := range match.Captures {
+					captureName := query.CaptureNameForId(capture.Index)
+					if captureName == "entity" {
+						entityNode = capture.Node
+					} else if captureName == "name" || captureName == "hook_name" {
+						nameNode = capture.Node
 					}
+				}
 
-					chunkType := entityNode.Type()
+				if entityNode != nil {
+					start := entityNode.StartByte()
+					end := entityNode.EndByte()
+					key := fmt.Sprintf("%d-%d", start, end)
 
-					calls := extractCallsGeneric(entityNode, content)
-					score := calculateScoreGeneric(entityNode, calls, ext)
+					if !seen[key] {
+						seen[key] = true
 
-					rawChunks = append(rawChunks, Chunk{
-						Content:       string(content[start:end]),
-						Symbols:       []string{symbolName},
-						Type:          chunkType,
-						Calls:         calls,
-						FunctionScore: score,
-						StartLine:     int(entityNode.StartPoint().Row) + 1,
-						EndLine:       int(entityNode.EndPoint().Row) + 1,
-					})
+						symbolName := "Unknown"
+						if nameNode != nil {
+							symbolName = nameNode.Content([]byte(content))
+						}
+
+						chunkType := entityNode.Type()
+
+						calls := extractCallsGeneric(entityNode, content)
+						score := calculateScoreGeneric(entityNode, calls, ext)
+
+						rawChunks = append(rawChunks, Chunk{
+							Content:       string(content[start:end]),
+							Symbols:       []string{symbolName},
+							Type:          chunkType,
+							Calls:         calls,
+							FunctionScore: score,
+							StartLine:     int(entityNode.StartPoint().Row) + 1,
+							EndLine:       int(entityNode.EndPoint().Row) + 1,
+						})
+					}
 				}
 			}
-		}
+		}(qStr)
 	}
 
 	var chunks []Chunk
