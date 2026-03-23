@@ -91,6 +91,7 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 	if tree == nil {
 		return fastChunk(content)
 	}
+	defer tree.Close()
 
 	root := tree.RootNode()
 
@@ -116,6 +117,8 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 			`(export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function)]))) @entity`,
 		}
 	case ".php":
+		// PHP specific queries, capturing standard OOP constructs as well as
+		// WordPress-style functional hooks (e.g. add_action, add_filter).
 		queries = []string{
 			`(class_declaration name: (name) @name) @entity`,
 			`(method_declaration name: (name) @name) @entity`,
@@ -175,7 +178,7 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 						chunkType := entityNode.Type()
 
 						calls := extractCallsGeneric(entityNode, content)
-						score := calculateScoreGeneric(entityNode, calls, ext)
+						score := calculateScoreGeneric(entityNode, calls)
 
 						rawChunks = append(rawChunks, Chunk{
 							Content:       string(content[start:end]),
@@ -220,6 +223,7 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 
 func extractCallsGeneric(node *sitter.Node, content string) []string {
 	uniqueCalls := make(map[string]bool)
+	contentBytes := []byte(content)
 	var traverse func(n *sitter.Node)
 	traverse = func(n *sitter.Node) {
 		if n == nil {
@@ -231,7 +235,7 @@ func extractCallsGeneric(node *sitter.Node, content string) []string {
 				child := n.Child(i)
 				ct := child.Type()
 				if ct == "identifier" || ct == "property_identifier" || ct == "name" {
-					uniqueCalls[child.Content([]byte(content))] = true
+					uniqueCalls[child.Content(contentBytes)] = true
 				} else if ct == "selector_expression" || ct == "member_expression" {
 					if child.ChildCount() > 0 {
 						lastChild := child.Child(int(child.ChildCount()) - 1)
@@ -257,7 +261,7 @@ func extractCallsGeneric(node *sitter.Node, content string) []string {
 	return calls
 }
 
-func calculateScoreGeneric(node *sitter.Node, calls []string, ext string) float32 {
+func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 	score := float32(1.0)
 
 	lines := int(node.EndPoint().Row - node.StartPoint().Row + 1)
