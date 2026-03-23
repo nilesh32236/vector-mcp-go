@@ -50,6 +50,7 @@ func EstimateTokens(text string) int {
 
 // Embedder is an interface for generating vector embeddings from text.
 type Embedder interface {
+	RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error)
 	Embed(ctx context.Context, text string) ([]float32, error)
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 }
@@ -226,7 +227,7 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 	// Prepare texts for batch embedding
 	var texts []string
 	for _, chunk := range chunks {
-		texts = append(texts, chunk.Content)
+		texts = append(texts, chunk.ContextualString)
 	}
 
 	if len(texts) > 0 {
@@ -259,7 +260,7 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 		} else {
 			// Fallback to single embedding if batch fails
 			for _, chunk := range chunks {
-				emb, err := embedder.Embed(ctx, chunk.Content)
+				emb, err := embedder.Embed(ctx, chunk.ContextualString)
 				if err != nil {
 					continue
 				}

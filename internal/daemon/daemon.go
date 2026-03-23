@@ -37,6 +37,17 @@ type EmbedBatchResponse struct {
 	Embeddings [][]float32
 }
 
+
+
+type RerankBatchRequest struct {
+	Query string
+	Texts []string
+}
+
+type RerankBatchResponse struct {
+	Scores []float32
+}
+
 type IndexRequest struct {
 	Path string
 }
@@ -113,6 +124,17 @@ func (s *Service) EmbedBatch(req EmbedBatchRequest, resp *EmbedBatchResponse) er
 		return err
 	}
 	resp.Embeddings = embs
+	return nil
+}
+
+
+
+func (s *Service) RerankBatch(req RerankBatchRequest, resp *RerankBatchResponse) error {
+	scores, err := s.Embedder.RerankBatch(context.Background(), req.Query, req.Texts)
+	if err != nil {
+		return err
+	}
+	resp.Scores = scores
 	return nil
 }
 
@@ -573,4 +595,29 @@ func (rs *RemoteStore) SearchWithScore(ctx context.Context, embedding []float32,
 	// Let's just return records for now or update SearchResponse.
 	// Since SearchWithScore is used in handleFindDuplicateCode, it's better to update it.
 	return nil, nil, fmt.Errorf("SearchWithScore not implemented for RemoteStore yet")
+}
+func (re *RemoteEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
+	client, err := rpc.Dial("unix", re.socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to master daemon: %w", err)
+	}
+	defer client.Close()
+
+	var resp RerankBatchResponse
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Call("VectorDaemon.RerankBatch", RerankBatchRequest{Query: query, Texts: texts}, &resp)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+		return resp.Scores, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(120 * time.Second):
+		return nil, fmt.Errorf("rerank batch RPC timeout")
+	}
 }
