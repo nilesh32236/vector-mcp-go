@@ -136,7 +136,17 @@ func main() {
 		}
 		cfg.Dimension = mc.Dimension
 
-		pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, cfg.EmbedderPoolSize, mc)
+		var rerankerMc *embedding.ModelConfig
+		if cfg.RerankerModelName != "" {
+			rmc, err := embedding.EnsureModel(cfg.ModelsDir, cfg.RerankerModelName)
+			if err != nil {
+				logger.Warn("Failed to ensure reranker model, continuing without it", "error", err)
+			} else {
+				rerankerMc = &rmc
+			}
+		}
+
+		pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, cfg.EmbedderPoolSize, mc, rerankerMc)
 		if err != nil {
 			logger.Error("Failed to initialize embedder pool", "error", err)
 			os.Exit(1)
@@ -252,4 +262,12 @@ func main() {
 		logger.Error("Server error", "error", err)
 		os.Exit(1)
 	}
+}
+func (pe *poolEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
+	e, err := pe.pool.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer pe.pool.Put(e)
+	return e.RerankBatch(ctx, query, texts)
 }
