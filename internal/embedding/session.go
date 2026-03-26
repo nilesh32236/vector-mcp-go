@@ -123,6 +123,12 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 	}
 
 	outputShape := onnxruntime_go.NewShape(1, MaxSeqLength, int64(dim))
+	outputNodeNames := []string{"last_hidden_state"}
+	if mc.IsReranker {
+		outputShape = onnxruntime_go.NewShape(1, 1)
+		outputNodeNames = []string{"logits"}
+	}
+
 	outputTensor, err := onnxruntime_go.NewEmptyTensor[float32](outputShape)
 	if err != nil {
 		inputIdsTensor.Destroy()
@@ -136,7 +142,7 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 
 	session, err := onnxruntime_go.NewAdvancedSession(modelPath,
 		[]string{"input_ids", "attention_mask", "token_type_ids"},
-		[]string{"last_hidden_state"},
+		outputNodeNames,
 		inputs, outputs, nil)
 	if err != nil {
 		inputIdsTensor.Destroy()

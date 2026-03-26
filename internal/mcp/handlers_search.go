@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -135,8 +136,8 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get store: %v", err)), nil
 	}
 
-	// For hybrid search, we fetch more to allow filtering
-	results, err := store.HybridSearch(ctx, query, emb, topK*3, pids, category)
+	// For hybrid search, we fetch more to allow filtering and reranking
+	results, err := store.HybridSearch(ctx, query, emb, topK*5, pids, category)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to search database: %v", err)), nil
 	}
@@ -147,11 +148,44 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 		if pathFilter != "" && !strings.Contains(r.Metadata["path"], pathFilter) {
 			continue
 		}
-
 		filtered = append(filtered, r)
-		if len(filtered) >= topK {
-			break
+	}
+
+	// 2. Rerank results if cross-encoder is available
+	if len(filtered) > 1 {
+		var texts []string
+		for _, r := range filtered {
+			texts = append(texts, r.Content)
 		}
+
+		scores, err := s.embedder.RerankBatch(ctx, query, texts)
+		if err == nil && len(scores) == len(filtered) {
+			// Sort filtered by rerank scores
+			type ScoredRecord struct {
+				Record db.Record
+				Score  float32
+			}
+			var ranked []ScoredRecord
+			for i, r := range filtered {
+				ranked = append(ranked, ScoredRecord{Record: r, Score: scores[i]})
+			}
+			sort.Slice(ranked, func(i, j int) bool {
+				return ranked[i].Score > ranked[j].Score
+			})
+
+			// Take topK
+			filtered = nil
+			for i := 0; i < len(ranked) && i < topK; i++ {
+				filtered = append(filtered, ranked[i].Record)
+			}
+		} else {
+			// Fallback to topK if reranking fails
+			if len(filtered) > topK {
+				filtered = filtered[:topK]
+			}
+		}
+	} else if len(filtered) > topK {
+		filtered = filtered[:topK]
 	}
 
 	if len(filtered) == 0 {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -196,10 +197,40 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := store.HybridSearch(r.Context(), req.Message, emb, 10, []string{}, "")
+	records, err := store.HybridSearch(r.Context(), req.Message, emb, 50, []string{}, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// 3.5 Rerank if cross-encoder is available
+	if len(records) > 1 {
+		var texts []string
+		for _, rec := range records {
+			texts = append(texts, rec.Content)
+		}
+
+		scores, err := s.embedder.RerankBatch(r.Context(), req.Message, texts)
+		if err == nil && len(scores) == len(records) {
+			type ScoredRecord struct {
+				Record db.Record
+				Score  float32
+			}
+			var ranked []ScoredRecord
+			for i, rec := range records {
+				ranked = append(ranked, ScoredRecord{Record: rec, Score: scores[i]})
+			}
+			sort.Slice(ranked, func(i, j int) bool {
+				return ranked[i].Score > ranked[j].Score
+			})
+			// Take top 10
+			records = nil
+			for i := 0; i < len(ranked) && i < 10; i++ {
+				records = append(records, ranked[i].Record)
+			}
+		} else if len(records) > 10 {
+			records = records[:10]
+		}
 	}
 
 	var contextBuilder string

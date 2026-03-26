@@ -11,6 +11,8 @@ import (
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/php"
+	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
@@ -25,6 +27,12 @@ type Chunk struct {
 	FunctionScore    float32
 	StartLine        int
 	EndLine          int
+}
+
+type entityMatch struct {
+	start int
+	end   int
+	chunk Chunk
 }
 
 func CreateChunks(text string, filePath string) []Chunk {
@@ -59,7 +67,7 @@ func CreateChunks(text string, filePath string) []Chunk {
 
 func isTreeSitterSupported(ext string) bool {
 	switch ext {
-	case ".go", ".js", ".jsx", ".ts", ".tsx", ".php":
+	case ".go", ".js", ".jsx", ".ts", ".tsx", ".php", ".py", ".rs":
 		return true
 	}
 	return false
@@ -80,6 +88,10 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 		lang = tsx.GetLanguage()
 	case ".php":
 		lang = php.GetLanguage()
+	case ".py":
+		lang = python.GetLanguage()
+	case ".rs":
+		lang = rust.GetLanguage()
 	default:
 		return fastChunk(content)
 	}
@@ -117,8 +129,6 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 			`(export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function)]))) @entity`,
 		}
 	case ".php":
-		// PHP specific queries, capturing standard OOP constructs as well as
-		// WordPress-style functional hooks (e.g. add_action, add_filter).
 		queries = []string{
 			`(class_declaration name: (name) @name) @entity`,
 			`(method_declaration name: (name) @name) @entity`,
@@ -126,9 +136,22 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 			`(interface_declaration name: (name) @name) @entity`,
 			`(function_call_expression function: (name) @name arguments: (arguments (argument (string) @hook_name) (argument [(anonymous_function_creation_expression) (arrow_function)]))) @entity`,
 		}
+	case ".py":
+		queries = []string{
+			`(class_definition name: (identifier) @name) @entity`,
+			`(function_definition name: (identifier) @name) @entity`,
+		}
+	case ".rs":
+		queries = []string{
+			`(struct_item name: (type_identifier) @name) @entity`,
+			`(enum_item name: (type_identifier) @name) @entity`,
+			`(function_item name: (identifier) @name) @entity`,
+			`(impl_item type: (type_identifier) @name) @entity`,
+			`(trait_item name: (type_identifier) @name) @entity`,
+		}
 	}
 
-	var rawChunks []Chunk
+	var matches []entityMatch
 	seen := make(map[string]bool)
 
 	for _, qStr := range queries {
@@ -163,8 +186,8 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 				}
 
 				if entityNode != nil {
-					start := entityNode.StartByte()
-					end := entityNode.EndByte()
+					start := int(entityNode.StartByte())
+					end := int(entityNode.EndByte())
 					key := fmt.Sprintf("%d-%d", start, end)
 
 					if !seen[key] {
@@ -176,18 +199,21 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 						}
 
 						chunkType := entityNode.Type()
-
 						calls := extractCallsGeneric(entityNode, content)
 						score := calculateScoreGeneric(entityNode, calls)
 
-						rawChunks = append(rawChunks, Chunk{
-							Content:       string(content[start:end]),
-							Symbols:       []string{symbolName},
-							Type:          chunkType,
-							Calls:         calls,
-							FunctionScore: score,
-							StartLine:     int(entityNode.StartPoint().Row) + 1,
-							EndLine:       int(entityNode.EndPoint().Row) + 1,
+						matches = append(matches, entityMatch{
+							start: start,
+							end:   end,
+							chunk: Chunk{
+								Content:       string(content[start:end]),
+								Symbols:       []string{symbolName},
+								Type:          chunkType,
+								Calls:         calls,
+								FunctionScore: score,
+								StartLine:     int(entityNode.StartPoint().Row) + 1,
+								EndLine:       int(entityNode.EndPoint().Row) + 1,
+							},
 						})
 					}
 				}
@@ -195,29 +221,117 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 		}(qStr)
 	}
 
-	var chunks []Chunk
-	for i, c1 := range rawChunks {
-		isRedundant := false
-		for j, c2 := range rawChunks {
-			if i == j {
-				continue
-			}
-			if c1.StartLine >= c2.StartLine && c1.EndLine <= c2.EndLine {
-				if c1.Type == c2.Type && (c1.EndLine - c1.StartLine) < (c2.EndLine - c2.StartLine) {
-					isRedundant = true
-					break
-				}
+	// Identify top-level entities for gap filling
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].start != matches[j].start {
+			return matches[i].start < matches[j].start
+		}
+		return matches[i].end > matches[j].end
+	})
+
+	var topLevel []entityMatch
+	for _, m := range matches {
+		isContained := false
+		for _, tl := range topLevel {
+			if m.start >= tl.start && m.end <= tl.end {
+				isContained = true
+				break
 			}
 		}
-		if !isRedundant {
-			chunks = append(chunks, c1)
+		if !isContained {
+			topLevel = append(topLevel, m)
 		}
 	}
 
-	if len(chunks) == 0 {
+	// Calculate gaps and fill with Unknown chunks
+	var allChunks []Chunk
+	lastEnd := 0
+	contentBytes := []byte(content)
+	
+	for _, tl := range topLevel {
+		// Add gap before this top-level entity
+		if tl.start > lastEnd {
+			gapContent := string(contentBytes[lastEnd:tl.start])
+			if strings.TrimSpace(gapContent) != "" {
+				gapChunks := splitIfNeeded(Chunk{
+					Content:   gapContent,
+					Type:      "Unknown",
+					StartLine: countLines(string(contentBytes[:lastEnd])) + 1,
+					EndLine:   countLines(string(contentBytes[:tl.start])),
+				})
+				allChunks = append(allChunks, gapChunks...)
+			}
+		}
+		lastEnd = tl.end
+	}
+	
+	// Add final gap
+	if lastEnd < len(contentBytes) {
+		gapContent := string(contentBytes[lastEnd:])
+		if strings.TrimSpace(gapContent) != "" {
+			gapChunks := splitIfNeeded(Chunk{
+				Content:   gapContent,
+				Type:      "Unknown",
+				StartLine: countLines(string(contentBytes[:lastEnd])) + 1,
+				EndLine:   countLines(string(contentBytes)),
+			})
+			allChunks = append(allChunks, gapChunks...)
+		}
+	}
+
+	// Add all semantic matches, splitting large ones
+	for _, m := range matches {
+		allChunks = append(allChunks, splitIfNeeded(m.chunk)...)
+	}
+
+	if len(allChunks) == 0 {
 		return fastChunk(content)
 	}
 
+	return allChunks
+}
+
+func countLines(s string) int {
+	return strings.Count(s, "\n")
+}
+
+func splitIfNeeded(c Chunk) []Chunk {
+	runes := []rune(c.Content)
+	maxRunes := 3000
+	overlap := 500
+
+	if len(runes) <= maxRunes {
+		return []Chunk{c}
+	}
+
+	var chunks []Chunk
+	for i := 0; i < len(runes); {
+		end := i + maxRunes
+		if end > len(runes) {
+			end = len(runes)
+		}
+
+		subContent := string(runes[i:end])
+		
+		// Approximate lines
+		linesInSub := strings.Count(subContent, "\n")
+		
+		newChunk := c
+		newChunk.Content = subContent
+		newChunk.EndLine = newChunk.StartLine + linesInSub
+		// Adjust start line for subsequent chunks
+		if i > 0 {
+			linesBefore := strings.Count(string(runes[:i]), "\n")
+			newChunk.StartLine = c.StartLine + linesBefore
+		}
+
+		chunks = append(chunks, newChunk)
+
+		if end == len(runes) {
+			break
+		}
+		i += (maxRunes - overlap)
+	}
 	return chunks
 }
 
