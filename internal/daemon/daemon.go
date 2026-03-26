@@ -37,8 +37,6 @@ type EmbedBatchResponse struct {
 	Embeddings [][]float32
 }
 
-
-
 type RerankBatchRequest struct {
 	Query string
 	Texts []string
@@ -126,8 +124,6 @@ func (s *Service) EmbedBatch(req EmbedBatchRequest, resp *EmbedBatchResponse) er
 	resp.Embeddings = embs
 	return nil
 }
-
-
 
 func (s *Service) RerankBatch(req RerankBatchRequest, resp *RerankBatchResponse) error {
 	scores, err := s.Embedder.RerankBatch(context.Background(), req.Query, req.Texts)

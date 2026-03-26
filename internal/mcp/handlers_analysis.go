@@ -181,7 +181,7 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 				if dr.Metadata["path"] == filePath {
 					continue
 				}
-				
+
 				tokens := indexer.EstimateTokens(dr.Content)
 				if currentTokenCount+tokens > maxTokens {
 					continue
@@ -658,7 +658,7 @@ func (s *Server) handleAnalyzeArchitecture(ctx context.Context, request mcp.Call
 func (s *Server) handleFindDeadCode(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Default excluded paths for common entry points and routing
 	defaultExcludes := []string{"/api", "/routes", "/cmd", "main.go", "index.ts"}
-	
+
 	// If the user didn't provide exclude_paths, use defaults.
 	// Note: We check if the key exists to distinguish between "not provided" and "provided as empty".
 	var excludePaths []string
