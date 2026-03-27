@@ -64,6 +64,13 @@ func TestIsIgnoredFile(t *testing.T) {
 		{"Source map file", "app.js.map", true},
 		{"Minified JS file", "vendor.min.js", true},
 		{"SVG file", "icon.svg", true},
+		{"Uppercase exact match", "PACKAGE-LOCK.JSON", true},
+		{"Mixed case exact match", "pnpm-Lock.yaml", true},
+		{"Uppercase suffix", "app.js.MAP", true},
+		{"Mixed case suffix", "vendor.MIN.js", true},
+		{"Uppercase SVG", "icon.SVG", true},
+		{"Image PNG", "image.png", true},
+		{"Image JPG", "image.jpg", true},
 
 		// Not ignored files
 		{"Go source file", "scanner.go", false},
