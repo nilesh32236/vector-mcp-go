@@ -1,6 +1,10 @@
 package indexer
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -79,6 +83,65 @@ func TestIsIgnoredFile(t *testing.T) {
 			result := IsIgnoredFile(tt.file)
 			if result != tt.expected {
 				t.Errorf("IsIgnoredFile(%q) = %v, expected %v", tt.file, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetHash(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// 1. Normal file
+	normalFile := filepath.Join(tempDir, "normal.txt")
+	normalContent := []byte("hello world")
+	if err := os.WriteFile(normalFile, normalContent, 0644); err != nil {
+		t.Fatalf("Failed to create normal file: %v", err)
+	}
+	normalHashBytes := sha256.Sum256(normalContent)
+	expectedNormalHash := hex.EncodeToString(normalHashBytes[:])
+
+	// 2. Empty file
+	emptyFile := filepath.Join(tempDir, "empty.txt")
+	emptyContent := []byte("")
+	if err := os.WriteFile(emptyFile, emptyContent, 0644); err != nil {
+		t.Fatalf("Failed to create empty file: %v", err)
+	}
+	emptyHashBytes := sha256.Sum256(emptyContent)
+	expectedEmptyHash := hex.EncodeToString(emptyHashBytes[:])
+
+	// 3. Directory
+	dirPath := filepath.Join(tempDir, "dir")
+	if err := os.Mkdir(dirPath, 0755); err != nil {
+		t.Fatalf("Failed to create directory: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		path        string
+		expected    string
+		expectError bool
+	}{
+		{"Normal file", normalFile, expectedNormalHash, false},
+		{"Empty file", emptyFile, expectedEmptyHash, false},
+		{"Non-existent file", filepath.Join(tempDir, "does-not-exist.txt"), "", true},
+		{"Directory instead of file", dirPath, "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hash, err := GetHash(tt.path)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("GetHash(%q) expected error, got nil", tt.path)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("GetHash(%q) unexpected error: %v", tt.path, err)
+				}
+				if hash != tt.expected {
+					t.Errorf("GetHash(%q) = %q, expected %q", tt.path, hash, tt.expected)
+				}
 			}
 		})
 	}
