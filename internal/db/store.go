@@ -9,15 +9,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/philippgille/chromem-go"
 )
 
 type Store struct {
-	db         *chromem.DB
-	collection *chromem.Collection
-	dimension  int
+	db          *chromem.DB
+	collection  *chromem.Collection
+	dimension   int
+	parsedCache map[string][]string
+	cacheMu     sync.RWMutex
 }
 
 type Record struct {
@@ -42,7 +45,7 @@ func Connect(ctx context.Context, dbPath string, collectionName string, dimensio
 		}
 	}
 
-	s := &Store{db: db, collection: col, dimension: dimension}
+	s := &Store{db: db, collection: col, dimension: dimension, parsedCache: make(map[string][]string)}
 
 	// Probe for dimension mismatch if the collection already has data.
 	if col.Count() > 0 {
@@ -123,8 +126,7 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 		// Check Symbols metadata (stored as JSON array)
 		if symsJSON, ok := doc.Metadata["symbols"]; ok {
 			if strings.Contains(strings.ToLower(symsJSON), queryLower) {
-				var syms []string
-				if err := json.Unmarshal([]byte(symsJSON), &syms); err == nil {
+				if syms := s.parseStringArray(symsJSON); syms != nil {
 					for _, sym := range syms {
 						if strings.EqualFold(sym, query) || strings.Contains(strings.ToLower(sym), queryLower) {
 							isMatch = true
@@ -153,8 +155,7 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 		if !isMatch {
 			if callsJSON, ok := doc.Metadata["calls"]; ok {
 				if strings.Contains(strings.ToLower(callsJSON), queryLower) {
-					var calls []string
-					if err := json.Unmarshal([]byte(callsJSON), &calls); err == nil {
+					if calls := s.parseStringArray(callsJSON); calls != nil {
 						for _, call := range calls {
 							if strings.EqualFold(call, query) {
 								isMatch = true
@@ -509,4 +510,29 @@ func (s *Store) GetAllStatuses(ctx context.Context) (map[string]string, error) {
 		}
 	}
 	return statuses, nil
+}
+
+// parseStringArray parses a JSON string array and caches the result
+// to avoid repeated unmarshaling in search loops.
+func (s *Store) parseStringArray(jsonStr string) []string {
+	s.cacheMu.RLock()
+	if val, ok := s.parsedCache[jsonStr]; ok {
+		s.cacheMu.RUnlock()
+		return val
+	}
+	s.cacheMu.RUnlock()
+
+	var arr []string
+	if err := json.Unmarshal([]byte(jsonStr), &arr); err != nil {
+		return nil
+	}
+
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	// Simple eviction: if cache gets too big, clear it to prevent memory leaks
+	if len(s.parsedCache) > 10000 {
+		s.parsedCache = make(map[string][]string)
+	}
+	s.parsedCache[jsonStr] = arr
+	return arr
 }
