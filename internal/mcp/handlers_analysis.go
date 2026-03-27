@@ -16,6 +16,7 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/llm"
 )
 
 // handleGetRelatedContext retrieves relevant code chunks and dependencies for a given file.
@@ -962,7 +963,7 @@ func (s *Server) handleListAPIEndpoints(ctx context.Context, request mcp.CallToo
 
 	// We look for common routing keywords
 	keywords := []string{"HandleFunc", "mux.Handle", "app.GET", "app.POST", "router.Register", "Route(", "@app.route", "FastAPI()"}
-	
+
 	var allMatches []db.Record
 	for _, kw := range keywords {
 		matches, _ := store.LexicalSearch(ctx, kw, 20, []string{s.cfg.ProjectRoot}, "code")
@@ -982,7 +983,7 @@ func (s *Server) handleListAPIEndpoints(ctx context.Context, request mcp.CallToo
 
 	var out strings.Builder
 	out.WriteString("## 🌐 Detected API Endpoints / Routes\n\n")
-	
+
 	paths := make([]string, 0, len(uniqueMatches))
 	for k := range uniqueMatches {
 		paths = append(paths, k)
