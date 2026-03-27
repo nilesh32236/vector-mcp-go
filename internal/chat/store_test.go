@@ -31,7 +31,10 @@ func TestNewStore(t *testing.T) {
 
 func TestStore_CreateSession(t *testing.T) {
 	tempDir := t.TempDir()
-	store, _ := NewStore(tempDir)
+	store, err := NewStore(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 
 	title := "Test Session"
 	sess, err := store.CreateSession(title)
@@ -65,10 +68,16 @@ func TestStore_CreateSession(t *testing.T) {
 
 func TestStore_GetSession(t *testing.T) {
 	tempDir := t.TempDir()
-	store, _ := NewStore(tempDir)
+	store, err := NewStore(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 
 	title := "Test Session"
-	sess, _ := store.CreateSession(title)
+	sess, err := store.CreateSession(title)
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
 
 	hist, err := store.GetSession(sess.ID)
 	if err != nil {
@@ -100,7 +109,10 @@ func TestStore_GetSession(t *testing.T) {
 
 func TestStore_ListSessions(t *testing.T) {
 	tempDir := t.TempDir()
-	store, _ := NewStore(tempDir)
+	store, err := NewStore(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 
 	// Create some sessions
 	numSessions := 3
@@ -112,9 +124,18 @@ func TestStore_ListSessions(t *testing.T) {
 	}
 
 	// Create some invalid files/dirs to test filtering
-	os.Mkdir(filepath.Join(store.baseDir, "invalid-dir"), 0755)
-	os.WriteFile(filepath.Join(store.baseDir, "invalid-file.txt"), []byte("not json"), 0644)
-	os.WriteFile(filepath.Join(store.baseDir, "malformed.json"), []byte("{malformed"), 0644)
+	err = os.Mkdir(filepath.Join(store.baseDir, "invalid-dir"), 0755)
+	if err != nil {
+		t.Fatalf("failed to create invalid dir: %v", err)
+	}
+	err = os.WriteFile(filepath.Join(store.baseDir, "invalid-file.txt"), []byte("not json"), 0644)
+	if err != nil {
+		t.Fatalf("failed to write invalid file: %v", err)
+	}
+	err = os.WriteFile(filepath.Join(store.baseDir, "malformed.json"), []byte("{malformed"), 0644)
+	if err != nil {
+		t.Fatalf("failed to write malformed file: %v", err)
+	}
 
 	sessions, err := store.ListSessions()
 	if err != nil {
@@ -128,21 +149,31 @@ func TestStore_ListSessions(t *testing.T) {
 
 func TestStore_AppendMessage(t *testing.T) {
 	tempDir := t.TempDir()
-	store, _ := NewStore(tempDir)
+	store, err := NewStore(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 
-	sess, _ := store.CreateSession("Test Session")
+	sess, err := store.CreateSession("Test Session")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
 
 	msg := llm.Message{
 		Role:    "user",
 		Content: "Hello world!",
 	}
 
-	err := store.AppendMessage(sess.ID, msg)
+	err = store.AppendMessage(sess.ID, msg)
 	if err != nil {
 		t.Fatalf("expected no error appending message, got %v", err)
 	}
 
-	hist, _ := store.GetSession(sess.ID)
+	var hist MessageHistory
+	hist, err = store.GetSession(sess.ID)
+	if err != nil {
+		t.Fatalf("failed to get session: %v", err)
+	}
 
 	if len(hist.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(hist.Messages))
@@ -158,7 +189,7 @@ func TestStore_AppendMessage(t *testing.T) {
 
 	// Ensure updated time is updated
 	if !hist.UpdatedAt.After(sess.UpdatedAt) && !hist.UpdatedAt.Equal(sess.UpdatedAt) {
-		t.Logf("expected updated time %v to be after creation time %v", hist.UpdatedAt, sess.UpdatedAt)
+		t.Fatalf("expected updated time %v to be after creation time %v", hist.UpdatedAt, sess.UpdatedAt)
 		// Usually After() works but due to clock resolution sometimes it's Equal
 	}
 
@@ -171,11 +202,17 @@ func TestStore_AppendMessage(t *testing.T) {
 
 func TestStore_DeleteSession(t *testing.T) {
 	tempDir := t.TempDir()
-	store, _ := NewStore(tempDir)
+	store, err := NewStore(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
 
-	sess, _ := store.CreateSession("Test Session")
+	sess, err := store.CreateSession("Test Session")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
 
-	err := store.DeleteSession(sess.ID)
+	err = store.DeleteSession(sess.ID)
 	if err != nil {
 		t.Fatalf("expected no error deleting session, got %v", err)
 	}
