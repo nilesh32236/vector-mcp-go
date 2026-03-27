@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/rpc"
 	"os"
@@ -336,7 +337,9 @@ func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue 
 		return nil, fmt.Errorf("master already running on %s", socketPath)
 	}
 	// Socket exists but is stale (no one listening) — safe to remove.
-	_ = os.Remove(socketPath)
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		slog.Warn("Failed to remove stale socket file", "path", socketPath, "error", err)
+	}
 
 	l, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -376,7 +379,9 @@ func (s *MasterServer) Close() {
 	if s.listener != nil {
 		s.listener.Close()
 	}
-	_ = os.Remove(s.socketPath)
+	if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
+		slog.Warn("Failed to remove socket file on close", "path", s.socketPath, "error", err)
+	}
 }
 
 // Client facilitates communication from Slave to Master.
