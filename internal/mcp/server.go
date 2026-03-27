@@ -56,17 +56,17 @@ type IndexerStore interface {
 // the MCP server, registers available tools, and routes incoming tool calls
 // to their respective handlers.
 type Server struct {
-	cfg              *config.Config             // Server configuration
-	logger           *slog.Logger               // Structured logger
-	MCPServer        *server.MCPServer          // Underlying MCP server instance
-	storeGetter      func(ctx context.Context) (*db.Store, error) // Function to get local store
-	remoteStore      IndexerStore               // Optional remote store implementation
-	embedder         indexer.Embedder           // Embedding engine for semantic operations
-	indexQueue       chan string                // Queue for background indexing tasks
-	daemonClient     *daemon.Client             // Client for master daemon communication
-	progressMap      *sync.Map                  // Thread-safe map for tracking indexing progress
-	watcherResetChan chan string                // Channel to signal file watcher resets
-	monorepoResolver *indexer.WorkspaceResolver // Resolver for monorepo package structures
+	cfg              *config.Config                                                                                 // Server configuration
+	logger           *slog.Logger                                                                                   // Structured logger
+	MCPServer        *server.MCPServer                                                                              // Underlying MCP server instance
+	storeGetter      func(ctx context.Context) (*db.Store, error)                                                   // Function to get local store
+	remoteStore      IndexerStore                                                                                   // Optional remote store implementation
+	embedder         indexer.Embedder                                                                               // Embedding engine for semantic operations
+	indexQueue       chan string                                                                                    // Queue for background indexing tasks
+	daemonClient     *daemon.Client                                                                                 // Client for master daemon communication
+	progressMap      *sync.Map                                                                                      // Thread-safe map for tracking indexing progress
+	watcherResetChan chan string                                                                                    // Channel to signal file watcher resets
+	monorepoResolver *indexer.WorkspaceResolver                                                                     // Resolver for monorepo package structures
 	toolHandlers     map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) // Map of tool names to handlers
 }
 
