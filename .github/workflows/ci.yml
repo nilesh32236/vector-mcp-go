@@ -9,6 +9,9 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      ONNX_LIB_PATH: ${{ github.workspace }}/lib/libonnxruntime.so
+      LD_LIBRARY_PATH: ${{ github.workspace }}/lib
     steps:
     - uses: actions/checkout@v4
 
