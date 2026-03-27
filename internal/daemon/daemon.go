@@ -37,8 +37,6 @@ type EmbedBatchResponse struct {
 	Embeddings [][]float32
 }
 
-
-
 type RerankBatchRequest struct {
 	Query string
 	Texts []string
@@ -126,8 +124,6 @@ func (s *Service) EmbedBatch(req EmbedBatchRequest, resp *EmbedBatchResponse) er
 	resp.Embeddings = embs
 	return nil
 }
-
-
 
 func (s *Service) RerankBatch(req RerankBatchRequest, resp *RerankBatchResponse) error {
 	scores, err := s.Embedder.RerankBatch(context.Background(), req.Query, req.Texts)
@@ -330,7 +326,9 @@ func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue 
 	// rpc.RegisterName is global for the default server.
 	// Since we only ever have one MasterServer in a process, we can register it once.
 	// However, to support updating the embedder later, we use a service pointer.
-	_ = rpc.RegisterName("VectorDaemon", svc)
+	if err := rpc.RegisterName("VectorDaemon", svc); err != nil {
+		return nil, fmt.Errorf("failed to register RPC service: %w", err)
+	}
 
 	// Check if a master is already listening on the socket before removing it.
 	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {

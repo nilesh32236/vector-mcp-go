@@ -122,12 +122,14 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 
 		// Check Symbols metadata (stored as JSON array)
 		if symsJSON, ok := doc.Metadata["symbols"]; ok {
-			var syms []string
-			if err := json.Unmarshal([]byte(symsJSON), &syms); err == nil {
-				for _, sym := range syms {
-					if strings.EqualFold(sym, query) || strings.Contains(strings.ToLower(sym), queryLower) {
-						isMatch = true
-						break
+			if strings.Contains(strings.ToLower(symsJSON), queryLower) {
+				var syms []string
+				if err := json.Unmarshal([]byte(symsJSON), &syms); err == nil {
+					for _, sym := range syms {
+						if strings.EqualFold(sym, query) || strings.Contains(strings.ToLower(sym), queryLower) {
+							isMatch = true
+							break
+						}
 					}
 				}
 			}
@@ -150,12 +152,14 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 		// Check Calls metadata for usage discovery
 		if !isMatch {
 			if callsJSON, ok := doc.Metadata["calls"]; ok {
-				var calls []string
-				if err := json.Unmarshal([]byte(callsJSON), &calls); err == nil {
-					for _, call := range calls {
-						if strings.EqualFold(call, query) {
-							isMatch = true
-							break
+				if strings.Contains(strings.ToLower(callsJSON), queryLower) {
+					var calls []string
+					if err := json.Unmarshal([]byte(callsJSON), &calls); err == nil {
+						for _, call := range calls {
+							if strings.EqualFold(call, query) {
+								isMatch = true
+								break
+							}
 						}
 					}
 				}

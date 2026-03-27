@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -15,6 +16,7 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/llm"
 )
 
 // handleGetRelatedContext retrieves relevant code chunks and dependencies for a given file.
@@ -181,7 +183,7 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 				if dr.Metadata["path"] == filePath {
 					continue
 				}
-				
+
 				tokens := indexer.EstimateTokens(dr.Content)
 				if currentTokenCount+tokens > maxTokens {
 					continue
@@ -658,7 +660,7 @@ func (s *Server) handleAnalyzeArchitecture(ctx context.Context, request mcp.Call
 func (s *Server) handleFindDeadCode(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Default excluded paths for common entry points and routing
 	defaultExcludes := []string{"/api", "/routes", "/cmd", "main.go", "index.ts"}
-	
+
 	// If the user didn't provide exclude_paths, use defaults.
 	// Note: We check if the key exists to distinguish between "not provided" and "provided as empty".
 	var excludePaths []string
@@ -784,6 +786,308 @@ func (s *Server) handleFindDeadCode(ctx context.Context, request mcp.CallToolReq
 	for _, d := range dead {
 		out.WriteString(fmt.Sprintf("- **`%s`** in `%s`\n", d.name, d.path))
 	}
+
+	return mcp.NewToolResultText(out.String()), nil
+}
+
+// handleVerifyImplementationGap cross-references feedback/documentation against the codebase.
+func (s *Server) handleVerifyImplementationGap(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	query := request.GetString("query", "")
+	if query == "" {
+		return mcp.NewToolResultError("query is required (e.g., 'user authentication' or 'feature requirement')"), nil
+	}
+
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	pids := []string{s.cfg.ProjectRoot}
+	emb, err := s.embedder.Embed(ctx, query)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
+	}
+
+	// 1. Search for Requirements/Feedback (category: document)
+	docs, err := store.HybridSearch(ctx, query, emb, 5, pids, "document")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to search documents: %v", err)), nil
+	}
+
+	// 2. Search for Implementation (category: code)
+	code, err := store.HybridSearch(ctx, query, emb, 10, pids, "code")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to search code: %v", err)), nil
+	}
+
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("# Verification Analysis for: '%s'\n\n", query))
+
+	out.WriteString("## 📄 Found Requirements / Feedback\n")
+	if len(docs) == 0 {
+		out.WriteString("No matching documentation or feedback found.\n")
+	} else {
+		for i, d := range docs {
+			out.WriteString(fmt.Sprintf("### Req %d: %s\n", i+1, d.Metadata["path"]))
+			out.WriteString(d.Content + "\n\n")
+		}
+	}
+
+	out.WriteString("\n## 💻 Potential Implementation (Code)\n")
+	if len(code) == 0 {
+		out.WriteString("No matching implementation found in the codebase.\n")
+	} else {
+		for i, c := range code {
+			out.WriteString(fmt.Sprintf("### Code %d: %s (Lines %s-%s)\n", i+1, c.Metadata["path"], c.Metadata["start_line"], c.Metadata["end_line"]))
+			out.WriteString("```\n" + c.Content + "\n```\n\n")
+		}
+	}
+
+	out.WriteString("\n## 🔍 GAP Analysis Guidance\n")
+	out.WriteString("Compare the 'Found Requirements' with the 'Potential Implementation'. Look for:\n")
+	out.WriteString("- Unhandled edge cases mentioned in feedback.\n")
+	out.WriteString("- Missing validation logic required by documentation.\n")
+	out.WriteString("- Architectural mismatches between design and implementation.\n")
+
+	return mcp.NewToolResultText(out.String()), nil
+}
+
+// handleFindMissingTests identifies exported symbols that lack corresponding test coverage.
+func (s *Server) handleFindMissingTests(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	records, err := store.GetAllRecords(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch all records: %v", err)), nil
+	}
+
+	type exportedSymbol struct {
+		name string
+		path string
+	}
+
+	sourceExports := make(map[string]exportedSymbol)
+	testUsages := make(map[string]bool)
+
+	for _, r := range records {
+		filePath := r.Metadata["path"]
+		isTestFile := strings.HasSuffix(filePath, "_test.go") || strings.Contains(filePath, "/test/") || strings.Contains(filePath, "/tests/")
+
+		if isTestFile {
+			// Track usages in test files
+			var calls []string
+			if err := json.Unmarshal([]byte(r.Metadata["calls"]), &calls); err == nil {
+				for _, call := range calls {
+					testUsages[call] = true
+				}
+			}
+			var rels []string
+			if err := json.Unmarshal([]byte(r.Metadata["relationships"]), &rels); err == nil {
+				for _, rel := range rels {
+					testUsages[rel] = true
+				}
+			}
+			// Also track the content for explicit mentions
+			for _, word := range strings.Fields(r.Content) {
+				testUsages[word] = true
+			}
+		} else {
+			// Track exports in source files
+			t := r.Metadata["type"]
+			if t == "function" || t == "class" || t == "variable" || t == "arrow_function" {
+				var syms []string
+				if err := json.Unmarshal([]byte(r.Metadata["symbols"]), &syms); err == nil {
+					for _, sym := range syms {
+						if sym != "" && !strings.HasPrefix(sym, "_") { // Only exported/public
+							sourceExports[sym] = exportedSymbol{name: sym, path: filePath}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	var missing []exportedSymbol
+	for name, info := range sourceExports {
+		// Heuristic: check if the symbol name or any part of it (if it's a method) is in testUsages
+		found := testUsages[name]
+		if !found && strings.Contains(name, ".") {
+			parts := strings.Split(name, ".")
+			found = testUsages[parts[len(parts)-1]]
+		}
+
+		if !found {
+			missing = append(missing, info)
+		}
+	}
+
+	if len(missing) == 0 {
+		return mcp.NewToolResultText("✅ Coverage Check: All exported symbols appear to have some test representation."), nil
+	}
+
+	sort.Slice(missing, func(i, j int) bool {
+		if missing[i].path == missing[j].path {
+			return missing[i].name < missing[j].name
+		}
+		return missing[i].path < missing[j].path
+	})
+
+	var out strings.Builder
+	out.WriteString("## 🧪 Missing Test Coverage Report\n\n")
+	out.WriteString("The following exported symbols were found in source files but were not detected in any test files:\n\n")
+	for _, m := range missing {
+		out.WriteString(fmt.Sprintf("- **`%s`** in `%s`\n", m.name, m.path))
+	}
+
+	return mcp.NewToolResultText(out.String()), nil
+}
+
+// handleListAPIEndpoints identifies potential API route definitions in the codebase.
+func (s *Server) handleListAPIEndpoints(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// We look for common routing keywords
+	keywords := []string{"HandleFunc", "mux.Handle", "app.GET", "app.POST", "router.Register", "Route(", "@app.route", "FastAPI()"}
+
+	var allMatches []db.Record
+	for _, kw := range keywords {
+		matches, _ := store.LexicalSearch(ctx, kw, 20, []string{s.cfg.ProjectRoot}, "code")
+		allMatches = append(allMatches, matches...)
+	}
+
+	if len(allMatches) == 0 {
+		return mcp.NewToolResultText("No API routing patterns detected."), nil
+	}
+
+	// Deduplicate by content/path
+	uniqueMatches := make(map[string]db.Record)
+	for _, m := range allMatches {
+		key := m.Metadata["path"] + ":" + m.Metadata["start_line"]
+		uniqueMatches[key] = m
+	}
+
+	var out strings.Builder
+	out.WriteString("## 🌐 Detected API Endpoints / Routes\n\n")
+
+	paths := make([]string, 0, len(uniqueMatches))
+	for k := range uniqueMatches {
+		paths = append(paths, k)
+	}
+	sort.Strings(paths)
+
+	for _, p := range paths {
+		m := uniqueMatches[p]
+		out.WriteString(fmt.Sprintf("### %s (Line %s)\n", m.Metadata["path"], m.Metadata["start_line"]))
+		out.WriteString("```\n" + strings.TrimSpace(m.Content) + "\n```\n\n")
+	}
+
+	return mcp.NewToolResultText(out.String()), nil
+}
+
+// handleGetCodeHistory retrieves recent git history for a specific file.
+func (s *Server) handleGetCodeHistory(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	filePath := request.GetString("file_path", "")
+	if filePath == "" {
+		return mcp.NewToolResultError("file_path is required"), nil
+	}
+
+	absPath := filePath
+	if !filepath.IsAbs(filePath) {
+		absPath = filepath.Join(s.cfg.ProjectRoot, filePath)
+	}
+
+	// Check if git is available and it's a git repo
+	cmd := exec.CommandContext(ctx, "git", "log", "-n", "10", "--pretty=format:%h - %an, %ar : %s", "--", absPath)
+	cmd.Dir = s.cfg.ProjectRoot
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to run git log: %v\nOutput: %s", err, string(output))), nil
+	}
+
+	if len(output) == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("No git history found for %s (or file is not tracked).", filePath)), nil
+	}
+
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("## 📜 Git History for %s\n\n", filePath))
+	out.WriteString(string(output))
+
+	return mcp.NewToolResultText(out.String()), nil
+}
+
+// handleGetSummarizedContext retrieves context for a query and uses an LLM to provide a concise summary.
+func (s *Server) handleGetSummarizedContext(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	query := request.GetString("query", "")
+	if query == "" {
+		return mcp.NewToolResultError("query is required"), nil
+	}
+	topK := int(request.GetFloat("topK", 5))
+
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	emb, err := s.embedder.Embed(ctx, query)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
+	}
+
+	// Search for both code and documents
+	records, err := store.HybridSearch(ctx, query, emb, topK, []string{s.cfg.ProjectRoot}, "")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to search database: %v", err)), nil
+	}
+
+	if len(records) == 0 {
+		return mcp.NewToolResultText("No matching context found to summarize."), nil
+	}
+
+	var combinedText strings.Builder
+	for _, r := range records {
+		combinedText.WriteString(fmt.Sprintf("File: %s\nContent:\n%s\n---\n", r.Metadata["path"], r.Content))
+	}
+
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		return mcp.NewToolResultText("Summarization skipped: GEMINI_API_KEY environment variable is not set. Please set it to enable LLM features in Go."), nil
+	}
+
+	systemPrompt := "You are a senior software engineer. Summarize the provided code and documentation context in relation to the user's query. Be concise and technical."
+	userPrompt := fmt.Sprintf("Query: %s\n\nContext:\n%s", query, combinedText.String())
+
+	messages := []llm.Message{
+		{Role: "user", Content: userPrompt},
+	}
+
+	// Using the existing Gemini completion logic
+	resp, err := llm.GenerateGeminiCompletion(ctx, apiKey, "gemini-1.5-flash", systemPrompt, messages, nil, "")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("LLM completion failed: %v", err)), nil
+	}
+
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("### 🤖 LLM Summary for: '%s'\n\n", query))
+	out.WriteString(resp.Text)
+	out.WriteString("\n\n---\n*Note: This summary was generated using Gemini. For a fully local experience in Go, consider using llama.cpp bindings.*")
 
 	return mcp.NewToolResultText(out.String()), nil
 }

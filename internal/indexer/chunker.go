@@ -247,7 +247,7 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 	var allChunks []Chunk
 	lastEnd := 0
 	contentBytes := []byte(content)
-	
+
 	for _, tl := range topLevel {
 		// Add gap before this top-level entity
 		if tl.start > lastEnd {
@@ -264,7 +264,7 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 		}
 		lastEnd = tl.end
 	}
-	
+
 	// Add final gap
 	if lastEnd < len(contentBytes) {
 		gapContent := string(contentBytes[lastEnd:])
@@ -312,10 +312,10 @@ func splitIfNeeded(c Chunk) []Chunk {
 		}
 
 		subContent := string(runes[i:end])
-		
+
 		// Approximate lines
 		linesInSub := strings.Count(subContent, "\n")
-		
+
 		newChunk := c
 		newChunk.Content = subContent
 		newChunk.EndLine = newChunk.StartLine + linesInSub
@@ -486,10 +486,10 @@ func fastChunk(text string) []Chunk {
 		endLine := startLine + strings.Count(content, "\n")
 
 		chunks = append(chunks, Chunk{
-			Content:   content,
+			Content:          content,
 			ContextualString: content,
-			StartLine: startLine,
-			EndLine:   endLine,
+			StartLine:        startLine,
+			EndLine:          endLine,
 		})
 
 		if end == len(runes) {

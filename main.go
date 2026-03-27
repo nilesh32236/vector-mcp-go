@@ -225,7 +225,14 @@ func main() {
 			logger.Error("Failed to get store for indexing", "error", err)
 			os.Exit(1)
 		}
-		summary, err := indexer.IndexFullCodebase(ctx, cfg, store, embedder, deps.progressMap, logger)
+		opts := indexer.IndexerOptions{
+			Config:      cfg,
+			Store:       store,
+			Embedder:    embedder,
+			ProgressMap: deps.progressMap,
+			Logger:      logger,
+		}
+		summary, err := indexer.IndexFullCodebase(ctx, opts)
 		if err != nil {
 			logger.Error("Full indexing failed", "error", err)
 			os.Exit(1)

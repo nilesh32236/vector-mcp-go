@@ -11,14 +11,14 @@ import (
 )
 
 type Config struct {
-	ProjectRoot    string
-	DataDir        string
-	DbPath         string
-	ModelsDir      string
-	LogPath        string
-	ModelName      string
-	RerankerModelName string
-	HFToken        string
+	ProjectRoot        string
+	DataDir            string
+	DbPath             string
+	ModelsDir          string
+	LogPath            string
+	ModelName          string
+	RerankerModelName  string
+	HFToken            string
 	Dimension          int
 	DisableWatcher     bool
 	EmbedderPoolSize   int
