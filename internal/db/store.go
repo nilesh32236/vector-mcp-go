@@ -529,9 +529,16 @@ func (s *Store) parseStringArray(jsonStr string) []string {
 
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
-	// Simple eviction: if cache gets too big, clear it to prevent memory leaks
+	// Partial eviction: if cache gets too big, remove ~10% of entries to prevent thundering herd
 	if len(s.parsedCache) > 10000 {
-		s.parsedCache = make(map[string][]string)
+		evictCount := 1000
+		for k := range s.parsedCache {
+			delete(s.parsedCache, k)
+			evictCount--
+			if evictCount <= 0 {
+				break
+			}
+		}
 	}
 	s.parsedCache[jsonStr] = arr
 	return arr
