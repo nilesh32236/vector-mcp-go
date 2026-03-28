@@ -11,14 +11,13 @@ import (
 )
 
 type Config struct {
-	ProjectRoot        string
-	DataDir            string
-	DbPath             string
-	ModelsDir          string
-	LogPath            string
-	ModelName          string
-	RerankerModelName  string
-	HFToken            string
+	ProjectRoot    string
+	DataDir        string
+	DbPath         string
+	ModelsDir      string
+	LogPath        string
+	ModelName      string
+	HFToken        string
 	Dimension          int
 	DisableWatcher     bool
 	EmbedderPoolSize   int
@@ -91,11 +90,6 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		modelName = "BAAI/bge-small-en-v1.5"
 	}
 
-	rerankerModelName := os.Getenv("RERANKER_MODEL_NAME")
-	if rerankerModelName == "" {
-		rerankerModelName = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-	}
-
 	disableWatcher := os.Getenv("DISABLE_FILE_WATCHER") == "true"
 
 	embedderPoolSize := 1
@@ -122,7 +116,6 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		ModelsDir:          modelsDir,
 		LogPath:            logPath,
 		ModelName:          modelName,
-		RerankerModelName:  rerankerModelName,
 		HFToken:            os.Getenv("HF_TOKEN"),
 		Dimension:          1024,
 		DisableWatcher:     disableWatcher,

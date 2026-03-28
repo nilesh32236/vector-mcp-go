@@ -53,14 +53,8 @@ func stripJSONC(input string) string {
 			continue
 		}
 
-		if r == '"' {
-			backslashes := 0
-			for j := i - 1; j >= 0 && runes[j] == '\\'; j-- {
-				backslashes++
-			}
-			if backslashes%2 == 0 {
-				inString = !inString
-			}
+		if r == '"' && (i == 0 || runes[i-1] != '\\') {
+			inString = !inString
 		}
 
 		if !inString {

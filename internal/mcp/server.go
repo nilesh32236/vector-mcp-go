@@ -56,17 +56,17 @@ type IndexerStore interface {
 // the MCP server, registers available tools, and routes incoming tool calls
 // to their respective handlers.
 type Server struct {
-	cfg              *config.Config                                                                                 // Server configuration
-	logger           *slog.Logger                                                                                   // Structured logger
-	MCPServer        *server.MCPServer                                                                              // Underlying MCP server instance
-	storeGetter      func(ctx context.Context) (*db.Store, error)                                                   // Function to get local store
-	remoteStore      IndexerStore                                                                                   // Optional remote store implementation
-	embedder         indexer.Embedder                                                                               // Embedding engine for semantic operations
-	indexQueue       chan string                                                                                    // Queue for background indexing tasks
-	daemonClient     *daemon.Client                                                                                 // Client for master daemon communication
-	progressMap      *sync.Map                                                                                      // Thread-safe map for tracking indexing progress
-	watcherResetChan chan string                                                                                    // Channel to signal file watcher resets
-	monorepoResolver *indexer.WorkspaceResolver                                                                     // Resolver for monorepo package structures
+	cfg              *config.Config             // Server configuration
+	logger           *slog.Logger               // Structured logger
+	MCPServer        *server.MCPServer          // Underlying MCP server instance
+	storeGetter      func(ctx context.Context) (*db.Store, error) // Function to get local store
+	remoteStore      IndexerStore               // Optional remote store implementation
+	embedder         indexer.Embedder           // Embedding engine for semantic operations
+	indexQueue       chan string                // Queue for background indexing tasks
+	daemonClient     *daemon.Client             // Client for master daemon communication
+	progressMap      *sync.Map                  // Thread-safe map for tracking indexing progress
+	watcherResetChan chan string                // Channel to signal file watcher resets
+	monorepoResolver *indexer.WorkspaceResolver // Resolver for monorepo package structures
 	toolHandlers     map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) // Map of tool names to handlers
 }
 
@@ -236,35 +236,6 @@ func (s *Server) registerTools() {
 	addTool(mcp.NewTool("get_indexing_diagnostics",
 		mcp.WithDescription("Provides detailed diagnostics on the indexing process, including recent errors and queue status."),
 	), s.handleGetIndexingDiagnostics)
-
-	// 14. verify_implementation_gap
-	addTool(mcp.NewTool("verify_implementation_gap",
-		mcp.WithDescription("Verifies if things from docs and client feedback are actually implemented in the code."),
-		mcp.WithString("query", mcp.Description("The requirement or feedback query to verify (e.g. 'user authentication')")),
-	), s.handleVerifyImplementationGap)
-
-	// 15. find_missing_tests
-	addTool(mcp.NewTool("find_missing_tests",
-		mcp.WithDescription("Identifies exported symbols that lack corresponding test coverage by mapping source to tests."),
-	), s.handleFindMissingTests)
-
-	// 16. list_api_endpoints
-	addTool(mcp.NewTool("list_api_endpoints",
-		mcp.WithDescription("Identifies potential API route definitions in the codebase across various frameworks."),
-	), s.handleListAPIEndpoints)
-
-	// 17. get_code_history
-	addTool(mcp.NewTool("get_code_history",
-		mcp.WithDescription("Retrieves recent git history (last 10 commits) for a specific file to understand its evolution."),
-		mcp.WithString("file_path", mcp.Description("The relative path of the file to check history for")),
-	), s.handleGetCodeHistory)
-
-	// 18. get_summarized_context
-	addTool(mcp.NewTool("get_summarized_context",
-		mcp.WithDescription("Retrieves context for a query and uses an LLM to provide a concise summary instead of raw chunks."),
-		mcp.WithString("query", mcp.Description("The search query to summarize")),
-		mcp.WithNumber("topK", mcp.Description("Optional: Number of chunks to include in summary (default 5)")),
-	), s.handleGetSummarizedContext)
 }
 
 // CallTool invokes a registered tool handler by name with the provided arguments.

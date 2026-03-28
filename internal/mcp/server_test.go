@@ -43,10 +43,6 @@ func (m *mockEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]floa
 	return results, nil
 }
 
-func (m *mockEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
-	return make([]float32, len(texts)), nil
-}
-
 func TestIndexStatusTool(t *testing.T) {
 	ctx := context.Background()
 	dbPath := "./test_mcp_db"
@@ -325,7 +321,7 @@ export class SharedUtils {
 			t.Fatal(err)
 		}
 		content := res.Content[0].(mcp.TextContent).Text
-		if !strings.Contains(content, "deadFn") && false {
+		if !strings.Contains(content, "deadFn") {
 			t.Errorf("expected deadFn to be flagged, got: %s", content)
 		}
 		if strings.Contains(content, "aliveFn") {

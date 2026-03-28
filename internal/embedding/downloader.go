@@ -13,7 +13,6 @@ type ModelConfig struct {
 	TokenizerURL string
 	Filename     string
 	Dimension    int
-	IsReranker   bool
 }
 
 var Models = map[string]ModelConfig{
@@ -34,13 +33,6 @@ var Models = map[string]ModelConfig{
 		TokenizerURL: "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/tokenizer.json",
 		Filename:     "bge-base-en-v1.5-q4.onnx",
 		Dimension:    768,
-	},
-	"cross-encoder/ms-marco-MiniLM-L-6-v2": {
-		OnnxURL:      "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/onnx/model_quantized.onnx",
-		TokenizerURL: "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/tokenizer.json",
-		Filename:     "ms-marco-MiniLM-L-6-v2-q4.onnx",
-		Dimension:    1,
-		IsReranker:   true,
 	},
 }
 

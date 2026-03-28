@@ -14,7 +14,7 @@ import (
 
 const MaxSeqLength = 512
 
-type SessionData struct {
+type Embedder struct {
 	session             *onnxruntime_go.AdvancedSession
 	tokenizer           *tokenizer.Tokenizer
 	inputIdsTensor      *onnxruntime_go.Tensor[int64]
@@ -24,38 +24,20 @@ type SessionData struct {
 	dimension           int
 }
 
-type Embedder struct {
-	embSess    *SessionData
-	rerankSess *SessionData
-}
-
 type EmbedderPool struct {
 	pool chan *Embedder
 }
 
-func NewEmbedderPool(ctx context.Context, modelsDir string, size int, embCfg ModelConfig, rerankerCfg *ModelConfig) (*EmbedderPool, error) {
+func NewEmbedderPool(ctx context.Context, modelsDir string, size int, mc ModelConfig) (*EmbedderPool, error) {
 	pool := make(chan *Embedder, size)
 	for i := 0; i < size; i++ {
-		embSess, err := newSessionData(modelsDir, embCfg)
+		emb, err := NewEmbedder(modelsDir, mc)
 		if err != nil {
 			close(pool)
 			for e := range pool {
 				e.Close()
 			}
 			return nil, fmt.Errorf("failed to initialize embedder pool (index %d): %w", i, err)
-		}
-
-		var rerankSess *SessionData
-		if rerankerCfg != nil {
-			rerankSess, err = newSessionData(modelsDir, *rerankerCfg)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: Failed to load reranker: %v\n", err)
-			}
-		}
-
-		emb := &Embedder{
-			embSess:    embSess,
-			rerankSess: rerankSess,
 		}
 		pool <- emb
 	}
@@ -82,7 +64,7 @@ func (p *EmbedderPool) Close() {
 	}
 }
 
-func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
+func NewEmbedder(modelsDir string, mc ModelConfig) (*Embedder, error) {
 	modelPath := filepath.Join(modelsDir, mc.Filename)
 	tokenizerPath := mc.TokenizerURL // resolved path stored here by EnsureModel
 	dim := mc.Dimension
@@ -123,12 +105,6 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 	}
 
 	outputShape := onnxruntime_go.NewShape(1, MaxSeqLength, int64(dim))
-	outputNodeNames := []string{"last_hidden_state"}
-	if mc.IsReranker {
-		outputShape = onnxruntime_go.NewShape(1, 1)
-		outputNodeNames = []string{"logits"}
-	}
-
 	outputTensor, err := onnxruntime_go.NewEmptyTensor[float32](outputShape)
 	if err != nil {
 		inputIdsTensor.Destroy()
@@ -142,7 +118,7 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 
 	session, err := onnxruntime_go.NewAdvancedSession(modelPath,
 		[]string{"input_ids", "attention_mask", "token_type_ids"},
-		outputNodeNames,
+		[]string{"last_hidden_state"},
 		inputs, outputs, nil)
 	if err != nil {
 		inputIdsTensor.Destroy()
@@ -151,7 +127,7 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 		return nil, fmt.Errorf("failed to create ONNX session: %w", err)
 	}
 
-	return &SessionData{
+	return &Embedder{
 		session:             session,
 		tokenizer:           tk,
 		inputIdsTensor:      inputIdsTensor,
@@ -163,10 +139,6 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 }
 
 func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err error) {
-	return e.embSess.embedSingle(text)
-}
-
-func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("tokenizer panic: %v", r)
@@ -185,7 +157,7 @@ func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
 		text = string(runes[:16000])
 	}
 
-	en, err := s.tokenizer.EncodeSingle(text, true)
+	en, err := e.tokenizer.EncodeSingle(text, true)
 	if err != nil {
 		return nil, fmt.Errorf("tokenization failed: %w", err)
 	}
@@ -193,9 +165,9 @@ func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
 	ids := en.GetIds()
 	mask := en.GetAttentionMask()
 
-	inputIdsData := s.inputIdsTensor.GetData()
-	attentionMaskData := s.attentionMaskTensor.GetData()
-	tokenTypeIdsData := s.tokenTypeIdsTensor.GetData()
+	inputIdsData := e.inputIdsTensor.GetData()
+	attentionMaskData := e.attentionMaskTensor.GetData()
+	tokenTypeIdsData := e.tokenTypeIdsTensor.GetData()
 
 	typeIds := en.GetTypeIds()
 
@@ -215,14 +187,14 @@ func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
 		}
 	}
 
-	err = s.session.Run()
+	err = e.session.Run()
 	if err != nil {
 		return nil, fmt.Errorf("ONNX run failed: %w", err)
 	}
 
-	fullOutput := s.outputTensor.GetData()
-	embedding := make([]float32, s.dimension)
-	copy(embedding, fullOutput[:s.dimension])
+	fullOutput := e.outputTensor.GetData()
+	embedding := make([]float32, e.dimension)
+	copy(embedding, fullOutput[:e.dimension])
 
 	return embedding, nil
 }
@@ -240,96 +212,19 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 }
 
 func (e *Embedder) Close() {
-	if e.embSess != nil {
-		e.embSess.Close()
+	if e.session != nil {
+		e.session.Destroy()
 	}
-	if e.rerankSess != nil {
-		e.rerankSess.Close()
+	if e.inputIdsTensor != nil {
+		e.inputIdsTensor.Destroy()
 	}
-}
-
-func (s *SessionData) Close() {
-	if s.session != nil {
-		s.session.Destroy()
+	if e.attentionMaskTensor != nil {
+		e.attentionMaskTensor.Destroy()
 	}
-	if s.inputIdsTensor != nil {
-		s.inputIdsTensor.Destroy()
+	if e.tokenTypeIdsTensor != nil {
+		e.tokenTypeIdsTensor.Destroy()
 	}
-	if s.attentionMaskTensor != nil {
-		s.attentionMaskTensor.Destroy()
+	if e.outputTensor != nil {
+		e.outputTensor.Destroy()
 	}
-	if s.tokenTypeIdsTensor != nil {
-		s.tokenTypeIdsTensor.Destroy()
-	}
-	if s.outputTensor != nil {
-		s.outputTensor.Destroy()
-	}
-}
-
-func (e *Embedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
-	if e.rerankSess == nil {
-		return nil, fmt.Errorf("reranker model not loaded")
-	}
-
-	scores := make([]float32, len(texts))
-	for i, text := range texts {
-		score, err := e.rerankSess.rerankSingle(query, text)
-		if err != nil {
-			return nil, err
-		}
-		scores[i] = score
-	}
-	return scores, nil
-}
-
-func (s *SessionData) rerankSingle(query, text string) (score float32, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("tokenizer panic: %v", r)
-		}
-	}()
-
-	if !utf8.ValidString(query) || !utf8.ValidString(text) {
-		return 0, fmt.Errorf("invalid UTF-8 sequence")
-	}
-
-	combinedText := query + " </s> " + text
-
-	en, err := s.tokenizer.EncodeSingle(combinedText, true)
-	if err != nil {
-		return 0, fmt.Errorf("tokenization failed: %w", err)
-	}
-
-	ids := en.GetIds()
-	mask := en.GetAttentionMask()
-
-	inputIdsData := s.inputIdsTensor.GetData()
-	attentionMaskData := s.attentionMaskTensor.GetData()
-	tokenTypeIdsData := s.tokenTypeIdsTensor.GetData()
-
-	typeIds := en.GetTypeIds()
-
-	for i := 0; i < MaxSeqLength; i++ {
-		if i < len(ids) {
-			inputIdsData[i] = int64(ids[i])
-			attentionMaskData[i] = int64(mask[i])
-			if i < len(typeIds) {
-				tokenTypeIdsData[i] = int64(typeIds[i])
-			} else {
-				tokenTypeIdsData[i] = 0
-			}
-		} else {
-			inputIdsData[i] = 0
-			attentionMaskData[i] = 0
-			tokenTypeIdsData[i] = 0
-		}
-	}
-
-	err = s.session.Run()
-	if err != nil {
-		return 0, fmt.Errorf("ONNX run failed: %w", err)
-	}
-
-	fullOutput := s.outputTensor.GetData()
-	return fullOutput[0], nil
 }

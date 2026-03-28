@@ -88,14 +88,7 @@ func (w *IndexWorker) processPath(ctx context.Context, path string) {
 		Logger:      w.cfg.Logger,
 	}
 
-	opts := indexer.IndexerOptions{
-		Config:      targetCfg,
-		Store:       store,
-		Embedder:    w.embedder,
-		ProgressMap: w.progressMap,
-		Logger:      w.logger,
-	}
-	summary, err := indexer.IndexFullCodebase(ctx, opts)
+	summary, err := indexer.IndexFullCodebase(ctx, targetCfg, store, w.embedder, w.progressMap, w.logger)
 	if err != nil {
 		w.logger.Error("Background indexing failed", "path", path, "error", err)
 		errMsg := fmt.Sprintf("%s: %v", StatusError, err)

@@ -138,12 +138,7 @@ func (fw *FileWatcher) processPending(ctx context.Context, pending map[string]fs
 			if ext == ".go" || ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".md" {
 				store, err := fw.storeGetter(ctx)
 				if err == nil {
-					opts := indexer.IndexerOptions{
-						Config:   fw.cfg,
-						Store:    store,
-						Embedder: fw.embedder,
-					}
-					indexer.IndexSingleFile(ctx, name, opts)
+					indexer.IndexSingleFile(ctx, name, fw.cfg, store, fw.embedder)
 				}
 			}
 		}
