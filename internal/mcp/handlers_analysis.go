@@ -1079,7 +1079,12 @@ func (s *Server) handleGetSummarizedContext(ctx context.Context, request mcp.Cal
 	}
 
 	// Using the existing Gemini completion logic
-	resp, err := llm.GenerateGeminiCompletion(ctx, apiKey, "gemini-1.5-flash", systemPrompt, messages, nil, "")
+	resp, err := llm.GenerateGeminiCompletion(ctx, llm.GeminiConfig{
+		APIKey:       apiKey,
+		Model:        "gemini-1.5-flash",
+		SystemPrompt: systemPrompt,
+		Messages:     messages,
+	})
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LLM completion failed: %v", err)), nil
 	}
