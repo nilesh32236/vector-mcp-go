@@ -291,7 +291,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var i int
 	maxTurns := 10
 	for i = 0; i < maxTurns; i++ {
-		resp, err := llm.GenerateGeminiCompletion(r.Context(), s.cfg.GeminiApiKey, model, systemPrompt, history.Messages, geminiTools, endpointURL)
+		resp, err := llm.GenerateGeminiCompletion(r.Context(), llm.GeminiConfig{
+			APIKey:       s.cfg.GeminiApiKey,
+			Model:        model,
+			SystemPrompt: systemPrompt,
+			Messages:     history.Messages,
+			Tools:        geminiTools,
+			EndpointURL:  endpointURL,
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

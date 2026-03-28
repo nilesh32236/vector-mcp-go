@@ -91,27 +91,38 @@ type geminiResponse struct {
 	} `json:"candidates"`
 }
 
+// GeminiConfig holds the configuration for a Gemini completion request.
+type GeminiConfig struct {
+	APIKey       string
+	Model        string
+	SystemPrompt string
+	Messages     []Message
+	Tools        []Tool
+	EndpointURL  string
+}
+
 // GenerateGeminiCompletion calls the Google Gemini REST API to generate a response.
-func GenerateGeminiCompletion(ctx context.Context, apiKey string, model string, systemPrompt string, messages []Message, tools []Tool, endpointURL string) (CompletionResponse, error) {
+func GenerateGeminiCompletion(ctx context.Context, cfg GeminiConfig) (CompletionResponse, error) {
+	endpointURL := cfg.EndpointURL
 	if endpointURL == "" {
-		endpointURL = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
+		endpointURL = fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", cfg.Model)
 	}
 
 	reqBody := geminiRequest{}
 
-	if systemPrompt != "" {
+	if cfg.SystemPrompt != "" {
 		reqBody.SystemInstruction = &geminiSystemInstruction{
 			Parts: []geminiPart{
-				{Text: systemPrompt},
+				{Text: cfg.SystemPrompt},
 			},
 		}
 	}
 
-	if len(tools) > 0 {
-		reqBody.Tools = tools
+	if len(cfg.Tools) > 0 {
+		reqBody.Tools = cfg.Tools
 	}
 
-	for _, msg := range messages {
+	for _, msg := range cfg.Messages {
 		// Gemini uses "user" and "model" roles
 		role := msg.Role
 		if role == "assistant" || role == "function" {
@@ -152,7 +163,7 @@ func GenerateGeminiCompletion(ctx context.Context, apiKey string, model string, 
 		return CompletionResponse{}, fmt.Errorf("failed to marshal gemini request: %w", err)
 	}
 
-	reqURL := fmt.Sprintf("%s?key=%s", endpointURL, apiKey)
+	reqURL := fmt.Sprintf("%s?key=%s", endpointURL, cfg.APIKey)
 	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return CompletionResponse{}, fmt.Errorf("failed to create http request: %w", err)
