@@ -184,16 +184,34 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 }
 
 func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, error) {
-	// 1. Vector Search (Fetch more for better RRF)
-	vectorResults, err := s.Search(ctx, queryEmbedding, topK*2, projectIDs, category)
-	if err != nil {
-		return nil, err
-	}
+	var (
+		vectorResults  []Record
+		lexicalResults []Record
+		vectorErr      error
+		lexicalErr     error
+	)
 
-	// 2. Lexical Search (Fetch more for better RRF)
-	lexicalResults, err := s.LexicalSearch(ctx, query, topK*2, projectIDs, category)
-	if err != nil {
-		return nil, err
+	// 1. & 2. Concurrent Vector and Lexical Search (Fetch more for better RRF)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		vectorResults, vectorErr = s.Search(ctx, queryEmbedding, topK*2, projectIDs, category)
+	}()
+
+	go func() {
+		defer wg.Done()
+		lexicalResults, lexicalErr = s.LexicalSearch(ctx, query, topK*2, projectIDs, category)
+	}()
+
+	wg.Wait()
+
+	if vectorErr != nil {
+		return nil, fmt.Errorf("vector search failed: %w", vectorErr)
+	}
+	if lexicalErr != nil {
+		return nil, fmt.Errorf("lexical search failed: %w", lexicalErr)
 	}
 
 	// 3. Reciprocal Rank Fusion (RRF)
