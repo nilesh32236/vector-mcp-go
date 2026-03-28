@@ -21,8 +21,10 @@ type Config struct {
 	HFToken            string
 	Dimension          int
 	DisableWatcher     bool
+	EnableLiveIndexing bool
 	EmbedderPoolSize   int
 	ApiPort            string
+	LlmProvider        string
 	GeminiApiKey       string
 	DefaultGeminiModel string
 	Logger             *slog.Logger
@@ -97,6 +99,7 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 	}
 
 	disableWatcher := os.Getenv("DISABLE_FILE_WATCHER") == "true"
+	enableLiveIndexing := os.Getenv("ENABLE_LIVE_INDEXING") == "true"
 
 	embedderPoolSize := 1
 	if v := os.Getenv("EMBEDDER_POOL_SIZE"); v != "" {
@@ -110,9 +113,18 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		apiPort = "47821"
 	}
 
+	llmProvider := os.Getenv("LLM_PROVIDER")
+	if llmProvider == "" {
+		llmProvider = "gemini"
+	}
+
 	defaultGeminiModel := os.Getenv("GEMINI_DEFAULT_MODEL")
 	if defaultGeminiModel == "" {
-		defaultGeminiModel = "gemini-2.5-flash"
+		defaultGeminiModel = "gemini-1.5-flash"
+	}
+
+	if llmProvider == "ollama" && os.Getenv("OLLAMA_MODEL") != "" {
+		defaultGeminiModel = os.Getenv("OLLAMA_MODEL")
 	}
 
 	return &Config{
@@ -126,8 +138,10 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		HFToken:            os.Getenv("HF_TOKEN"),
 		Dimension:          1024,
 		DisableWatcher:     disableWatcher,
+		EnableLiveIndexing: enableLiveIndexing,
 		EmbedderPoolSize:   embedderPoolSize,
 		ApiPort:            apiPort,
+		LlmProvider:        llmProvider,
 		GeminiApiKey:       os.Getenv("GEMINI_API_KEY"),
 		DefaultGeminiModel: defaultGeminiModel,
 		Logger:             logger,

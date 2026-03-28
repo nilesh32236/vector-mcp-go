@@ -39,6 +39,7 @@ type StoreManager interface {
 	ClearProject(ctx context.Context, projectID string) error
 	GetPathHashMapping(ctx context.Context, projectID string) (map[string]string, error)
 	GetAllRecords(ctx context.Context) ([]db.Record, error)
+	GetAllMetadata(ctx context.Context) ([]db.Record, error)
 	GetByPath(ctx context.Context, path string, projectID string) ([]db.Record, error)
 	GetByPrefix(ctx context.Context, prefix string, projectID string) ([]db.Record, error)
 	Count() int64
@@ -265,6 +266,24 @@ func (s *Server) registerTools() {
 		mcp.WithString("query", mcp.Description("The search query to summarize")),
 		mcp.WithNumber("topK", mcp.Description("Optional: Number of chunks to include in summary (default 5)")),
 	), s.handleGetSummarizedContext)
+
+	// 19. verify_proposed_change
+	addTool(mcp.NewTool("verify_proposed_change",
+		mcp.WithDescription("Checks a proposed code change or task against stored Knowledge Items and Architectural Decisions to ensure pattern compliance."),
+		mcp.WithString("proposed_change", mcp.Description("The description or diff of the proposed change")),
+		mcp.WithArray("cross_reference_projects", mcp.Description("Optional list of project IDs to search across"), mcp.WithStringItems()),
+	), s.handleVerifyProposedChange)
+
+	// 20. check_llm_connectivity
+	addTool(mcp.NewTool("check_llm_connectivity",
+		mcp.WithDescription("Checks the Gemini API connectivity and lists available models for the current API key."),
+	), s.handleCheckLlmConnectivity)
+
+	// 21. distill_knowledge
+	addTool(mcp.NewTool("distill_knowledge",
+		mcp.WithDescription("Analyzes a directory and automatically generates a Knowledge Item summary."),
+		mcp.WithString("path", mcp.Description("The relative path to analyze")),
+	), s.handleDistillKnowledge)
 }
 
 // CallTool invokes a registered tool handler by name with the provided arguments.

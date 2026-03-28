@@ -207,3 +207,38 @@ func GenerateGeminiCompletion(ctx context.Context, cfg GeminiConfig) (Completion
 
 	return comp, nil
 }
+// ListGeminiModels retrieves the list of available models from the Google Gemini API.
+func ListGeminiModels(ctx context.Context, apiKey string) ([]string, error) {
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models?key=%s", apiKey)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create http request: %w", err)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("gemini api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var data struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("failed to decode gemini response: %w", err)
+	}
+
+	var modelNames []string
+	for _, m := range data.Models {
+		modelNames = append(modelNames, m.Name)
+	}
+	return modelNames, nil
+}

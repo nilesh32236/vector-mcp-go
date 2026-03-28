@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -120,60 +121,96 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 	var matches []Record
 	queryLower := strings.ToLower(query)
 
-	for _, doc := range allResults {
-		isMatch := false
+	// Optimization: Parallelize the filtering loop for large datasets
+	numCPU := runtime.NumCPU()
+	if len(allResults) < 100 {
+		numCPU = 1 // Don't overhead for small sets
+	}
 
-		// Check Symbols metadata (stored as JSON array)
-		if symsJSON, ok := doc.Metadata["symbols"]; ok {
-			if strings.Contains(strings.ToLower(symsJSON), queryLower) {
-				if syms := s.parseStringArray(symsJSON); syms != nil {
-					for _, sym := range syms {
-						if strings.EqualFold(sym, query) || strings.Contains(strings.ToLower(sym), queryLower) {
-							isMatch = true
-							break
-						}
-					}
-				}
-			}
+	resultChan := make(chan Record, len(allResults))
+	var wg sync.WaitGroup
+	chunkSize := (len(allResults) + numCPU - 1) / numCPU
+
+	for i := 0; i < numCPU; i++ {
+		start := i * chunkSize
+		if start >= len(allResults) {
+			break
+		}
+		end := start + chunkSize
+		if end > len(allResults) {
+			end = len(allResults)
 		}
 
-		// Check Name metadata (just in case)
-		if name, ok := doc.Metadata["name"]; ok {
-			if strings.EqualFold(name, query) || strings.Contains(strings.ToLower(name), queryLower) {
-				isMatch = true
-			}
-		}
+		wg.Add(1)
+		go func(docs []chromem.Result) {
+			defer wg.Done()
+			for _, doc := range docs {
+				isMatch := false
 
-		// Check actual content for small snippets/declarations
-		if !isMatch {
-			if strings.Contains(strings.ToLower(doc.Content), queryLower) {
-				isMatch = true
-			}
-		}
-
-		// Check Calls metadata for usage discovery
-		if !isMatch {
-			if callsJSON, ok := doc.Metadata["calls"]; ok {
-				if strings.Contains(strings.ToLower(callsJSON), queryLower) {
-					if calls := s.parseStringArray(callsJSON); calls != nil {
-						for _, call := range calls {
-							if strings.EqualFold(call, query) {
-								isMatch = true
-								break
+				// 1. Check Symbols metadata (JSON array)
+				if symsJSON, ok := doc.Metadata["symbols"]; ok {
+					if strings.Contains(strings.ToLower(symsJSON), queryLower) {
+						if syms := s.parseStringArray(symsJSON); syms != nil {
+							for _, sym := range syms {
+								if strings.EqualFold(sym, query) || strings.Contains(strings.ToLower(sym), queryLower) {
+									isMatch = true
+									break
+								}
 							}
 						}
 					}
 				}
-			}
-		}
 
-		if isMatch {
-			matches = append(matches, Record{
-				ID:       doc.ID,
-				Content:  doc.Content,
-				Metadata: doc.Metadata,
-			})
-		}
+				// 2. Check Name metadata
+				if !isMatch {
+					if name, ok := doc.Metadata["name"]; ok {
+						if strings.EqualFold(name, query) || strings.Contains(strings.ToLower(name), queryLower) {
+							isMatch = true
+						}
+					}
+				}
+
+				// 3. Check actual content
+				if !isMatch {
+					if strings.Contains(strings.ToLower(doc.Content), queryLower) {
+						isMatch = true
+					}
+				}
+
+				// 4. Check Calls metadata (JSON array)
+				if !isMatch {
+					if callsJSON, ok := doc.Metadata["calls"]; ok {
+						if strings.Contains(strings.ToLower(callsJSON), queryLower) {
+							if calls := s.parseStringArray(callsJSON); calls != nil {
+								for _, call := range calls {
+									if strings.EqualFold(call, query) {
+										isMatch = true
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+
+				if isMatch {
+					resultChan <- Record{
+						ID:       doc.ID,
+						Content:  doc.Content,
+						Metadata: doc.Metadata,
+					}
+				}
+			}
+		}(allResults[start:end])
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	for r := range resultChan {
+		matches = append(matches, r)
 	}
 
 	if len(matches) > topK {
@@ -214,18 +251,27 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 		return nil, fmt.Errorf("lexical search failed: %w", lexicalErr)
 	}
 
-	// 3. Reciprocal Rank Fusion (RRF)
+	// 3. Reciprocal Rank Fusion (RRF) with Dynamic Weighting
 	k := 60.0
+	lexicalWeight := 1.0
+	vectorWeight := 1.0
+
+	// Heuristic: If query contains code-like identifiers, boost lexical matches
+	hasIdentifier := regexp.MustCompile(`[a-z][A-Z]|[a-z]_[a-z]|[:.()\[\]{}]`).MatchString(query)
+	if hasIdentifier {
+		lexicalWeight = 1.5 // 50% boost for lexical when symbols are involved
+	}
+
 	scores := make(map[string]float64)
 	recordMap := make(map[string]Record)
 
 	for i, r := range vectorResults {
-		scores[r.ID] += 1.0 / (k + float64(i+1))
+		scores[r.ID] += vectorWeight * (1.0 / (k + float64(i+1)))
 		recordMap[r.ID] = r
 	}
 
 	for i, r := range lexicalResults {
-		scores[r.ID] += 1.0 / (k + float64(i+1))
+		scores[r.ID] += lexicalWeight * (1.0 / (k + float64(i+1)))
 		recordMap[r.ID] = r
 	}
 
@@ -333,6 +379,7 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 		records = append(records, Record{
 			ID:         doc.ID,
 			Content:    doc.Content,
+			Embedding:  doc.Embedding,
 			Metadata:   doc.Metadata,
 			Similarity: doc.Similarity,
 		})
@@ -410,7 +457,7 @@ func (s *Store) Count() int64 {
 	return int64(s.collection.Count())
 }
 
-func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {
+func (s *Store) GetAllMetadata(ctx context.Context) ([]Record, error) {
 	count := s.collection.Count()
 	if count == 0 {
 		return nil, nil
@@ -426,8 +473,31 @@ func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {
 	for _, doc := range res {
 		records = append(records, Record{
 			ID:       doc.ID,
-			Content:  doc.Content,
 			Metadata: doc.Metadata,
+		})
+	}
+	return records, nil
+}
+
+func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {
+	count := s.collection.Count()
+	if count == 0 {
+		return nil, nil
+	}
+
+	dummyEmb := make([]float32, s.dimension)
+	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var records []Record
+	for _, doc := range res {
+		records = append(records, Record{
+			ID:        doc.ID,
+			Content:   doc.Content,
+			Embedding: doc.Embedding,
+			Metadata:  doc.Metadata,
 		})
 	}
 	return records, nil
@@ -448,9 +518,10 @@ func (s *Store) GetByPath(ctx context.Context, path string, projectID string) ([
 	var records []Record
 	for _, doc := range res {
 		records = append(records, Record{
-			ID:       doc.ID,
-			Content:  doc.Content,
-			Metadata: doc.Metadata,
+			ID:        doc.ID,
+			Content:   doc.Content,
+			Embedding: doc.Embedding,
+			Metadata:  doc.Metadata,
 		})
 	}
 	return records, nil
@@ -474,9 +545,10 @@ func (s *Store) GetByPrefix(ctx context.Context, prefix string, projectID string
 		path := doc.Metadata["path"]
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			records = append(records, Record{
-				ID:       doc.ID,
-				Content:  doc.Content,
-				Metadata: doc.Metadata,
+				ID:        doc.ID,
+				Content:   doc.Content,
+				Embedding: doc.Embedding,
+				Metadata:  doc.Metadata,
 			})
 		}
 	}

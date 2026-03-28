@@ -270,6 +270,18 @@ func (s *Service) GetAllRecords(req StatusRequest, resp *SearchResponse) error {
 	return nil
 }
 
+func (s *Service) GetAllMetadata(req StatusRequest, resp *SearchResponse) error {
+	if s.Store == nil {
+		return fmt.Errorf("master store not initialized")
+	}
+	recs, err := s.Store.GetAllMetadata(context.Background())
+	if err != nil {
+		return err
+	}
+	resp.Records = recs
+	return nil
+}
+
 func (s *Service) GetByPath(req DeleteRequest, resp *SearchResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -551,6 +563,12 @@ func (rs *RemoteStore) GetPathHashMapping(ctx context.Context, projectID string)
 func (rs *RemoteStore) GetAllRecords(ctx context.Context) ([]db.Record, error) {
 	var resp SearchResponse
 	err := rs.call("GetAllRecords", StatusRequest{}, &resp)
+	return resp.Records, err
+}
+
+func (rs *RemoteStore) GetAllMetadata(ctx context.Context) ([]db.Record, error) {
+	var resp SearchResponse
+	err := rs.call("GetAllMetadata", StatusRequest{}, &resp)
 	return resp.Records, err
 }
 

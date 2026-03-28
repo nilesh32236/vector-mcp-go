@@ -139,9 +139,9 @@ func (fw *FileWatcher) processPending(ctx context.Context, pending map[string]fs
 				store, err := fw.storeGetter(ctx)
 				if err == nil {
 					opts := indexer.IndexerOptions{
-						Config:   fw.cfg,
-						Store:    store,
-						Embedder: fw.embedder,
+						Config:     fw.cfg,
+						Store:      store,
+						Embedder:   fw.embedder,
 					}
 					indexer.IndexSingleFile(ctx, name, opts)
 				}

@@ -18,6 +18,7 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/embedding"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/llm"
 	"github.com/nilesh32236/vector-mcp-go/internal/mcp"
 	"github.com/nilesh32236/vector-mcp-go/internal/onnx"
 	"github.com/nilesh32236/vector-mcp-go/internal/watcher"
@@ -166,6 +167,31 @@ func main() {
 		// Update daemon with real embedder and store
 		masterServer.UpdateEmbedder(realEmbedder)
 		masterServer.UpdateStore(store)
+
+		// 4. Background Indexing on Startup (Live Indexing)
+		if cfg.EnableLiveIndexing {
+			logger.Info("Live Indexing enabled - starting initial codebase scan in background")
+			go func() {
+				store, err := deps.getStore(ctx, false, true)
+				if err != nil {
+					logger.Error("Failed to get store for live indexing", "error", err)
+					return
+				}
+				opts := indexer.IndexerOptions{
+					Config:      cfg,
+					Store:       store,
+					Embedder:    embedder,
+					ProgressMap: deps.progressMap,
+					Logger:      logger,
+				}
+				summary, err := indexer.IndexFullCodebase(context.Background(), opts)
+				if err != nil {
+					logger.Error("Live indexing failed", "error", err)
+				} else {
+					logger.Info("Live indexing complete", "files_indexed", summary.FilesIndexed, "files_skipped", summary.FilesSkipped)
+				}
+			}()
+		}
 	}
 
 	// 3. Define store getters that handle local/remote transparency
