@@ -78,15 +78,14 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, store *db.Store,
 		toIndex = append(toIndex, path)
 	}
 
+	filePathsSet := make(map[string]struct{}, len(files))
+	for _, absPath := range files {
+		relPath := config.GetRelativePath(absPath, cfg.ProjectRoot)
+		filePathsSet[relPath] = struct{}{}
+	}
+
 	for dbPath := range hashMapping {
-		found := false
-		for _, absPath := range files {
-			if config.GetRelativePath(absPath, cfg.ProjectRoot) == dbPath {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if _, found := filePathsSet[dbPath]; !found {
 			store.DeleteByPath(ctx, dbPath, cfg.ProjectRoot)
 		}
 	}
