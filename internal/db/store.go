@@ -9,15 +9,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/philippgille/chromem-go"
 )
 
 type Store struct {
-	db         *chromem.DB
-	collection *chromem.Collection
-	dimension  int
+	db          *chromem.DB
+	collection  *chromem.Collection
+	dimension   int
+	parsedCache map[string][]string
+	cacheMu     sync.RWMutex
 }
 
 type Record struct {
@@ -42,7 +45,7 @@ func Connect(ctx context.Context, dbPath string, collectionName string, dimensio
 		}
 	}
 
-	s := &Store{db: db, collection: col, dimension: dimension}
+	s := &Store{db: db, collection: col, dimension: dimension, parsedCache: make(map[string][]string)}
 
 	// Probe for dimension mismatch if the collection already has data.
 	if col.Count() > 0 {
@@ -122,12 +125,13 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 
 		// Check Symbols metadata (stored as JSON array)
 		if symsJSON, ok := doc.Metadata["symbols"]; ok {
-			var syms []string
-			if err := json.Unmarshal([]byte(symsJSON), &syms); err == nil {
-				for _, sym := range syms {
-					if strings.EqualFold(sym, query) || strings.Contains(strings.ToLower(sym), queryLower) {
-						isMatch = true
-						break
+			if strings.Contains(strings.ToLower(symsJSON), queryLower) {
+				if syms := s.parseStringArray(symsJSON); syms != nil {
+					for _, sym := range syms {
+						if strings.EqualFold(sym, query) || strings.Contains(strings.ToLower(sym), queryLower) {
+							isMatch = true
+							break
+						}
 					}
 				}
 			}
@@ -150,12 +154,13 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 		// Check Calls metadata for usage discovery
 		if !isMatch {
 			if callsJSON, ok := doc.Metadata["calls"]; ok {
-				var calls []string
-				if err := json.Unmarshal([]byte(callsJSON), &calls); err == nil {
-					for _, call := range calls {
-						if strings.EqualFold(call, query) {
-							isMatch = true
-							break
+				if strings.Contains(strings.ToLower(callsJSON), queryLower) {
+					if calls := s.parseStringArray(callsJSON); calls != nil {
+						for _, call := range calls {
+							if strings.EqualFold(call, query) {
+								isMatch = true
+								break
+							}
 						}
 					}
 				}
@@ -179,16 +184,34 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 }
 
 func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, error) {
-	// 1. Vector Search (Fetch more for better RRF)
-	vectorResults, err := s.Search(ctx, queryEmbedding, topK*2, projectIDs, category)
-	if err != nil {
-		return nil, err
-	}
+	var (
+		vectorResults  []Record
+		lexicalResults []Record
+		vectorErr      error
+		lexicalErr     error
+	)
 
-	// 2. Lexical Search (Fetch more for better RRF)
-	lexicalResults, err := s.LexicalSearch(ctx, query, topK*2, projectIDs, category)
-	if err != nil {
-		return nil, err
+	// 1. & 2. Concurrent Vector and Lexical Search (Fetch more for better RRF)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		vectorResults, vectorErr = s.Search(ctx, queryEmbedding, topK*2, projectIDs, category)
+	}()
+
+	go func() {
+		defer wg.Done()
+		lexicalResults, lexicalErr = s.LexicalSearch(ctx, query, topK*2, projectIDs, category)
+	}()
+
+	wg.Wait()
+
+	if vectorErr != nil {
+		return nil, fmt.Errorf("vector search failed: %w", vectorErr)
+	}
+	if lexicalErr != nil {
+		return nil, fmt.Errorf("lexical search failed: %w", lexicalErr)
 	}
 
 	// 3. Reciprocal Rank Fusion (RRF)
@@ -505,4 +528,36 @@ func (s *Store) GetAllStatuses(ctx context.Context) (map[string]string, error) {
 		}
 	}
 	return statuses, nil
+}
+
+// parseStringArray parses a JSON string array and caches the result
+// to avoid repeated unmarshaling in search loops.
+func (s *Store) parseStringArray(jsonStr string) []string {
+	s.cacheMu.RLock()
+	if val, ok := s.parsedCache[jsonStr]; ok {
+		s.cacheMu.RUnlock()
+		return val
+	}
+	s.cacheMu.RUnlock()
+
+	var arr []string
+	if err := json.Unmarshal([]byte(jsonStr), &arr); err != nil {
+		return nil
+	}
+
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	// Partial eviction: if cache gets too big, remove ~10% of entries to prevent thundering herd
+	if len(s.parsedCache) > 10000 {
+		evictCount := 1000
+		for k := range s.parsedCache {
+			delete(s.parsedCache, k)
+			evictCount--
+			if evictCount <= 0 {
+				break
+			}
+		}
+	}
+	s.parsedCache[jsonStr] = arr
+	return arr
 }

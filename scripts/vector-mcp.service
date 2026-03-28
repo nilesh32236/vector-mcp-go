@@ -6,9 +6,9 @@ After=network.target
 Type=simple
 User=nilesh
 Group=nilesh
-WorkingDirectory=/home/nilesh/Documents/vector-mcp-go
-EnvironmentFile=/home/nilesh/Documents/vector-mcp-go/.env
-ExecStart=/home/nilesh/Documents/vector-mcp-go/vector-mcp-go -daemon
+WorkingDirectory=/home/nilesh/Documents/vector-mcp/vector-mcp-go
+EnvironmentFile=/home/nilesh/Documents/vector-mcp/vector-mcp-go/.env
+ExecStart=/home/nilesh/Documents/vector-mcp/vector-mcp-go/vector-mcp-go -daemon
 Restart=always
 RestartSec=10
 

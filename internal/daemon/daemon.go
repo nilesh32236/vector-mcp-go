@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/rpc"
 	"os"
@@ -35,6 +36,15 @@ type EmbedResponse struct {
 
 type EmbedBatchResponse struct {
 	Embeddings [][]float32
+}
+
+type RerankBatchRequest struct {
+	Query string
+	Texts []string
+}
+
+type RerankBatchResponse struct {
+	Scores []float32
 }
 
 type IndexRequest struct {
@@ -113,6 +123,15 @@ func (s *Service) EmbedBatch(req EmbedBatchRequest, resp *EmbedBatchResponse) er
 		return err
 	}
 	resp.Embeddings = embs
+	return nil
+}
+
+func (s *Service) RerankBatch(req RerankBatchRequest, resp *RerankBatchResponse) error {
+	scores, err := s.Embedder.RerankBatch(context.Background(), req.Query, req.Texts)
+	if err != nil {
+		return err
+	}
+	resp.Scores = scores
 	return nil
 }
 
@@ -308,7 +327,9 @@ func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue 
 	// rpc.RegisterName is global for the default server.
 	// Since we only ever have one MasterServer in a process, we can register it once.
 	// However, to support updating the embedder later, we use a service pointer.
-	_ = rpc.RegisterName("VectorDaemon", svc)
+	if err := rpc.RegisterName("VectorDaemon", svc); err != nil {
+		return nil, fmt.Errorf("failed to register RPC service: %w", err)
+	}
 
 	// Check if a master is already listening on the socket before removing it.
 	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
@@ -316,7 +337,9 @@ func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue 
 		return nil, fmt.Errorf("master already running on %s", socketPath)
 	}
 	// Socket exists but is stale (no one listening) — safe to remove.
-	_ = os.Remove(socketPath)
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		slog.Warn("Failed to remove stale socket file", "path", socketPath, "error", err)
+	}
 
 	l, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -356,7 +379,9 @@ func (s *MasterServer) Close() {
 	if s.listener != nil {
 		s.listener.Close()
 	}
-	_ = os.Remove(s.socketPath)
+	if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
+		slog.Warn("Failed to remove socket file on close", "path", s.socketPath, "error", err)
+	}
 }
 
 // Client facilitates communication from Slave to Master.
@@ -573,4 +598,29 @@ func (rs *RemoteStore) SearchWithScore(ctx context.Context, embedding []float32,
 	// Let's just return records for now or update SearchResponse.
 	// Since SearchWithScore is used in handleFindDuplicateCode, it's better to update it.
 	return nil, nil, fmt.Errorf("SearchWithScore not implemented for RemoteStore yet")
+}
+func (re *RemoteEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
+	client, err := rpc.Dial("unix", re.socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to master daemon: %w", err)
+	}
+	defer client.Close()
+
+	var resp RerankBatchResponse
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Call("VectorDaemon.RerankBatch", RerankBatchRequest{Query: query, Texts: texts}, &resp)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+		return resp.Scores, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(120 * time.Second):
+		return nil, fmt.Errorf("rerank batch RPC timeout")
+	}
 }

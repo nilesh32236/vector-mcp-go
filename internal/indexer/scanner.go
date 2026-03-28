@@ -50,26 +50,36 @@ func EstimateTokens(text string) int {
 
 // Embedder is an interface for generating vector embeddings from text.
 type Embedder interface {
+	RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error)
 	Embed(ctx context.Context, text string) ([]float32, error)
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 }
 
+// IndexerOptions groups parameters needed for indexing operations.
+type IndexerOptions struct {
+	Config      *config.Config
+	Store       *db.Store
+	Embedder    Embedder
+	ProgressMap *sync.Map
+	Logger      *slog.Logger
+}
+
 // IndexFullCodebase performs a comprehensive index of the project directory.
-func IndexFullCodebase(ctx context.Context, cfg *config.Config, store *db.Store, embedder Embedder, progressMap *sync.Map, logger *slog.Logger) (IndexSummary, error) {
+func IndexFullCodebase(ctx context.Context, opts IndexerOptions) (IndexSummary, error) {
 	summary := IndexSummary{Status: "completed"}
 
-	store.SetStatus(ctx, cfg.ProjectRoot, "Scanning files and cleaning index...")
+	opts.Store.SetStatus(ctx, opts.Config.ProjectRoot, "Scanning files and cleaning index...")
 
-	files, err := ScanFiles(cfg.ProjectRoot)
+	files, err := ScanFiles(opts.Config.ProjectRoot)
 	if err != nil {
 		return summary, err
 	}
 	summary.FilesProcessed = len(files)
 
-	hashMapping, _ := store.GetPathHashMapping(ctx, cfg.ProjectRoot)
+	hashMapping, _ := opts.Store.GetPathHashMapping(ctx, opts.Config.ProjectRoot)
 	var toIndex []string
 	for _, path := range files {
-		relPath := config.GetRelativePath(path, cfg.ProjectRoot)
+		relPath := config.GetRelativePath(path, opts.Config.ProjectRoot)
 		currentHash, _ := GetHash(path)
 		if existingHash, ok := hashMapping[relPath]; ok && existingHash == currentHash {
 			summary.FilesSkipped++
@@ -80,18 +90,18 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, store *db.Store,
 
 	filePathsSet := make(map[string]struct{}, len(files))
 	for _, absPath := range files {
-		relPath := config.GetRelativePath(absPath, cfg.ProjectRoot)
+		relPath := config.GetRelativePath(absPath, opts.Config.ProjectRoot)
 		filePathsSet[relPath] = struct{}{}
 	}
 
 	for dbPath := range hashMapping {
 		if _, found := filePathsSet[dbPath]; !found {
-			store.DeleteByPath(ctx, dbPath, cfg.ProjectRoot)
+			opts.Store.DeleteByPath(ctx, dbPath, opts.Config.ProjectRoot)
 		}
 	}
 
 	if len(toIndex) == 0 {
-		store.SetStatus(ctx, cfg.ProjectRoot, fmt.Sprintf("Completed: %d files skipped (up to date)", summary.FilesSkipped))
+		opts.Store.SetStatus(ctx, opts.Config.ProjectRoot, fmt.Sprintf("Completed: %d files skipped (up to date)", summary.FilesSkipped))
 		return summary, nil
 	}
 
@@ -104,7 +114,7 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, store *db.Store,
 		go func() {
 			defer wg.Done()
 			for path := range tasks {
-				results <- ProcessFile(ctx, path, cfg, store, embedder)
+				results <- ProcessFile(ctx, path, opts)
 			}
 		}()
 	}
@@ -138,36 +148,36 @@ func IndexFullCodebase(ctx context.Context, cfg *config.Config, store *db.Store,
 		}
 
 		if len(batch) >= 50 {
-			logger.Info("Inserting batch of records", "count", len(batch))
-			store.Insert(ctx, batch)
+			opts.Logger.Info("Inserting batch of records", "count", len(batch))
+			opts.Store.Insert(ctx, batch)
 			batch = batch[:0]
 		}
 
 		// Real-time progress update
 		progress := float64(processed) / float64(totalToIndex) * 100
 		status := fmt.Sprintf("Indexing: %.1f%% (%d/%d) - Current: %s", progress, processed, totalToIndex, r.RelPath)
-		if progressMap != nil {
-			progressMap.Store(cfg.ProjectRoot, status)
+		if opts.ProgressMap != nil {
+			opts.ProgressMap.Store(opts.Config.ProjectRoot, status)
 		}
-		store.SetStatus(ctx, cfg.ProjectRoot, status)
+		opts.Store.SetStatus(ctx, opts.Config.ProjectRoot, status)
 	}
 
 	if len(batch) > 0 {
-		store.Insert(ctx, batch)
+		opts.Store.Insert(ctx, batch)
 	}
 
 	return summary, nil
 }
 
 // ProcessFile indexes a single file if its hash has changed.
-func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db.Store, embedder Embedder) Result {
+func ProcessFile(ctx context.Context, path string, opts IndexerOptions) Result {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("Panic processing file", "path", path, "recover", r)
 		}
 	}()
 
-	relPath := config.GetRelativePath(path, cfg.ProjectRoot)
+	relPath := config.GetRelativePath(path, opts.Config.ProjectRoot)
 	currentHash, err := GetHash(path)
 	if err != nil {
 		return Result{Err: err.Error(), RelPath: relPath}
@@ -181,7 +191,7 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 		updatedAt = strconv.FormatInt(time.Now().Unix(), 10)
 	}
 
-	existingHash, _ := store.GetFileHash(ctx, relPath, cfg.ProjectRoot)
+	existingHash, _ := opts.Store.GetFileHash(ctx, relPath, opts.Config.ProjectRoot)
 	if existingHash == currentHash {
 		return Result{Skipped: true, RelPath: relPath}
 	}
@@ -221,27 +231,27 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 
 	chunks := CreateChunks(contentStr, relPath)
 	var records []db.Record
-	
+
 	// Prepare texts for batch embedding
 	var texts []string
 	for _, chunk := range chunks {
-		texts = append(texts, chunk.Content)
+		texts = append(texts, chunk.ContextualString)
 	}
 
 	if len(texts) > 0 {
-		embs, err := embedder.EmbedBatch(ctx, texts)
+		embs, err := opts.Embedder.EmbedBatch(ctx, texts)
 		if err == nil {
 			for i, chunk := range chunks {
 				relJSON, _ := json.Marshal(chunk.Relationships)
 				symJSON, _ := json.Marshal(chunk.Symbols)
 				callsJSON, _ := json.Marshal(chunk.Calls)
 				records = append(records, db.Record{
-					ID:        fmt.Sprintf("%s-%s-%d-%d", cfg.ProjectRoot, relPath, time.Now().UnixNano(), i),
+					ID:        fmt.Sprintf("%s-%s-%d-%d", opts.Config.ProjectRoot, relPath, time.Now().UnixNano(), i),
 					Content:   chunk.Content,
 					Embedding: embs[i],
 					Metadata: map[string]string{
 						"path":           relPath,
-						"project_id":     cfg.ProjectRoot,
+						"project_id":     opts.Config.ProjectRoot,
 						"hash":           currentHash,
 						"relationships":  string(relJSON),
 						"symbols":        string(symJSON),
@@ -258,7 +268,7 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 		} else {
 			// Fallback to single embedding if batch fails
 			for _, chunk := range chunks {
-				emb, err := embedder.Embed(ctx, chunk.Content)
+				emb, err := opts.Embedder.Embed(ctx, chunk.ContextualString)
 				if err != nil {
 					continue
 				}
@@ -266,12 +276,12 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 				symJSON, _ := json.Marshal(chunk.Symbols)
 				callsJSON, _ := json.Marshal(chunk.Calls)
 				records = append(records, db.Record{
-					ID:        fmt.Sprintf("%s-%s-%d", cfg.ProjectRoot, relPath, time.Now().UnixNano()),
+					ID:        fmt.Sprintf("%s-%s-%d", opts.Config.ProjectRoot, relPath, time.Now().UnixNano()),
 					Content:   chunk.Content,
 					Embedding: emb,
 					Metadata: map[string]string{
 						"path":           relPath,
-						"project_id":     cfg.ProjectRoot,
+						"project_id":     opts.Config.ProjectRoot,
 						"hash":           currentHash,
 						"relationships":  string(relJSON),
 						"symbols":        string(symJSON),
@@ -289,20 +299,20 @@ func ProcessFile(ctx context.Context, path string, cfg *config.Config, store *db
 	}
 
 	if len(records) > 0 {
-		store.DeleteByPath(ctx, relPath, cfg.ProjectRoot)
+		opts.Store.DeleteByPath(ctx, relPath, opts.Config.ProjectRoot)
 		return Result{Indexed: true, Records: records, RelPath: relPath}
 	}
 	return Result{RelPath: relPath}
 }
 
 // IndexSingleFile indexes a single file and updates the database.
-func IndexSingleFile(ctx context.Context, path string, cfg *config.Config, store *db.Store, embedder Embedder) (IndexSummary, error) {
-	res := ProcessFile(ctx, path, cfg, store, embedder)
+func IndexSingleFile(ctx context.Context, path string, opts IndexerOptions) (IndexSummary, error) {
+	res := ProcessFile(ctx, path, opts)
 	if res.Err != "" {
 		return IndexSummary{Status: "error"}, nil
 	}
 	if res.Indexed {
-		store.Insert(ctx, res.Records)
+		opts.Store.Insert(ctx, res.Records)
 	}
 	return IndexSummary{Status: "completed", FilesIndexed: 1}, nil
 }
@@ -389,20 +399,21 @@ func IsIgnoredDir(name string) bool {
 }
 
 func IsIgnoredFile(name string) bool {
+	lowerName := strings.ToLower(name)
 	ignoredExact := []string{
 		"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum",
 	}
 	for _, f := range ignoredExact {
-		if name == f {
+		if lowerName == f {
 			return true
 		}
 	}
 
 	ignoredSuffixes := []string{
-		".map", ".min.js", ".svg",
+		".map", ".min.js", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf",
 	}
 	for _, s := range ignoredSuffixes {
-		if len(name) >= len(s) && name[len(name)-len(s):] == s {
+		if len(lowerName) >= len(s) && lowerName[len(lowerName)-len(s):] == s {
 			return true
 		}
 	}
