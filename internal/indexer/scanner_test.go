@@ -153,3 +153,145 @@ func TestGetHash(t *testing.T) {
 		})
 	}
 }
+
+func TestScanFiles(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create a diverse set of files and directories
+	filesToCreate := []string{
+		"main.go",
+		"README.md",
+		"utils.ts",
+		"package.json",
+		"style.css",
+		// Files that should be ignored by default rules
+		"package-lock.json", // Exact match ignored
+		"app.min.js",        // Suffix match ignored
+		"icon.svg",          // Suffix match ignored
+		// Directories that should be ignored by default rules
+		filepath.Join("node_modules", "module.js"),
+		filepath.Join(".git", "config"),
+		filepath.Join("dist", "bundle.js"),
+		// Files to be ignored by custom .vector-ignore
+		"secret.txt",
+		filepath.Join("custom_ignore_dir", "file.go"),
+		// File to be ignored by .gitignore (which shouldn't be loaded because .vector-ignore exists in this test)
+		"should_not_ignore.txt", // Since we only add this to .gitignore, and .vector-ignore takes precedence, but wait, .txt is in AllowExts.
+	}
+
+	for _, f := range filesToCreate {
+		fullPath := filepath.Join(tempDir, f)
+		dir := filepath.Dir(fullPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("Failed to create dir %s: %v", dir, err)
+		}
+		if err := os.WriteFile(fullPath, []byte("content"), 0644); err != nil {
+			t.Fatalf("Failed to create file %s: %v", fullPath, err)
+		}
+	}
+
+	// Create .vector-ignore
+	vectorIgnoreContent := []byte("secret.txt\ncustom_ignore_dir/\n")
+	if err := os.WriteFile(filepath.Join(tempDir, ".vector-ignore"), vectorIgnoreContent, 0644); err != nil {
+		t.Fatalf("Failed to create .vector-ignore: %v", err)
+	}
+
+	// Create .gitignore
+	gitIgnoreContent := []byte("should_not_ignore.txt\n")
+	if err := os.WriteFile(filepath.Join(tempDir, ".gitignore"), gitIgnoreContent, 0644); err != nil {
+		t.Fatalf("Failed to create .gitignore: %v", err)
+	}
+
+	// Expected files (absolute paths)
+	expectedFilesMap := map[string]bool{
+		filepath.Join(tempDir, "main.go"):               true,
+		filepath.Join(tempDir, "README.md"):             true,
+		filepath.Join(tempDir, "utils.ts"):              true,
+		filepath.Join(tempDir, "package.json"):          true,
+		filepath.Join(tempDir, "style.css"):             true,
+		filepath.Join(tempDir, "should_not_ignore.txt"): true, // Not ignored because .vector-ignore takes precedence over .gitignore
+	}
+
+	scannedFiles, err := ScanFiles(tempDir)
+	if err != nil {
+		t.Fatalf("ScanFiles failed: %v", err)
+	}
+
+	if len(scannedFiles) != len(expectedFilesMap) {
+		t.Errorf("Expected %d files, got %d. Files: %v", len(expectedFilesMap), len(scannedFiles), scannedFiles)
+	}
+
+	for _, f := range scannedFiles {
+		if !expectedFilesMap[f] {
+			t.Errorf("Unexpected file found in scan: %s", f)
+		}
+	}
+
+	// Test fall back to .gitignore when .vector-ignore doesn't exist
+	t.Run("Fallback to .gitignore", func(t *testing.T) {
+		tempDir2 := t.TempDir()
+
+		// Create files
+		if err := os.WriteFile(filepath.Join(tempDir2, "main.go"), []byte(""), 0644); err != nil {
+			t.Fatalf("Failed to create file: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(tempDir2, "git_ignored.txt"), []byte(""), 0644); err != nil {
+			t.Fatalf("Failed to create file: %v", err)
+		}
+
+		// Create ONLY .gitignore
+		if err := os.WriteFile(filepath.Join(tempDir2, ".gitignore"), []byte("git_ignored.txt\n"), 0644); err != nil {
+			t.Fatalf("Failed to create .gitignore: %v", err)
+		}
+
+		expectedFilesMap2 := map[string]bool{
+			filepath.Join(tempDir2, "main.go"): true,
+		}
+
+		scannedFiles2, err := ScanFiles(tempDir2)
+		if err != nil {
+			t.Fatalf("ScanFiles failed: %v", err)
+		}
+
+		if len(scannedFiles2) != len(expectedFilesMap2) {
+			t.Errorf("Expected %d files, got %d. Files: %v", len(expectedFilesMap2), len(scannedFiles2), scannedFiles2)
+		}
+
+		for _, f := range scannedFiles2 {
+			if !expectedFilesMap2[f] {
+				t.Errorf("Unexpected file found in scan: %s", f)
+			}
+		}
+	})
+
+	// Test with a non-existent directory
+	t.Run("Non-existent directory", func(t *testing.T) {
+		_, err := ScanFiles(filepath.Join(tempDir, "does-not-exist-12345"))
+		if err == nil {
+			t.Errorf("Expected an error when scanning a non-existent directory, got nil")
+		}
+	})
+}
+
+func TestEstimateTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		expected int
+	}{
+		{"Empty string", "", 0},
+		{"Single word", "hello", 1},
+		{"Multiple words", "hello world", 2},
+		{"Multiple spaces and newlines", "hello   world\n\nfoo", 4},
+		{"A longer phrase with punctuation", "This is a longer phrase. It has some punctuation!", 12}, // 9 words * 4 / 3 = 36 / 3 = 12
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := EstimateTokens(tt.text)
+			if result != tt.expected {
+				t.Errorf("EstimateTokens(%q) = %d, expected %d", tt.text, result, tt.expected)
+			}
+		})
+	}
+}
