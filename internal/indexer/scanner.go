@@ -88,17 +88,26 @@ func IndexFullCodebase(ctx context.Context, opts IndexerOptions) (IndexSummary, 
 		toIndex = append(toIndex, path)
 	}
 
+	filePathsSet := make(map[string]struct{}, len(files))
+	for _, absPath := range files {
+		relPath := config.GetRelativePath(absPath, opts.Config.ProjectRoot)
+		filePathsSet[relPath] = struct{}{}
+	}
+
+	var deleteErrs []error
 	for dbPath := range hashMapping {
-		found := false
-		for _, absPath := range files {
-			if config.GetRelativePath(absPath, opts.Config.ProjectRoot) == dbPath {
-				found = true
-				break
+		if _, found := filePathsSet[dbPath]; !found {
+			if err := opts.Store.DeleteByPath(ctx, dbPath, opts.Config.ProjectRoot); err != nil {
+				opts.Logger.Error("Failed to delete stale path", "path", dbPath, "error", err)
+				summary.Errors = append(summary.Errors, fmt.Sprintf("failed to delete stale path %s: %v", dbPath, err))
+				summary.Status = "partially_completed"
+				deleteErrs = append(deleteErrs, err)
 			}
 		}
-		if !found {
-			opts.Store.DeleteByPath(ctx, dbPath, opts.Config.ProjectRoot)
-		}
+	}
+
+	if len(deleteErrs) > 0 {
+		return summary, fmt.Errorf("failed to complete cleanup: %d deletions failed", len(deleteErrs))
 	}
 
 	if len(toIndex) == 0 {
