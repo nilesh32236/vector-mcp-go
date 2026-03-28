@@ -400,20 +400,21 @@ func IsIgnoredDir(name string) bool {
 }
 
 func IsIgnoredFile(name string) bool {
+	lowerName := strings.ToLower(name)
 	ignoredExact := []string{
 		"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum",
 	}
 	for _, f := range ignoredExact {
-		if name == f {
+		if lowerName == f {
 			return true
 		}
 	}
 
 	ignoredSuffixes := []string{
-		".map", ".min.js", ".svg",
+		".map", ".min.js", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf",
 	}
 	for _, s := range ignoredSuffixes {
-		if len(name) >= len(s) && name[len(name)-len(s):] == s {
+		if len(lowerName) >= len(s) && lowerName[len(lowerName)-len(s):] == s {
 			return true
 		}
 	}
