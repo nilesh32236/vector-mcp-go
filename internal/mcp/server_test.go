@@ -63,16 +63,15 @@ func TestIndexStatusTool(t *testing.T) {
 	store.SetStatus(ctx, "/test/project", "Indexing: 73.2% (73/100) - Current: file.go")
 	store.SetStatus(ctx, "/other/project", "Indexing: 10.0% (1/10) - Current: remote.go")
 
+	localStoreGetter := func(ctx context.Context) (*db.Store, error) { return store, nil }
 	progressMap := &sync.Map{}
 	progressMap.Store("/test/project", "Indexing: 73.2% (73/100) - Current: file.go")
 
-	storeGetter := func(ctx context.Context) (*db.Store, error) { return store, nil }
-
 	srv := &Server{
-		cfg:         cfg,
-		storeGetter: storeGetter,
-		progressMap: progressMap,
-		embedder:    &mockEmbedder{dim: 1024},
+		cfg:              cfg,
+		localStoreGetter: localStoreGetter,
+		progressMap:      progressMap,
+		embedder:         &mockEmbedder{dim: 1024},
 	}
 
 	// Test HandleIndexStatus directly
@@ -137,9 +136,9 @@ func TestSearchCodebaseTool(t *testing.T) {
 	}
 
 	srv := &Server{
-		cfg:         cfg,
-		storeGetter: func(ctx context.Context) (*db.Store, error) { return store, nil },
-		embedder:    &mockEmbedder{dim: 1024},
+		cfg:              cfg,
+		localStoreGetter: func(ctx context.Context) (*db.Store, error) { return store, nil },
+		embedder:         &mockEmbedder{dim: 1024},
 	}
 
 	// Test with query
@@ -260,9 +259,9 @@ export class SharedUtils {
 	}
 
 	srv := &Server{
-		cfg:         cfg,
-		storeGetter: func(ctx context.Context) (*db.Store, error) { return store, nil },
-		embedder:    &mockEmbedder{dim: dim},
+		cfg:              cfg,
+		localStoreGetter: func(ctx context.Context) (*db.Store, error) { return store, nil },
+		embedder:         &mockEmbedder{dim: dim},
 	}
 	srv.WithRemoteStore(store)
 

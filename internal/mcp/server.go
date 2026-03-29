@@ -18,11 +18,14 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/daemon"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
+	"github.com/nilesh32236/vector-mcp-go/internal/mutation"
 )
 
 // Searcher defines the interface for searching the vector database.
 type Searcher interface {
 	Search(ctx context.Context, embedding []float32, topK int, projectIDs []string, category string) ([]db.Record, error)
+	SearchWithScore(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]db.Record, []float32, error)
 	HybridSearch(ctx context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]db.Record, error)
 	LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string, category string) ([]db.Record, error)
 }
@@ -61,7 +64,7 @@ type Server struct {
 	cfg              *config.Config                                                                                 // Server configuration
 	logger           *slog.Logger                                                                                   // Structured logger
 	MCPServer        *server.MCPServer                                                                              // Underlying MCP server instance
-	storeGetter      func(ctx context.Context) (*db.Store, error)                                                   // Function to get local store
+	localStoreGetter func(ctx context.Context) (*db.Store, error)                                                   // Function to get local store
 	remoteStore      IndexerStore                                                                                   // Optional remote store implementation
 	embedder         indexer.Embedder                                                                               // Embedding engine for semantic operations
 	indexQueue       chan string                                                                                    // Queue for background indexing tasks
@@ -69,24 +72,30 @@ type Server struct {
 	progressMap      *sync.Map                                                                                      // Thread-safe map for tracking indexing progress
 	watcherResetChan chan string                                                                                    // Channel to signal file watcher resets
 	monorepoResolver *indexer.WorkspaceResolver                                                                     // Resolver for monorepo package structures
+	lspManager       *lsp.LSPManager                                                                                // High-precision language server manager
+	safety           *mutation.SafetyChecker                                                                        // Safety checker for mutation integrity
+	graph            *db.KnowledgeGraph                                                                             // Code relationship graph for reasoning
 	toolHandlers     map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) // Map of tool names to handlers
 }
 
 // NewServer initializes and returns a new Server instance.
 // It sets up the internal MCP server and registers all supported tools, resources, and prompts.
-func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx context.Context) (*db.Store, error), embedder indexer.Embedder, queue chan string, daemonClient *daemon.Client, progress *sync.Map, resetChan chan string, resolver *indexer.WorkspaceResolver) *Server {
+func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx context.Context) (*db.Store, error), embedder indexer.Embedder, queue chan string, daemonClient *daemon.Client, progress *sync.Map, resetChan chan string, resolver *indexer.WorkspaceResolver, lspManager *lsp.LSPManager, safety *mutation.SafetyChecker) *Server {
 	s := server.NewMCPServer("vector-mcp-go", "1.0.0", server.WithLogging())
 	srv := &Server{
 		cfg:              cfg,
 		logger:           logger,
 		MCPServer:        s,
-		storeGetter:      storeGetter,
+		localStoreGetter: storeGetter,
 		embedder:         embedder,
 		indexQueue:       queue,
 		daemonClient:     daemonClient,
 		progressMap:      progress,
 		watcherResetChan: resetChan,
 		monorepoResolver: resolver,
+		lspManager:       lspManager,
+		safety:           safety,
+		graph:            db.NewKnowledgeGraph(),
 		toolHandlers:     make(map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)),
 	}
 	srv.registerResources()
@@ -107,7 +116,26 @@ func (s *Server) getStore(ctx context.Context) (IndexerStore, error) {
 	if s.remoteStore != nil {
 		return s.remoteStore, nil
 	}
-	return s.storeGetter(ctx)
+	return s.localStoreGetter(ctx)
+}
+
+// PopulateGraph builds the structural knowledge graph from all records in the store.
+func (s *Server) PopulateGraph(ctx context.Context) error {
+	s.logger.Info("Populating structural knowledge graph")
+
+	store, err := s.getStore(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get store for graph population: %w", err)
+	}
+
+	records, err := store.GetAllRecords(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch records for graph: %w", err)
+	}
+
+	s.graph.Populate(records)
+	s.logger.Info("Knowledge graph populated", "node_count", len(records))
+	return nil
 }
 
 // Serve starts the MCP server on stdio.
@@ -359,7 +387,7 @@ func (s *Server) registerTools() {
 
 	// 12. search_codebase
 	addTool(mcp.NewTool("search_codebase",
-		mcp.WithDescription("Unified semantic and lexical search across the codebase. Replaces retrieve_context and retrieve_docs."),
+		mcp.WithDescription("Unified semantic and lexical search across the codebase. Replaces retrieve_context and retrieve_docs. Best for finding architectural patterns, related logic, or high-level concepts rather than literal strings."),
 		mcp.WithString("query", mcp.Description("The natural language search query")),
 		mcp.WithString("category", mcp.Description("Optional: 'code' or 'document'. Handles both 'code' and 'document' retrieval. Defaults to searching both.")),
 		mcp.WithNumber("topK", mcp.Description("Number of results to return (default 10)")),
@@ -423,6 +451,114 @@ func (s *Server) registerTools() {
 		mcp.WithDescription("Analyzes a directory and automatically generates a Knowledge Item summary."),
 		mcp.WithString("path", mcp.Description("The relative path to analyze")),
 	), s.handleDistillKnowledge)
+
+	// 22. apply_code_patch
+	addTool(mcp.NewTool("apply_code_patch",
+		mcp.WithDescription("Atomically applies a search-and-replace patch to a file. Use this for targeted code modifications after verifying the search string exists and is unique. Always verify the patch integrity afterward."),
+		mcp.WithString("path", mcp.Description("Relative path to the target file")),
+		mcp.WithString("search", mcp.Description("The EXACT block of code or string to locate. Must be unique.")),
+		mcp.WithString("replace", mcp.Description("The new code or string to insert instead.")),
+	), s.handleApplyCodePatch)
+
+	// 23. run_linter_and_fix
+	addTool(mcp.NewTool("run_linter_and_fix",
+		mcp.WithDescription("Executes standard Go formatters (go fmt) or linters with the fix flag. Best for cleaning up code style or resolving trivial linting errors automatically."),
+		mcp.WithString("path", mcp.Description("Path to the file or directory to process")),
+		mcp.WithString("tool", mcp.Description("Target tool (strictly 'go fmt' for now)")),
+	), s.handleRunLinterAndFix)
+
+	// 24. create_file
+	addTool(mcp.NewTool("create_file",
+		mcp.WithDescription("Scaffolds a new file with specified content. Automatically creates parent directories if they don't exist. Use this for adding new features or splitting code into separate modules."),
+		mcp.WithString("path", mcp.Description("Relative path for the new file")),
+		mcp.WithString("content", mcp.Description("The text content to write into the file.")),
+	), s.handleCreateFile)
+
+	// 25. get_precise_definition
+	addTool(mcp.NewTool("get_precise_definition",
+		mcp.WithDescription("Uses the Go Language Server (LSP) to find the absolute file location and line-level definition of a symbol. High-order precision bypassing vector hallucinations."),
+		mcp.WithString("path", mcp.Description("Absolute file path containing the symbol usage")),
+		mcp.WithNumber("line", mcp.Description("0-indexed line number of the symbol usage")),
+		mcp.WithNumber("character", mcp.Description("0-indexed character offset of the symbol usage")),
+	), s.handleGetPreciseDefinition)
+
+	// 26. find_references_precise
+	addTool(mcp.NewTool("find_references_precise",
+		mcp.WithDescription("Uses the Go Language Server (LSP) to find all precise occurrences/usages of a symbol across the entire project. Essential for impact analysis before refactoring."),
+		mcp.WithString("path", mcp.Description("Absolute file path containing the symbol")),
+		mcp.WithNumber("line", mcp.Description("0-indexed line number of the symbol")),
+		mcp.WithNumber("character", mcp.Description("0-indexed character offset of the symbol")),
+	), s.handleFindReferencesPrecise)
+
+	// 27. get_type_hierarchy
+	addTool(mcp.NewTool("get_type_hierarchy",
+		mcp.WithDescription("Uses the Go Language Server (LSP) to map interface implementations, embedded structures, and type inheritance. Deep architectural insight for Go codebases."),
+		mcp.WithString("path", mcp.Description("Absolute file path containing the type")),
+		mcp.WithNumber("line", mcp.Description("0-indexed line number of the type")),
+		mcp.WithNumber("character", mcp.Description("0-indexed character offset of the type")),
+	), s.handleGetTypeHierarchy)
+
+	// 28. verify_patch_integrity
+	addTool(mcp.NewTool("verify_patch_integrity",
+		mcp.WithDescription("Crucial pre-commit safety guard: Checks if an in-memory application of a patch would introduce compiler errors by invoking LSP diagnostics. Always use this before finalizing a mutation."),
+		mcp.WithString("path", mcp.Description("Path to the file being edited")),
+		mcp.WithString("search", mcp.Description("The exact code segment to replace")),
+		mcp.WithString("replace", mcp.Description("The proposed new code segment")),
+	), s.handleVerifyPatchIntegrity)
+
+	// 29. auto_fix_mutation
+	addTool(mcp.NewTool("auto_fix_mutation",
+		mcp.WithDescription("Autonomous repair tool: Suggests a fix for a failed code patch based on LSP diagnostics. Use this when verify_patch_integrity returns errors to get a corrected strategy."),
+		mcp.WithString("diagnostic_json", mcp.Description("The JSON-encoded diagnostic object from a failed verification.")),
+	), s.handleAutoFixMutation)
+
+	// 30. get_impact_analysis
+	addTool(mcp.NewTool("get_impact_analysis",
+		mcp.WithDescription("Calculates the 'blast radius' of a symbol by finding all downstream references across the project via LSP. Provides a high-order risk assessment (Low/Medium/High) for proposed refactors."),
+		mcp.WithString("path", mcp.Description("Absolute file path containing the symbol usage")),
+		mcp.WithNumber("line", mcp.Description("0-indexed line number of the symbol usage")),
+		mcp.WithNumber("character", mcp.Description("0-indexed character offset of the symbol usage")),
+	), s.handleGetImpactAnalysis)
+
+	// 31. distill_package_purpose
+	addTool(mcp.NewTool("distill_package_purpose",
+		mcp.WithDescription("Generates a high-level semantic summary of a package's primary purpose and key entities. This distillation is re-indexed with a 2.0x priority boost to prime the agent's architectural context."),
+		mcp.WithString("path", mcp.Description("Relative or absolute path of the package directory to distill.")),
+	), s.handleDistillPackagePurpose)
+
+	// 32. get_interface_implementations
+	addTool(mcp.NewTool("get_interface_implementations",
+		mcp.WithDescription("Finds all structs/classes that implement a specific interface by matching their structural metadata (methods). 100% precision graph traversal."),
+		mcp.WithString("interface_name", mcp.Description("The name of the interface to find implementations for")),
+	), s.handleGetInterfaceImplementations)
+
+	// 33. trace_data_flow
+	addTool(mcp.NewTool("trace_data_flow",
+		mcp.WithDescription("Traces the usage of a specific field or symbol across the project to understand data dependencies. High-precision structural analysis."),
+		mcp.WithString("field_name", mcp.Description("The name of the field or symbol to trace")),
+	), s.handleTraceDataFlow)
+}
+
+// SendNotification sends a logging message notification to all connected clients.
+func (s *Server) SendNotification(level mcp.LoggingLevel, data any, logger string) {
+	params := map[string]any{
+		"level": level,
+		"data":  data,
+	}
+	if logger != "" {
+		params["logger"] = logger
+	}
+	s.MCPServer.SendNotificationToAllClients("notifications/message", params)
+}
+
+// Notify is a helper to send info-level notifications.
+func (s *Server) Notify(message string) {
+	s.SendNotification(mcp.LoggingLevelInfo, message, "vector-mcp")
+}
+
+// Log is a helper to send debug/log-level notifications.
+func (s *Server) Log(level mcp.LoggingLevel, message string) {
+	s.SendNotification(level, message, "vector-mcp")
 }
 
 // CallTool invokes a registered tool handler by name with the provided arguments.

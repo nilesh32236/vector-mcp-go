@@ -10,10 +10,10 @@ import (
 )
 
 type OllamaRequest struct {
-	Model  string    `json:"model"`
-	Prompt string    `json:"prompt,omitempty"`
-	System string    `json:"system,omitempty"`
-	Stream bool      `json:"stream"`
+	Model    string    `json:"model"`
+	Prompt   string    `json:"prompt,omitempty"`
+	System   string    `json:"system,omitempty"`
+	Stream   bool      `json:"stream"`
 	Messages []Message `json:"messages,omitempty"`
 }
 
@@ -24,11 +24,11 @@ type OllamaResponse struct {
 
 func GenerateOllamaCompletion(ctx context.Context, model string, systemPrompt string, messages []Message) (CompletionResponse, error) {
 	url := "http://localhost:11434/api/chat"
-	
+
 	reqBody := OllamaRequest{
-		Model:  model,
-		System: systemPrompt,
-		Stream: false,
+		Model:    model,
+		System:   systemPrompt,
+		Stream:   false,
 		Messages: messages,
 	}
 

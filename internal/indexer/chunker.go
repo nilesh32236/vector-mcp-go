@@ -18,15 +18,17 @@ import (
 )
 
 type Chunk struct {
-	Content          string
-	ContextualString string
-	Symbols          []string
-	Relationships    []string
-	Type             string
-	Calls            []string
-	FunctionScore    float32
-	StartLine        int
-	EndLine          int
+	Content            string
+	ContextualString   string
+	Symbols            []string
+	Relationships      []string
+	Type               string
+	Calls              []string
+	FunctionScore      float32
+	StartLine          int
+	EndLine            int
+	Docstring          string
+	StructuralMetadata map[string]string
 }
 
 type entityMatch struct {
@@ -49,6 +51,22 @@ func CreateChunks(text string, filePath string) []Chunk {
 	for i := range chunks {
 		chunks[i].Relationships = relationships
 
+		docStr := "None"
+		if chunks[i].Docstring != "" {
+			docStr = chunks[i].Docstring
+		}
+
+		structStr := ""
+		if len(chunks[i].StructuralMetadata) > 0 {
+			var sb strings.Builder
+			sb.WriteString(" [Structure: ")
+			for k, v := range chunks[i].StructuralMetadata {
+				sb.WriteString(fmt.Sprintf("%s=%s ", k, v))
+			}
+			sb.WriteString("]")
+			structStr = sb.String()
+		}
+
 		scope := "Global"
 		if len(chunks[i].Symbols) > 0 {
 			scope = chunks[i].Symbols[0]
@@ -59,8 +77,8 @@ func CreateChunks(text string, filePath string) []Chunk {
 			callsStr = strings.Join(chunks[i].Calls, ", ")
 		}
 
-		chunks[i].ContextualString = fmt.Sprintf("File: %s. Entity: %s. Type: %s. Calls: %s. Code:\n%s",
-			filePath, scope, chunks[i].Type, callsStr, chunks[i].Content)
+		chunks[i].ContextualString = fmt.Sprintf("File: %s. Entity: %s. Type: %s. Docstring: %s. Calls: %s.%s Code:\n%s",
+			filePath, scope, chunks[i].Type, docStr, callsStr, structStr, chunks[i].Content)
 	}
 	return chunks
 }
@@ -201,18 +219,22 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 						chunkType := entityNode.Type()
 						calls := extractCallsGeneric(entityNode, content)
 						score := calculateScoreGeneric(entityNode, calls)
+						docstring := associateDocstrings(entityNode, content)
+						structMeta := extractStructuralMetadata(entityNode, content)
 
 						matches = append(matches, entityMatch{
 							start: start,
 							end:   end,
 							chunk: Chunk{
-								Content:       string(content[start:end]),
-								Symbols:       []string{symbolName},
-								Type:          chunkType,
-								Calls:         calls,
-								FunctionScore: score,
-								StartLine:     int(entityNode.StartPoint().Row) + 1,
-								EndLine:       int(entityNode.EndPoint().Row) + 1,
+								Content:            string(content[start:end]),
+								Symbols:            []string{symbolName},
+								Type:               chunkType,
+								Calls:              calls,
+								FunctionScore:      score,
+								Docstring:          docstring,
+								StructuralMetadata: structMeta,
+								StartLine:          int(entityNode.StartPoint().Row) + 1,
+								EndLine:            int(entityNode.EndPoint().Row) + 1,
 							},
 						})
 					}
@@ -289,6 +311,116 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 	}
 
 	return allChunks
+}
+
+func associateDocstrings(node *sitter.Node, content string) string {
+	contentBytes := []byte(content)
+	parent := node.Parent()
+	if parent == nil {
+		return ""
+	}
+
+	var comments []string
+
+	// Check siblings before this node
+	for i := 0; i < int(parent.ChildCount()); i++ {
+		child := parent.Child(i)
+		if child.StartByte() >= node.StartByte() {
+			break
+		}
+		if child.Type() == "comment" || child.Type() == "line_comment" || child.Type() == "block_comment" {
+			// Only take comments that are visually close (last child before us)
+			// Simple heuristic: if there's more than 1 line between comment and node, skip
+			if int(node.StartPoint().Row-child.EndPoint().Row) <= 1 {
+				comments = append(comments, child.Content(contentBytes))
+			} else {
+				comments = nil // Reset if we find a "stale" comment
+			}
+		} else if strings.TrimSpace(child.Content(contentBytes)) != "" {
+			comments = nil // Reset if we find unrelated code between comments and node
+		}
+	}
+
+	return strings.Join(comments, "\n")
+}
+
+func extractStructuralMetadata(node *sitter.Node, content string) map[string]string {
+	meta := make(map[string]string)
+	contentBytes := []byte(content)
+
+	var traverse func(n *sitter.Node)
+	traverse = func(n *sitter.Node) {
+		if n == nil {
+			return
+		}
+
+		t := n.Type()
+
+		// Go Struct fields (can be in struct_type or directly in type_spec if simplified)
+		if t == "field_declaration" {
+			nameNode := n.ChildByFieldName("name")
+			typeNode := n.ChildByFieldName("type")
+
+			// Fallback for name
+			if nameNode == nil {
+				for i := 0; i < int(n.ChildCount()); i++ {
+					child := n.Child(i)
+					if child.Type() == "field_identifier" || child.Type() == "identifier" {
+						nameNode = child
+						break
+					}
+				}
+			}
+
+			// Fallback for type (usually the last child that is a type or identifier)
+			if typeNode == nil && nameNode != nil {
+				for i := int(n.ChildCount()) - 1; i >= 0; i-- {
+					child := n.Child(i)
+					if child != nameNode && (strings.Contains(child.Type(), "type") || child.Type() == "identifier") {
+						typeNode = child
+						break
+					}
+				}
+			}
+
+			if nameNode != nil && typeNode != nil {
+				meta["field:"+nameNode.Content(contentBytes)] = typeNode.Content(contentBytes)
+			}
+		}
+
+		// Go Interface methods
+		if t == "method_spec" || t == "method_elem" {
+			nameNode := n.ChildByFieldName("name")
+			if nameNode == nil {
+				for i := 0; i < int(n.ChildCount()); i++ {
+					child := n.Child(i)
+					if child.Type() == "field_identifier" || child.Type() == "identifier" {
+						nameNode = child
+						break
+					}
+				}
+			}
+			if nameNode != nil {
+				meta["method:"+nameNode.Content(contentBytes)] = "defined"
+			}
+		}
+		// TS/JS Class properties
+		if t == "public_field_definition" || t == "property_definition" {
+			nameNode := n.ChildByFieldName("property")
+			if nameNode == nil {
+				nameNode = n.ChildByFieldName("name")
+			}
+			if nameNode != nil {
+				meta["prop:"+nameNode.Content(contentBytes)] = "defined"
+			}
+		}
+
+		for i := 0; i < int(n.ChildCount()); i++ {
+			traverse(n.Child(i))
+		}
+	}
+	traverse(node)
+	return meta
 }
 
 func countLines(s string) int {

@@ -41,8 +41,8 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.EmbedderPoolSize != 1 {
 			t.Errorf("expected EmbedderPoolSize 1, got %d", cfg.EmbedderPoolSize)
 		}
-		if cfg.DefaultGeminiModel != "gemini-2.5-flash" {
-			t.Errorf("expected DefaultGeminiModel gemini-2.5-flash, got %s", cfg.DefaultGeminiModel)
+		if cfg.DefaultGeminiModel != "gemini-1.5-flash" {
+			t.Errorf("expected DefaultGeminiModel gemini-1.5-flash, got %s", cfg.DefaultGeminiModel)
 		}
 	})
 

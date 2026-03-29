@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -128,7 +129,6 @@ func TestSplitIfNeeded(t *testing.T) {
 	}
 }
 
-
 func TestParseRelationships(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -193,7 +193,6 @@ use Some\Namespace\ClassA, Some\Namespace\ClassB as B;`,
 	}
 }
 
-
 func TestCreateChunks(t *testing.T) {
 	// Test unsupported file type (falls back to fastChunk)
 	unsupportedText := "This is a simple text file.\nIt has two lines."
@@ -205,8 +204,8 @@ func TestCreateChunks(t *testing.T) {
 	}
 
 	// Verify ContextualString is built properly
-	// Expected format: File: <file>. Entity: <scope>. Type: <type>. Calls: <callsStr>. Code: <code>
-	expectedPrefix := "File: test.txt. Entity: Global. Type: . Calls: None. Code:"
+	// Expected format: File: <file>. Entity: <scope>. Type: <type>. Docstring: <doc>. Calls: <callsStr>. Code: <code>
+	expectedPrefix := "File: test.txt. Entity: Global. Type: . Docstring: None. Calls: None. Code:"
 	if len(chunks[0].ContextualString) < len(expectedPrefix) || chunks[0].ContextualString[:len(expectedPrefix)] != expectedPrefix {
 		t.Errorf("ContextualString mismatch.\nExpected prefix: %q\nGot: %q", expectedPrefix, chunks[0].ContextualString)
 	}
@@ -236,7 +235,7 @@ func hello() {
 			if c.Type != "function_declaration" {
 				t.Errorf("Expected function_declaration chunk type, got %s", c.Type)
 			}
-			expectedContextPrefix := "File: test.go. Entity: hello. Type: function_declaration."
+			expectedContextPrefix := "File: test.go. Entity: hello. Type: function_declaration. Docstring: None. Calls: Println."
 			if len(c.ContextualString) < len(expectedContextPrefix) || c.ContextualString[:len(expectedContextPrefix)] != expectedContextPrefix {
 				t.Errorf("ContextualString mismatch.\nExpected prefix: %q\nGot: %q", expectedContextPrefix, c.ContextualString)
 			}
@@ -259,5 +258,52 @@ func hello() {
 
 	if !foundFunc {
 		t.Errorf("Did not find chunk with symbol 'hello' for Go file. Chunks returned: %d", len(goChunks))
+	}
+}
+
+func TestStructuralMetadata(t *testing.T) {
+	code := `
+package test
+// User represents a user in the system.
+type User struct {
+	ID   int
+	Name string
+}
+
+type Service interface {
+	GetUser(id int) *User
+}
+`
+	chunks := CreateChunks(code, "test.go")
+
+	foundStruct := false
+	foundInterface := false
+
+	for _, c := range chunks {
+		if len(c.Symbols) > 0 && c.Symbols[0] == "User" {
+			foundStruct = true
+			if c.StructuralMetadata["field:ID"] != "int" {
+				t.Errorf("Expected field:ID=int, got %s", c.StructuralMetadata["field:ID"])
+			}
+			if c.StructuralMetadata["field:Name"] != "string" {
+				t.Errorf("Expected field:Name=string, got %s", c.StructuralMetadata["field:Name"])
+			}
+			if !strings.Contains(c.Docstring, "User represents a user") {
+				t.Errorf("Docstring mismatch, got %q", c.Docstring)
+			}
+		}
+		if len(c.Symbols) > 0 && c.Symbols[0] == "Service" {
+			foundInterface = true
+			if c.StructuralMetadata["method:GetUser"] != "defined" {
+				t.Errorf("Expected method:GetUser=defined, got %s", c.StructuralMetadata["method:GetUser"])
+			}
+		}
+	}
+
+	if !foundStruct {
+		t.Error("Did not find chunk for struct User")
+	}
+	if !foundInterface {
+		t.Error("Did not find chunk for interface Service")
 	}
 }

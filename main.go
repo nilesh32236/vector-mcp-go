@@ -12,14 +12,19 @@ import (
 	"syscall"
 	"time"
 
+	libmcp "github.com/mark3labs/mcp-go/mcp"
+	"github.com/nilesh32236/vector-mcp-go/internal/analysis"
 	"github.com/nilesh32236/vector-mcp-go/internal/api"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/daemon"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/embedding"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
 	"github.com/nilesh32236/vector-mcp-go/internal/mcp"
+	"github.com/nilesh32236/vector-mcp-go/internal/mutation"
 	"github.com/nilesh32236/vector-mcp-go/internal/onnx"
+	"github.com/nilesh32236/vector-mcp-go/internal/system"
 	"github.com/nilesh32236/vector-mcp-go/internal/watcher"
 	"github.com/nilesh32236/vector-mcp-go/internal/worker"
 )
@@ -45,6 +50,8 @@ type App struct {
 	masterServer *daemon.MasterServer
 	mcpServer    *mcp.Server
 	apiServer    *api.Server
+	analyzer     analysis.Analyzer
+	throttler    *system.MemThrottler
 	ctx          context.Context
 	cancel       context.CancelFunc
 }
@@ -59,6 +66,8 @@ func NewApp(cfg *config.Config) *App {
 		resetChan:   make(chan string, 1),
 		ctx:         ctx,
 		cancel:      cancel,
+		analyzer:    analysis.NewMultiAnalyzer(analysis.NewPatternAnalyzer()),
+		throttler:   system.NewMemThrottler(90.0, 512),
 	}
 }
 
@@ -142,12 +151,18 @@ func (a *App) Init(socketPath string) error {
 		embedder = daemon.NewRemoteEmbedder(socketPath)
 	}
 
+	// Initialize LSP and Safety components
+	goplsPath := filepath.Join(os.Getenv("HOME"), "go", "bin", "gopls")
+	lspManager := lsp.NewLSPManager(goplsPath, a.cfg.ProjectRoot, a.logger, a.throttler)
+	safetyChecker := mutation.NewSafetyChecker(lspManager)
+	a.analyzer = analysis.NewMultiAnalyzer(analysis.NewPatternAnalyzer(), analysis.NewVettingAnalyzer(a.cfg.ProjectRoot))
+
 	// Initialize MCP Server
 	resolver := indexer.InitResolver(a.cfg.ProjectRoot)
 	storeGetter := func(ctx context.Context) (*db.Store, error) {
 		return a.getStore(ctx, false)
 	}
-	a.mcpServer = mcp.NewServer(a.cfg, a.logger, storeGetter, embedder, a.indexQueue, a.daemonClient, a.progressMap, a.resetChan, resolver)
+	a.mcpServer = mcp.NewServer(a.cfg, a.logger, storeGetter, embedder, a.indexQueue, a.daemonClient, a.progressMap, a.resetChan, resolver, lspManager, safetyChecker)
 
 	if !a.isMaster {
 		a.mcpServer.WithRemoteStore(daemon.NewRemoteStore(socketPath))
@@ -180,6 +195,10 @@ func (a *App) runLiveIndexing(embedder indexer.Embedder) {
 		a.logger.Error("Live indexing failed", "error", err)
 	} else {
 		a.logger.Info("Live indexing complete", "files_indexed", summary.FilesIndexed, "files_skipped", summary.FilesSkipped)
+		// Populate Knowledge Graph after indexing
+		if err := a.mcpServer.PopulateGraph(context.Background()); err != nil {
+			a.logger.Error("Failed to populate graph after indexing", "error", err)
+		}
 	}
 }
 
@@ -200,14 +219,24 @@ func (a *App) Start(indexFlag, daemonFlag bool) error {
 
 		// Start Watcher
 		if !a.cfg.DisableWatcher {
-			store, _ := a.getStore(a.ctx, false)
-			sg := func(ctx context.Context) (*db.Store, error) { return store, nil }
-			fw, err := watcher.NewFileWatcher(a.cfg, a.logger, a.resetChan, sg, a.mcpServer.GetEmbedder())
+			sg := func(ctx context.Context) (*db.Store, error) {
+				return a.getStore(ctx, false)
+			}
+			st, _ := sg(a.ctx)
+			distiller := analysis.NewDistiller(st, a.mcpServer.GetEmbedder(), a.logger)
+			fw, err := watcher.NewFileWatcher(a.cfg, a.logger, a.resetChan, sg, a.mcpServer.GetEmbedder(), a.analyzer, distiller, func(level libmcp.LoggingLevel, data any, logger string) {
+				a.mcpServer.SendNotification(level, data, logger)
+			})
 			if err == nil {
 				go fw.Start(a.ctx)
 			} else {
 				a.logger.Error("Failed to start watcher", "error", err)
 			}
+		}
+
+		// Pre-populate graph from existing Store if already indexed
+		if err := a.mcpServer.PopulateGraph(a.ctx); err != nil {
+			a.logger.Warn("Initial graph population failed (maybe DB is empty)", "error", err)
 		}
 	}
 
@@ -241,6 +270,9 @@ func (a *App) Stop() {
 	a.cancel()
 	if a.isMaster && a.masterServer != nil {
 		a.masterServer.Close()
+	}
+	if a.throttler != nil {
+		a.throttler.Stop()
 	}
 	// Give time for background tasks to clean up
 	time.Sleep(200 * time.Millisecond)

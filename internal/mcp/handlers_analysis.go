@@ -235,10 +235,10 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 	store, _ := s.getStore(ctx)
 
 	targetChunks, _ := store.GetByPrefix(ctx, targetPath, s.cfg.ProjectRoot)
-	
+
 	var out strings.Builder
 	out.WriteString(fmt.Sprintf("<duplicate_analysis target=\"%s\">\n", targetPath))
-	
+
 	// Optimization: Parallelize searches for each chunk
 	type finding struct {
 		originalFile string

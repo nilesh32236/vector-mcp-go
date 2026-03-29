@@ -206,6 +206,8 @@ func ProcessFile(ctx context.Context, path string, opts IndexerOptions) Result {
 		return Result{Skipped: true, RelPath: relPath}
 	}
 
+	priority := GetPriority(relPath)
+
 	var contentStr string
 	ext := strings.ToLower(filepath.Ext(path))
 	category := "code"
@@ -250,66 +252,64 @@ func ProcessFile(ctx context.Context, path string, opts IndexerOptions) Result {
 
 	if len(texts) > 0 {
 		embs, err := opts.Embedder.EmbedBatch(ctx, texts)
-		if err == nil {
-			for i, chunk := range chunks {
-				relJSON, _ := json.Marshal(chunk.Relationships)
-				symJSON, _ := json.Marshal(chunk.Symbols)
-				callsJSON, _ := json.Marshal(chunk.Calls)
-				records = append(records, db.Record{
-					ID:        fmt.Sprintf("%s-%s-%d-%d", opts.Config.ProjectRoot, relPath, time.Now().UnixNano(), i),
-					Content:   chunk.Content,
-					Embedding: embs[i],
-					Metadata: map[string]string{
-						"path":           relPath,
-						"project_id":     opts.Config.ProjectRoot,
-						"hash":           currentHash,
-						"relationships":  string(relJSON),
-						"symbols":        string(symJSON),
-						"type":           chunk.Type,
-						"calls":          string(callsJSON),
-						"function_score": fmt.Sprintf("%.2f", chunk.FunctionScore),
-						"category":       category,
-						"updated_at":     updatedAt,
-						"start_line":     strconv.Itoa(chunk.StartLine),
-						"end_line":       strconv.Itoa(chunk.EndLine),
-					},
-				})
-			}
-		} else {
+		if err != nil {
 			// Fallback to single embedding if batch fails
-			for _, chunk := range chunks {
-				emb, err := opts.Embedder.Embed(ctx, chunk.ContextualString)
+			opts.Logger.Warn("Batch embedding failed, falling back to sequential", "error", err, "path", relPath)
+			embs = make([][]float32, 0, len(texts))
+			for _, text := range texts {
+				emb, err := opts.Embedder.Embed(ctx, text)
 				if err != nil {
+					opts.Logger.Error("Single embedding failed", "error", err)
 					continue
 				}
-				relJSON, _ := json.Marshal(chunk.Relationships)
-				symJSON, _ := json.Marshal(chunk.Symbols)
-				callsJSON, _ := json.Marshal(chunk.Calls)
-				records = append(records, db.Record{
-					ID:        fmt.Sprintf("%s-%s-%d", opts.Config.ProjectRoot, relPath, time.Now().UnixNano()),
-					Content:   chunk.Content,
-					Embedding: emb,
-					Metadata: map[string]string{
-						"path":           relPath,
-						"project_id":     opts.Config.ProjectRoot,
-						"hash":           currentHash,
-						"relationships":  string(relJSON),
-						"symbols":        string(symJSON),
-						"type":           chunk.Type,
-						"calls":          string(callsJSON),
-						"function_score": fmt.Sprintf("%.2f", chunk.FunctionScore),
-						"category":       category,
-						"updated_at":     updatedAt,
-						"start_line":     strconv.Itoa(chunk.StartLine),
-						"end_line":       strconv.Itoa(chunk.EndLine),
-					},
-				})
+				embs = append(embs, emb)
 			}
+		}
+
+		for i, chunk := range chunks {
+			if i >= len(embs) {
+				break
+			}
+			relJSON, _ := json.Marshal(chunk.Relationships)
+			symJSON, _ := json.Marshal(chunk.Symbols)
+			callsJSON, _ := json.Marshal(chunk.Calls)
+
+			name := ""
+			if len(chunk.Symbols) > 0 {
+				name = chunk.Symbols[0]
+			}
+
+			structJSON, _ := json.Marshal(chunk.StructuralMetadata)
+
+			metadata := map[string]string{
+				"path":                relPath,
+				"project_id":          opts.Config.ProjectRoot,
+				"category":            category,
+				"updated_at":          updatedAt,
+				"hash":                currentHash,
+				"relationships":       string(relJSON),
+				"symbols":             string(symJSON),
+				"type":                chunk.Type,
+				"name":                name,
+				"calls":               string(callsJSON),
+				"priority":            fmt.Sprintf("%.1f", priority),
+				"function_score":      fmt.Sprintf("%.2f", chunk.FunctionScore),
+				"docstring":           chunk.Docstring,
+				"structural_metadata": string(structJSON),
+				"start_line":          strconv.Itoa(chunk.StartLine),
+				"end_line":            strconv.Itoa(chunk.EndLine),
+			}
+
+			records = append(records, db.Record{
+				ID:        fmt.Sprintf("%s-%s-%d-%d", opts.Config.ProjectRoot, relPath, time.Now().UnixNano(), i),
+				Content:   chunk.Content,
+				Embedding: embs[i],
+				Metadata:  metadata,
+			})
 		}
 	}
 
 	if len(records) > 0 {
-		opts.Store.DeleteByPath(ctx, relPath, opts.Config.ProjectRoot)
 		return Result{Indexed: true, Records: records, RelPath: relPath}
 	}
 	return Result{RelPath: relPath}
@@ -429,6 +429,16 @@ func IsIgnoredFile(name string) bool {
 	}
 
 	return false
+}
+
+// GetPriority returns a search boost factor based on the file path.
+// High-priority files include ADRs and architectural documentation.
+func GetPriority(relPath string) float32 {
+	lower := strings.ToLower(relPath)
+	if strings.Contains(lower, "adr/") || strings.Contains(lower, "architecture") || filepath.Base(lower) == "architecture.md" {
+		return 1.5
+	}
+	return 1.0
 }
 
 func GetHash(path string) (string, error) {

@@ -309,6 +309,13 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 			}
 		}
 
+		// Apply priority boost
+		if pStr, ok := r.Metadata["priority"]; ok {
+			if p, err := strconv.ParseFloat(pStr, 32); err == nil {
+				boost *= p
+			}
+		}
+
 		ranked = append(ranked, ScoredRecord{
 			Record: r,
 			Score:  score * boost,
@@ -376,15 +383,28 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 	var records []Record
 	var scores []float32
 	for _, doc := range allResults {
+		boost := float32(1.0)
+		if pStr, ok := doc.Metadata["priority"]; ok {
+			if p, err := strconv.ParseFloat(pStr, 32); err == nil {
+				boost = float32(p)
+			}
+		}
+
 		records = append(records, Record{
 			ID:         doc.ID,
 			Content:    doc.Content,
 			Embedding:  doc.Embedding,
 			Metadata:   doc.Metadata,
-			Similarity: doc.Similarity,
+			Similarity: doc.Similarity * boost,
 		})
-		scores = append(scores, doc.Similarity)
+		scores = append(scores, doc.Similarity*boost)
 	}
+
+	// Re-sort if boosts changed the orders
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Similarity > records[j].Similarity
+	})
+
 	return records, scores, nil
 }
 

@@ -207,6 +207,7 @@ func GenerateGeminiCompletion(ctx context.Context, cfg GeminiConfig) (Completion
 
 	return comp, nil
 }
+
 // ListGeminiModels retrieves the list of available models from the Google Gemini API.
 func ListGeminiModels(ctx context.Context, apiKey string) ([]string, error) {
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models?key=%s", apiKey)

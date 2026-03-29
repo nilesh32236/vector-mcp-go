@@ -72,6 +72,7 @@ type HybridSearchRequest struct {
 
 type SearchResponse struct {
 	Records []db.Record
+	Scores  []float32
 }
 
 type InsertRequest struct {
@@ -149,11 +150,12 @@ func (s *Service) Search(req SearchRequest, resp *SearchResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
 	}
-	res, err := s.Store.Search(context.Background(), req.Embedding, req.TopK, req.PIDs, req.Category)
+	res, scores, err := s.Store.SearchWithScore(context.Background(), req.Embedding, req.TopK, req.PIDs, req.Category)
 	if err != nil {
 		return err
 	}
 	resp.Records = res
+	resp.Scores = scores
 	return nil
 }
 
@@ -610,12 +612,13 @@ func (rs *RemoteStore) SetStatus(ctx context.Context, projectID string, status s
 	return nil
 }
 
-func (rs *RemoteStore) SearchWithScore(ctx context.Context, embedding []float32, topK int, pids []string) ([]db.Record, []float32, error) {
-	// We might need to update the RPC response to include scores if we want full fidelity.
-	// For duplicate detection, similarity score is important.
-	// Let's just return records for now or update SearchResponse.
-	// Since SearchWithScore is used in handleFindDuplicateCode, it's better to update it.
-	return nil, nil, fmt.Errorf("SearchWithScore not implemented for RemoteStore yet")
+func (rs *RemoteStore) SearchWithScore(ctx context.Context, queryEmbedding []float32, topK int, pids []string, category string) ([]db.Record, []float32, error) {
+	var resp SearchResponse
+	err := rs.call("Search", SearchRequest{Embedding: queryEmbedding, TopK: topK, PIDs: pids, Category: category}, &resp)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Records, resp.Scores, nil
 }
 func (re *RemoteEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
 	client, err := rpc.Dial("unix", re.socketPath)
