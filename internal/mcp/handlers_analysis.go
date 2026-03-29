@@ -638,6 +638,7 @@ func (s *Server) handleFindDeadCode(ctx context.Context, request mcp.CallToolReq
 		excludePaths = defaultExcludes
 	}
 
+	targetPath := request.GetString("target_path", "")
 	isLibrary := request.GetBool("is_library", false)
 
 	store, err := s.getStore(ctx)
@@ -664,6 +665,9 @@ func (s *Server) handleFindDeadCode(ctx context.Context, request mcp.CallToolReq
 
 	for _, r := range records {
 		filePath := r.Metadata["path"]
+		if targetPath != "" && !strings.HasPrefix(filePath, targetPath) {
+			continue
+		}
 
 		// Skip test files
 		if strings.HasSuffix(filePath, "_test.go") || strings.Contains(filePath, "/test/") || strings.Contains(filePath, "/tests/") {
@@ -1078,7 +1082,7 @@ func (s *Server) handleVerifyProposedChange(ctx context.Context, request mcp.Cal
 		s.logger.Warn("Failed to fetch code examples for verification", "error", err)
 	}
 
-	if len(docRecords) == 0 {
+	if len(docRecords) == 0 && len(codeRecords) == 0 {
 		return mcp.NewToolResultText("### 🛡️ Verification Result\n\nNo specific Knowledge Items or Architectural Decisions were found that directly relate to this change.\n\n**Recommendation**: Proceed with standard code review. If this is a new pattern, consider documenting it using `store_context`."), nil
 	}
 
@@ -1122,8 +1126,10 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 
 	var relevantContent strings.Builder
 	count := 0
+
 	for _, r := range records {
 		relPath := r.Metadata["path"]
+
 		if strings.HasPrefix(relPath, path) {
 			relevantContent.WriteString(fmt.Sprintf("File: %s\nContent:\n%s\n---\n", relPath, r.Content))
 			count++
@@ -1135,8 +1141,9 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 	}
 
 	contentStr := relevantContent.String()
-	if len(contentStr) > 10000 {
-		contentStr = contentStr[:10000] + "\n... [Truncated for length]"
+	r := []rune(contentStr)
+	if len(r) > 10000 {
+		contentStr = string(r[:10000]) + "\n... [Truncated for length]"
 	}
 
 	storeErr := s.storeContext(ctx, contentStr, s.cfg.ProjectRoot)

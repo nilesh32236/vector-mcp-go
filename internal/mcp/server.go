@@ -146,7 +146,6 @@ func (s *Server) Serve() error {
 
 // registerResources defines and registers all available MCP resources.
 func (s *Server) registerResources() {
-	// 1. index://status
 	s.MCPServer.AddResource(mcp.NewResource("index://status", "Indexing Status",
 		mcp.WithResourceDescription("Current indexing status and background progress diagnostics."),
 		mcp.WithMIMEType("application/json"),
@@ -181,8 +180,6 @@ func (s *Server) registerResources() {
 			},
 		}, nil
 	})
-
-	// 2. config://project
 	s.MCPServer.AddResource(mcp.NewResource("config://project", "Project Configuration",
 		mcp.WithResourceDescription("Active configuration for the vector-mcp-go server."),
 		mcp.WithMIMEType("application/json"),
@@ -196,8 +193,6 @@ func (s *Server) registerResources() {
 			},
 		}, nil
 	})
-
-	// 3. docs://guide
 	s.MCPServer.AddResource(mcp.NewResource("docs://guide", "Usage Guide",
 		mcp.WithResourceDescription("Quick guide on how to use vector-mcp-go effectively."),
 		mcp.WithMIMEType("text/markdown"),
@@ -216,7 +211,7 @@ This server provides semantic search and code analysis for your project.
 - **analyze-architecture**: Get a visual overview of your project structure.
 
 ## Key Tools
-- **search_codebase**: Your primary tool for semantic search.
+- **search_workspace** (action="vector"): Your primary tool for semantic search.
 - **get_related_context**: Best for understanding a specific file's dependencies.
 - **trigger_project_index**: Run this if you've made major changes to ensure the index is fresh.
 `
@@ -232,7 +227,6 @@ This server provides semantic search and code analysis for your project.
 
 // registerPrompts defines and registers all available MCP prompts.
 func (s *Server) registerPrompts() {
-	// 1. generate-docstring
 	s.MCPServer.AddPrompt(mcp.NewPrompt("generate-docstring",
 		mcp.WithPromptDescription("Generates a highly contextual prompt to write professional documentation."),
 		mcp.WithArgument("file_path", mcp.ArgumentDescription("The relative path of the file"), mcp.RequiredArgument()),
@@ -258,8 +252,6 @@ func (s *Server) registerPrompts() {
 			},
 		}, nil
 	})
-
-	// 2. analyze-architecture
 	s.MCPServer.AddPrompt(mcp.NewPrompt("analyze-architecture",
 		mcp.WithPromptDescription("Analyzes the project architecture and generates a summary prompt."),
 	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
@@ -289,35 +281,25 @@ func (s *Server) registerTools() {
 	}
 
 	// Tool registration (Note: numbering below is for logical grouping, not strict sequence)
-
-	// 0. ping
 	addTool(mcp.NewTool("ping", mcp.WithDescription("Check server connectivity")),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultText("pong"), nil
 		})
-
-	// 2. store_context
 	addTool(mcp.NewTool("store_context",
 		mcp.WithDescription("Store general project rules, architectural decisions, or shared context for other agents to read. This helps maintain consistency across different AI sessions."),
 		mcp.WithString("text", mcp.Description("The text context to store.")),
 		mcp.WithString("project_id", mcp.Description("The project this context belongs to. Defaults to the current project.")),
 	), s.handleStoreContext)
-
-	// 4. delete_context
 	addTool(mcp.NewTool("delete_context",
 		mcp.WithDescription("Delete specific shared memory context, or completely wipe a project's vector index."),
 		mcp.WithString("target_path", mcp.Description("The exact file path, context ID, or 'ALL' to clear the whole project.")),
 		mcp.WithString("project_id", mcp.Description("The project ID to target. Defaults to the current project.")),
 		mcp.WithBoolean("dry_run", mcp.Description("Optional: If true, returns the list of files that would be deleted without actually deleting them.")),
 	), s.handleDeleteContext)
-
-	// 31. distill_package_purpose
 	addTool(mcp.NewTool("distill_package_purpose",
 		mcp.WithDescription("Generates a high-level semantic summary of a package's primary purpose and key entities. This distillation is re-indexed with a 2.0x priority boost to prime the agent's architectural context."),
 		mcp.WithString("path", mcp.Description("Relative or absolute path of the package directory to distill.")),
 	), s.handleDistillPackagePurpose)
-
-	// 33. trace_data_flow
 	addTool(mcp.NewTool("trace_data_flow",
 		mcp.WithDescription("Traces the usage of a specific field or symbol across the project to understand data dependencies. High-precision structural analysis."),
 		mcp.WithString("field_name", mcp.Description("The name of the field or symbol to trace")),

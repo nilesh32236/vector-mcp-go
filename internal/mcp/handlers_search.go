@@ -308,8 +308,15 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 func (s *Server) handleSearchWorkspace(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	action := request.GetString("action", "")
 	query := request.GetString("query", "")
-	limit := request.GetFloat("limit", 10)
+	limitFloat := request.GetFloat("limit", 10)
 	pathFilter := request.GetString("path", "")
+
+	limit := int(limitFloat)
+	if limit <= 0 {
+		limit = 10
+	} else if limit > 100 {
+		limit = 100
+	}
 
 	switch action {
 	case "vector":
