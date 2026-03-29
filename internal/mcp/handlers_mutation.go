@@ -89,3 +89,65 @@ func (s *Server) handleCreateFile(ctx context.Context, request mcp.CallToolReque
 
 	return mcp.NewToolResultText(fmt.Sprintf("Successfully created file at %s", path)), nil
 }
+
+// handleModifyWorkspace unifies mutation and safety tasks into a single "Fat Tool".
+func (s *Server) handleModifyWorkspace(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	action := request.GetString("action", "")
+	path := request.GetString("path", "")
+	content := request.GetString("content", "")
+	search := request.GetString("search", "")
+	replace := request.GetString("replace", "")
+	diagnosticJson := request.GetString("diagnostic_json", "")
+	tool := request.GetString("tool", "")
+
+	switch action {
+	case "apply_patch":
+		return s.handleApplyCodePatch(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"path":    path,
+					"search":  search,
+					"replace": replace,
+				},
+			},
+		})
+	case "create_file":
+		return s.handleCreateFile(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"path":    path,
+					"content": content,
+				},
+			},
+		})
+	case "run_linter":
+		return s.handleRunLinterAndFix(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"path": path,
+					"tool": tool,
+				},
+			},
+		})
+	case "verify_patch":
+		return s.handleVerifyPatchIntegrity(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"path":    path,
+					"search":  search,
+					"replace": replace,
+				},
+			},
+		})
+	case "auto_fix":
+		return s.handleAutoFixMutation(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"diagnostic_json": diagnosticJson,
+				},
+			},
+		})
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf("Invalid action: %s. Must be 'apply_patch', 'create_file', 'run_linter', 'verify_patch', or 'auto_fix'", action)), nil
+	}
+}

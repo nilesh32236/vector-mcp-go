@@ -296,58 +296,12 @@ func (s *Server) registerTools() {
 			return mcp.NewToolResultText("pong"), nil
 		})
 
-	// 1. trigger_project_index
-
-	// Unified search_workspace tool
-
-	// Unified lsp_query tool
-	addTool(mcp.NewTool("lsp_query",
-		mcp.WithDescription("Unified tool for Language Server Protocol (LSP) intelligence. Use this for precise code navigation and impact analysis."),
-		mcp.WithString("action", mcp.Description("Required. Type of query: 'definition' (find exact source), 'references' (find all usages), 'type_hierarchy' (interface implementations/struct embedding), 'impact_analysis' (calculate downstream blast radius).")),
-		mcp.WithString("path", mcp.Description("Required. The absolute or relative path to the file.")),
-		mcp.WithNumber("line", mcp.Description("Required. The line number (0-indexed).")),
-		mcp.WithNumber("character", mcp.Description("Required. The character/column number (0-indexed).")),
-	), s.handleLspQuery)
-
-	// Unified analyze_code tool
-	addTool(mcp.NewTool("analyze_code",
-		mcp.WithDescription("Unified tool for codebase analysis and diagnostics. Use this for structural mapping and health checks."),
-		mcp.WithString("action", mcp.Description("Required. Type of analysis: 'ast_skeleton' (topological directory map), 'dependencies' (check package.json health), 'duplicate_code' (find structural duplication), 'dead_code' (find unused symbols).")),
-		mcp.WithString("path", mcp.Description("Required. The path to the file or directory to analyze.")),
-	), s.handleAnalyzeCode)
-	addTool(mcp.NewTool("search_workspace",
-		mcp.WithDescription("Unified tool for code discovery and search. Use this for all searching and structural mapping."),
-		mcp.WithString("action", mcp.Description("Required. Type of search: 'vector' (semantic AI search), 'regex' (exact match/regex), 'graph' (code relationships/interfaces), 'index_status' (check background indexing).")),
-		mcp.WithString("query", mcp.Description("Required. The search term, regex pattern, or graph query (e.g., interface name).")),
-		mcp.WithNumber("limit", mcp.Description("Optional. Maximum results to return (default 10).")),
-		mcp.WithString("path", mcp.Description("Optional. A specific directory or file path to restrict the search.")),
-	), s.handleSearchWorkspace)
-
-	// 1. trigger_project_index
-	addTool(mcp.NewTool("trigger_project_index",
-		mcp.WithDescription("Trigger a full background index of a project. Use this when you first open a project or after major changes to ensure the vector index is up to date."),
-		mcp.WithString("project_path", mcp.Description("Absolute path to the project root")),
-	), s.handleTriggerProjectIndex)
-
-	// 1.5 set_project_root
-	addTool(mcp.NewTool("set_project_root",
-		mcp.WithDescription("Dynamically switch the active project root and update the file watcher. Use this when moving between different codebases or monorepo packages."),
-		mcp.WithString("project_path", mcp.Description("Absolute path to the new project root")),
-	), s.handleSetProjectRoot)
-
 	// 2. store_context
 	addTool(mcp.NewTool("store_context",
 		mcp.WithDescription("Store general project rules, architectural decisions, or shared context for other agents to read. This helps maintain consistency across different AI sessions."),
 		mcp.WithString("text", mcp.Description("The text context to store.")),
 		mcp.WithString("project_id", mcp.Description("The project this context belongs to. Defaults to the current project.")),
 	), s.handleStoreContext)
-
-	// 3. get_related_context
-	addTool(mcp.NewTool("get_related_context",
-		mcp.WithDescription("Retrieve context for a file and its local dependencies, optionally cross-referencing other projects. Use this to understand how a specific file fits into the larger codebase."),
-		mcp.WithString("filePath", mcp.Description("The relative path of the file to analyze")),
-		mcp.WithNumber("max_tokens", mcp.Description("Optional: Maximum total tokens to include in the context (default 10,000)")),
-	), s.handleGetRelatedContext)
 
 	// 4. delete_context
 	addTool(mcp.NewTool("delete_context",
@@ -356,103 +310,6 @@ func (s *Server) registerTools() {
 		mcp.WithString("project_id", mcp.Description("The project ID to target. Defaults to the current project.")),
 		mcp.WithBoolean("dry_run", mcp.Description("Optional: If true, returns the list of files that would be deleted without actually deleting them.")),
 	), s.handleDeleteContext)
-
-	// 8. generate_docstring_prompt
-	addTool(mcp.NewTool("generate_docstring_prompt",
-		mcp.WithDescription("Generates a highly contextual prompt to write professional documentation for a specific entity."),
-		mcp.WithString("file_path", mcp.Description("The relative path of the file")),
-		mcp.WithString("entity_name", mcp.Description("The name of the function or class to document")),
-		mcp.WithString("language", mcp.Description("Optional: The language of the file (e.g., 'Go', 'TypeScript', 'Python'). Extracted from file extension if omitted.")),
-	), s.handleGenerateDocstringPrompt)
-
-	// 9. analyze_architecture
-	addTool(mcp.NewTool("analyze_architecture",
-		mcp.WithDescription("Generates a Mermaid.js dependency graph between packages in a monorepo."),
-		mcp.WithString("monorepo_prefix", mcp.Description("Optional prefix for monorepo packages (e.g., '@herexa/')")),
-	), s.handleAnalyzeArchitecture)
-
-	// 13. get_indexing_diagnostics
-	addTool(mcp.NewTool("get_indexing_diagnostics",
-		mcp.WithDescription("Provides detailed diagnostics on the indexing process, including recent errors and queue status."),
-	), s.handleGetIndexingDiagnostics)
-
-	// 14. verify_implementation_gap
-	addTool(mcp.NewTool("verify_implementation_gap",
-		mcp.WithDescription("Verifies if things from docs and client feedback are actually implemented in the code."),
-		mcp.WithString("query", mcp.Description("The requirement or feedback query to verify (e.g. 'user authentication')")),
-	), s.handleVerifyImplementationGap)
-
-	// 15. find_missing_tests
-	addTool(mcp.NewTool("find_missing_tests",
-		mcp.WithDescription("Identifies exported symbols that lack corresponding test coverage by mapping source to tests."),
-	), s.handleFindMissingTests)
-
-	// 16. list_api_endpoints
-	addTool(mcp.NewTool("list_api_endpoints",
-		mcp.WithDescription("Identifies potential API route definitions in the codebase across various frameworks."),
-	), s.handleListAPIEndpoints)
-
-	// 17. get_code_history
-	addTool(mcp.NewTool("get_code_history",
-		mcp.WithDescription("Retrieves recent git history (last 10 commits) for a specific file to understand its evolution."),
-		mcp.WithString("file_path", mcp.Description("The relative path of the file to check history for")),
-	), s.handleGetCodeHistory)
-
-	// 18. get_summarized_context
-	addTool(mcp.NewTool("get_summarized_context",
-		mcp.WithDescription("Retrieves context for a query and returns chunks programmatically."),
-		mcp.WithString("query", mcp.Description("The search query to summarize")),
-		mcp.WithNumber("topK", mcp.Description("Optional: Number of chunks to include in summary (default 5)")),
-	), s.handleGetSummarizedContext)
-
-	// 19. verify_proposed_change
-	addTool(mcp.NewTool("verify_proposed_change",
-		mcp.WithDescription("Checks a proposed code change or task against stored Knowledge Items and Architectural Decisions to ensure pattern compliance."),
-		mcp.WithString("proposed_change", mcp.Description("The description or diff of the proposed change")),
-		mcp.WithArray("cross_reference_projects", mcp.Description("Optional list of project IDs to search across"), mcp.WithStringItems()),
-	), s.handleVerifyProposedChange)
-
-	// 21. distill_knowledge
-	addTool(mcp.NewTool("distill_knowledge",
-		mcp.WithDescription("Analyzes a directory and automatically generates a Knowledge Item summary."),
-		mcp.WithString("path", mcp.Description("The relative path to analyze")),
-	), s.handleDistillKnowledge)
-
-	// 22. apply_code_patch
-	addTool(mcp.NewTool("apply_code_patch",
-		mcp.WithDescription("Atomically applies a search-and-replace patch to a file. Use this for targeted code modifications after verifying the search string exists and is unique. Always verify the patch integrity afterward."),
-		mcp.WithString("path", mcp.Description("Relative path to the target file")),
-		mcp.WithString("search", mcp.Description("The EXACT block of code or string to locate. Must be unique.")),
-		mcp.WithString("replace", mcp.Description("The new code or string to insert instead.")),
-	), s.handleApplyCodePatch)
-
-	// 23. run_linter_and_fix
-	addTool(mcp.NewTool("run_linter_and_fix",
-		mcp.WithDescription("Executes standard Go formatters (go fmt) or linters with the fix flag. Best for cleaning up code style or resolving trivial linting errors automatically."),
-		mcp.WithString("path", mcp.Description("Path to the file or directory to process")),
-		mcp.WithString("tool", mcp.Description("Target tool (strictly 'go fmt' for now)")),
-	), s.handleRunLinterAndFix)
-
-	// 24. create_file
-	addTool(mcp.NewTool("create_file",
-		mcp.WithDescription("Scaffolds a new file with specified content. Automatically creates parent directories if they don't exist. Use this for adding new features or splitting code into separate modules."),
-		mcp.WithString("path", mcp.Description("Relative path for the new file")),
-		mcp.WithString("content", mcp.Description("The text content to write into the file.")),
-	), s.handleCreateFile)
-
-	// 28. verify_patch_integrity
-	addTool(mcp.NewTool("verify_patch_integrity",
-		mcp.WithDescription("Crucial pre-commit safety guard: Checks if an in-memory application of a patch would introduce compiler errors by invoking LSP diagnostics. Always use this before finalizing a mutation."),
-		mcp.WithString("path", mcp.Description("Path to the file being edited")),
-		mcp.WithString("search", mcp.Description("The exact code segment to replace")),
-		mcp.WithString("replace", mcp.Description("The proposed new code segment")),
-	), s.handleVerifyPatchIntegrity)
-
-	// 29. auto_fix_mutation
-	addTool(mcp.NewTool("auto_fix_mutation",
-		mcp.WithDescription("Autonomous repair tool: Suggests a fix for a failed code patch based on LSP diagnostics. Use this when verify_patch_integrity returns errors to get a corrected strategy."),
-		mcp.WithString("diagnostic_json", mcp.Description("The JSON-encoded diagnostic object from a failed verification.")),
-	), s.handleAutoFixMutation)
 
 	// 31. distill_package_purpose
 	addTool(mcp.NewTool("distill_package_purpose",

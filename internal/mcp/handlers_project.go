@@ -129,3 +129,32 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 	skeleton := formatTree(tree, "")
 	return mcp.NewToolResultText(fmt.Sprintf("Codebase Skeleton for %s (Items: %d):\n\n%s", root, itemCount, skeleton)), nil
 }
+
+// handleWorkspaceManager unifies project configuration and index management tasks into a single "Fat Tool".
+func (s *Server) handleWorkspaceManager(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	action := request.GetString("action", "")
+	path := request.GetString("path", "")
+
+	switch action {
+	case "set_project_root":
+		return s.handleSetProjectRoot(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"project_path": path,
+				},
+			},
+		})
+	case "trigger_index":
+		return s.handleTriggerProjectIndex(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"project_path": path,
+				},
+			},
+		})
+	case "get_indexing_diagnostics":
+		return s.handleGetIndexingDiagnostics(ctx, mcp.CallToolRequest{})
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf("Invalid action: %s. Must be 'set_project_root', 'trigger_index', or 'get_indexing_diagnostics'", action)), nil
+	}
+}
