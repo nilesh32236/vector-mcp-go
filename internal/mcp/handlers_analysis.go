@@ -1175,3 +1175,50 @@ func (s *Server) storeContext(ctx context.Context, text string, projectID string
 
 	return store.Insert(ctx, []db.Record{record})
 }
+
+// handleAnalyzeCode unifies codebase analysis tasks into a single "Fat Tool".
+func (s *Server) handleAnalyzeCode(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	action := request.GetString("action", "")
+	path := request.GetString("path", "")
+
+	switch action {
+	case "ast_skeleton":
+		// Route to topological mapping/skeleton logic
+		return s.handleGetCodebaseSkeleton(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"target_path": path,
+				},
+			},
+		})
+	case "dependencies":
+		// Route to dependency check
+		return s.handleCheckDependencyHealth(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"directory_path": path,
+				},
+			},
+		})
+	case "duplicate_code":
+		// Route to duplication check
+		return s.handleFindDuplicateCode(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"target_path": path,
+				},
+			},
+		})
+	case "dead_code":
+		// Route to dead code check
+		return s.handleFindDeadCode(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"target_path": path,
+				},
+			},
+		})
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf("Invalid action: %s. Must be 'ast_skeleton', 'dependencies', 'duplicate_code', or 'dead_code'", action)), nil
+	}
+}

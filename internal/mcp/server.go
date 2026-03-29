@@ -299,6 +299,22 @@ func (s *Server) registerTools() {
 	// 1. trigger_project_index
 
 	// Unified search_workspace tool
+
+	// Unified lsp_query tool
+	addTool(mcp.NewTool("lsp_query",
+		mcp.WithDescription("Unified tool for Language Server Protocol (LSP) intelligence. Use this for precise code navigation and impact analysis."),
+		mcp.WithString("action", mcp.Description("Required. Type of query: 'definition' (find exact source), 'references' (find all usages), 'type_hierarchy' (interface implementations/struct embedding), 'impact_analysis' (calculate downstream blast radius).")),
+		mcp.WithString("path", mcp.Description("Required. The absolute or relative path to the file.")),
+		mcp.WithNumber("line", mcp.Description("Required. The line number (0-indexed).")),
+		mcp.WithNumber("character", mcp.Description("Required. The character/column number (0-indexed).")),
+	), s.handleLspQuery)
+
+	// Unified analyze_code tool
+	addTool(mcp.NewTool("analyze_code",
+		mcp.WithDescription("Unified tool for codebase analysis and diagnostics. Use this for structural mapping and health checks."),
+		mcp.WithString("action", mcp.Description("Required. Type of analysis: 'ast_skeleton' (topological directory map), 'dependencies' (check package.json health), 'duplicate_code' (find structural duplication), 'dead_code' (find unused symbols).")),
+		mcp.WithString("path", mcp.Description("Required. The path to the file or directory to analyze.")),
+	), s.handleAnalyzeCode)
 	addTool(mcp.NewTool("search_workspace",
 		mcp.WithDescription("Unified tool for code discovery and search. Use this for all searching and structural mapping."),
 		mcp.WithString("action", mcp.Description("Required. Type of search: 'vector' (semantic AI search), 'regex' (exact match/regex), 'graph' (code relationships/interfaces), 'index_status' (check background indexing).")),
@@ -333,12 +349,6 @@ func (s *Server) registerTools() {
 		mcp.WithNumber("max_tokens", mcp.Description("Optional: Maximum total tokens to include in the context (default 10,000)")),
 	), s.handleGetRelatedContext)
 
-	// 3. find_duplicate_code
-	addTool(mcp.NewTool("find_duplicate_code",
-		mcp.WithDescription("Scans a specific path to find duplicated logic across namespaces. Use this during refactoring to identify consolidation opportunities."),
-		mcp.WithString("target_path", mcp.Description("The relative path to check")),
-	), s.handleFindDuplicateCode)
-
 	// 4. delete_context
 	addTool(mcp.NewTool("delete_context",
 		mcp.WithDescription("Delete specific shared memory context, or completely wipe a project's vector index."),
@@ -346,22 +356,6 @@ func (s *Server) registerTools() {
 		mcp.WithString("project_id", mcp.Description("The project ID to target. Defaults to the current project.")),
 		mcp.WithBoolean("dry_run", mcp.Description("Optional: If true, returns the list of files that would be deleted without actually deleting them.")),
 	), s.handleDeleteContext)
-
-	// 6. get_codebase_skeleton
-	addTool(mcp.NewTool("get_codebase_skeleton",
-		mcp.WithDescription("Returns a topological tree map of the directory structure. Use this to progressively explore large codebases by specifying sub-directories and depths."),
-		mcp.WithString("target_path", mcp.Description("Relative or absolute path to the directory to map (optional, defaults to project root).")),
-		mcp.WithNumber("max_depth", mcp.Description("Maximum depth of the tree to generate (optional, defaults to 3).")),
-		mcp.WithString("include_pattern", mcp.Description("Optional: Only include files matching this glob pattern")),
-		mcp.WithString("exclude_pattern", mcp.Description("Optional: Exclude files matching this glob pattern")),
-		mcp.WithNumber("max_items", mcp.Description("Optional: Maximum number of items to return (default 1000)")),
-	), s.handleGetCodebaseSkeleton)
-
-	// 7. check_dependency_health
-	addTool(mcp.NewTool("check_dependency_health",
-		mcp.WithDescription("Analyzes a directory's package.json against its indexed imports to identify missing dependencies in the manifest."),
-		mcp.WithString("directory_path", mcp.Description("The path to the directory containing package.json and source files")),
-	), s.handleCheckDependencyHealth)
 
 	// 8. generate_docstring_prompt
 	addTool(mcp.NewTool("generate_docstring_prompt",
@@ -376,13 +370,6 @@ func (s *Server) registerTools() {
 		mcp.WithDescription("Generates a Mermaid.js dependency graph between packages in a monorepo."),
 		mcp.WithString("monorepo_prefix", mcp.Description("Optional prefix for monorepo packages (e.g., '@herexa/')")),
 	), s.handleAnalyzeArchitecture)
-
-	// 10. find_dead_code
-	addTool(mcp.NewTool("find_dead_code",
-		mcp.WithDescription("Identifies potentially dead code by finding exported symbols that are never imported or called."),
-		mcp.WithArray("exclude_paths", mcp.Description("Optional list of file paths or patterns to exclude from dead code analysis."), mcp.WithStringItems()),
-		mcp.WithBoolean("is_library", mcp.Description("Optional: Set to true if analyzing a library where public exports are expected. Only flags unused symbols inside internal/ or marked as private.")),
-	), s.handleFindDeadCode)
 
 	// 13. get_indexing_diagnostics
 	addTool(mcp.NewTool("get_indexing_diagnostics",
@@ -453,30 +440,6 @@ func (s *Server) registerTools() {
 		mcp.WithString("content", mcp.Description("The text content to write into the file.")),
 	), s.handleCreateFile)
 
-	// 25. get_precise_definition
-	addTool(mcp.NewTool("get_precise_definition",
-		mcp.WithDescription("Uses the Go Language Server (LSP) to find the absolute file location and line-level definition of a symbol. High-order precision bypassing vector hallucinations."),
-		mcp.WithString("path", mcp.Description("Absolute file path containing the symbol usage")),
-		mcp.WithNumber("line", mcp.Description("0-indexed line number of the symbol usage")),
-		mcp.WithNumber("character", mcp.Description("0-indexed character offset of the symbol usage")),
-	), s.handleGetPreciseDefinition)
-
-	// 26. find_references_precise
-	addTool(mcp.NewTool("find_references_precise",
-		mcp.WithDescription("Uses the Go Language Server (LSP) to find all precise occurrences/usages of a symbol across the entire project. Essential for impact analysis before refactoring."),
-		mcp.WithString("path", mcp.Description("Absolute file path containing the symbol")),
-		mcp.WithNumber("line", mcp.Description("0-indexed line number of the symbol")),
-		mcp.WithNumber("character", mcp.Description("0-indexed character offset of the symbol")),
-	), s.handleFindReferencesPrecise)
-
-	// 27. get_type_hierarchy
-	addTool(mcp.NewTool("get_type_hierarchy",
-		mcp.WithDescription("Uses the Go Language Server (LSP) to map interface implementations, embedded structures, and type inheritance. Deep architectural insight for Go codebases."),
-		mcp.WithString("path", mcp.Description("Absolute file path containing the type")),
-		mcp.WithNumber("line", mcp.Description("0-indexed line number of the type")),
-		mcp.WithNumber("character", mcp.Description("0-indexed character offset of the type")),
-	), s.handleGetTypeHierarchy)
-
 	// 28. verify_patch_integrity
 	addTool(mcp.NewTool("verify_patch_integrity",
 		mcp.WithDescription("Crucial pre-commit safety guard: Checks if an in-memory application of a patch would introduce compiler errors by invoking LSP diagnostics. Always use this before finalizing a mutation."),
@@ -490,14 +453,6 @@ func (s *Server) registerTools() {
 		mcp.WithDescription("Autonomous repair tool: Suggests a fix for a failed code patch based on LSP diagnostics. Use this when verify_patch_integrity returns errors to get a corrected strategy."),
 		mcp.WithString("diagnostic_json", mcp.Description("The JSON-encoded diagnostic object from a failed verification.")),
 	), s.handleAutoFixMutation)
-
-	// 30. get_impact_analysis
-	addTool(mcp.NewTool("get_impact_analysis",
-		mcp.WithDescription("Calculates the 'blast radius' of a symbol by finding all downstream references across the project via LSP. Provides a high-order risk assessment (Low/Medium/High) for proposed refactors."),
-		mcp.WithString("path", mcp.Description("Absolute file path containing the symbol usage")),
-		mcp.WithNumber("line", mcp.Description("0-indexed line number of the symbol usage")),
-		mcp.WithNumber("character", mcp.Description("0-indexed character offset of the symbol usage")),
-	), s.handleGetImpactAnalysis)
 
 	// 31. distill_package_purpose
 	addTool(mcp.NewTool("distill_package_purpose",
