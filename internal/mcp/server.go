@@ -234,7 +234,7 @@ This server provides semantic search and code analysis for your project.
 func (s *Server) registerPrompts() {
 	// 1. generate-docstring
 	s.MCPServer.AddPrompt(mcp.NewPrompt("generate-docstring",
-		mcp.WithPromptDescription("Generates a highly contextual prompt for an LLM to write professional documentation."),
+		mcp.WithPromptDescription("Generates a highly contextual prompt to write professional documentation."),
 		mcp.WithArgument("file_path", mcp.ArgumentDescription("The relative path of the file"), mcp.RequiredArgument()),
 		mcp.WithArgument("entity_name", mcp.ArgumentDescription("The name of the function or class to document"), mcp.RequiredArgument()),
 	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
@@ -358,7 +358,7 @@ func (s *Server) registerTools() {
 
 	// 8. generate_docstring_prompt
 	addTool(mcp.NewTool("generate_docstring_prompt",
-		mcp.WithDescription("Generates a highly contextual prompt for an LLM to write professional documentation for a specific entity."),
+		mcp.WithDescription("Generates a highly contextual prompt to write professional documentation for a specific entity."),
 		mcp.WithString("file_path", mcp.Description("The relative path of the file")),
 		mcp.WithString("entity_name", mcp.Description("The name of the function or class to document")),
 		mcp.WithString("language", mcp.Description("Optional: The language of the file (e.g., 'Go', 'TypeScript', 'Python'). Extracted from file extension if omitted.")),
@@ -429,7 +429,7 @@ func (s *Server) registerTools() {
 
 	// 18. get_summarized_context
 	addTool(mcp.NewTool("get_summarized_context",
-		mcp.WithDescription("Retrieves context for a query and uses an LLM to provide a concise summary instead of raw chunks."),
+		mcp.WithDescription("Retrieves context for a query and returns chunks programmatically."),
 		mcp.WithString("query", mcp.Description("The search query to summarize")),
 		mcp.WithNumber("topK", mcp.Description("Optional: Number of chunks to include in summary (default 5)")),
 	), s.handleGetSummarizedContext)
@@ -440,11 +440,6 @@ func (s *Server) registerTools() {
 		mcp.WithString("proposed_change", mcp.Description("The description or diff of the proposed change")),
 		mcp.WithArray("cross_reference_projects", mcp.Description("Optional list of project IDs to search across"), mcp.WithStringItems()),
 	), s.handleVerifyProposedChange)
-
-	// 20. check_llm_connectivity
-	addTool(mcp.NewTool("check_llm_connectivity",
-		mcp.WithDescription("Checks the Gemini API connectivity and lists available models for the current API key."),
-	), s.handleCheckLlmConnectivity)
 
 	// 21. distill_knowledge
 	addTool(mcp.NewTool("distill_knowledge",
