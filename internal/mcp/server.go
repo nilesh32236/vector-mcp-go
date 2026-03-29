@@ -297,6 +297,17 @@ func (s *Server) registerTools() {
 		})
 
 	// 1. trigger_project_index
+
+	// Unified search_workspace tool
+	addTool(mcp.NewTool("search_workspace",
+		mcp.WithDescription("Unified tool for code discovery and search. Use this for all searching and structural mapping."),
+		mcp.WithString("action", mcp.Description("Required. Type of search: 'vector' (semantic AI search), 'regex' (exact match/regex), 'graph' (code relationships/interfaces), 'index_status' (check background indexing).")),
+		mcp.WithString("query", mcp.Description("Required. The search term, regex pattern, or graph query (e.g., interface name).")),
+		mcp.WithNumber("limit", mcp.Description("Optional. Maximum results to return (default 10).")),
+		mcp.WithString("path", mcp.Description("Optional. A specific directory or file path to restrict the search.")),
+	), s.handleSearchWorkspace)
+
+	// 1. trigger_project_index
 	addTool(mcp.NewTool("trigger_project_index",
 		mcp.WithDescription("Trigger a full background index of a project. Use this when you first open a project or after major changes to ensure the vector index is up to date."),
 		mcp.WithString("project_path", mcp.Description("Absolute path to the project root")),
@@ -336,10 +347,6 @@ func (s *Server) registerTools() {
 		mcp.WithBoolean("dry_run", mcp.Description("Optional: If true, returns the list of files that would be deleted without actually deleting them.")),
 	), s.handleDeleteContext)
 
-	// 5. index_status
-	addTool(mcp.NewTool("index_status", mcp.WithDescription("Check index status and background progress. Use this to verify if the server is still indexing or if it's ready for queries.")),
-		s.handleIndexStatus)
-
 	// 6. get_codebase_skeleton
 	addTool(mcp.NewTool("get_codebase_skeleton",
 		mcp.WithDescription("Returns a topological tree map of the directory structure. Use this to progressively explore large codebases by specifying sub-directories and depths."),
@@ -376,29 +383,6 @@ func (s *Server) registerTools() {
 		mcp.WithArray("exclude_paths", mcp.Description("Optional list of file paths or patterns to exclude from dead code analysis."), mcp.WithStringItems()),
 		mcp.WithBoolean("is_library", mcp.Description("Optional: Set to true if analyzing a library where public exports are expected. Only flags unused symbols inside internal/ or marked as private.")),
 	), s.handleFindDeadCode)
-
-	// 11. filesystem_grep
-	addTool(mcp.NewTool("filesystem_grep",
-		mcp.WithDescription("Exact string or regex search across the project files."),
-		mcp.WithString("query", mcp.Description("The search query (string or regex)")),
-		mcp.WithString("include_pattern", mcp.Description("Optional: Glob pattern to filter files (e.g. '*.go')")),
-		mcp.WithBoolean("is_regex", mcp.Description("Whether the query is a regular expression")),
-	), s.handleFilesystemGrep)
-
-	// 12. search_codebase
-	addTool(mcp.NewTool("search_codebase",
-		mcp.WithDescription("Unified semantic and lexical search across the codebase. Replaces retrieve_context and retrieve_docs. Best for finding architectural patterns, related logic, or high-level concepts rather than literal strings."),
-		mcp.WithString("query", mcp.Description("The natural language search query")),
-		mcp.WithString("category", mcp.Description("Optional: 'code' or 'document'. Handles both 'code' and 'document' retrieval. Defaults to searching both.")),
-		mcp.WithNumber("topK", mcp.Description("Number of results to return (default 10)")),
-		mcp.WithString("path_filter", mcp.Description("Optional: Only search files whose path contains this string")),
-		mcp.WithNumber("min_score", mcp.Description("Optional: Minimum similarity score (0.0 to 1.0) to include a result")),
-		mcp.WithNumber("max_tokens", mcp.Description("Optional: Maximum total tokens to include in the context (default 10,000)")),
-		mcp.WithArray("cross_reference_projects",
-			mcp.Description("Optional list of project IDs to search across"),
-			mcp.WithStringItems(),
-		),
-	), s.handleSearchCodebase)
 
 	// 13. get_indexing_diagnostics
 	addTool(mcp.NewTool("get_indexing_diagnostics",
@@ -520,12 +504,6 @@ func (s *Server) registerTools() {
 		mcp.WithDescription("Generates a high-level semantic summary of a package's primary purpose and key entities. This distillation is re-indexed with a 2.0x priority boost to prime the agent's architectural context."),
 		mcp.WithString("path", mcp.Description("Relative or absolute path of the package directory to distill.")),
 	), s.handleDistillPackagePurpose)
-
-	// 32. get_interface_implementations
-	addTool(mcp.NewTool("get_interface_implementations",
-		mcp.WithDescription("Finds all structs/classes that implement a specific interface by matching their structural metadata (methods). 100% precision graph traversal."),
-		mcp.WithString("interface_name", mcp.Description("The name of the interface to find implementations for")),
-	), s.handleGetInterfaceImplementations)
 
 	// 33. trace_data_flow
 	addTool(mcp.NewTool("trace_data_flow",

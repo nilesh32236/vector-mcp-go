@@ -303,3 +303,50 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 
 	return mcp.NewToolResultText(out.String()), nil
 }
+
+// handleSearchWorkspace unifies vector, regex, graph, and index status tools into a single "Fat Tool".
+func (s *Server) handleSearchWorkspace(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	action := request.GetString("action", "")
+	query := request.GetString("query", "")
+	limit := request.GetFloat("limit", 10)
+	pathFilter := request.GetString("path", "")
+
+	switch action {
+	case "vector":
+		// Route to vector search logic
+		return s.handleSearchCodebase(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"query":       query,
+					"topK":        limit,
+					"path_filter": pathFilter,
+				},
+			},
+		})
+	case "regex":
+		// Route to exact match/regex logic
+		return s.handleFilesystemGrep(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"query":           query,
+					"is_regex":        true, // Default to true if they use search_workspace
+					"include_pattern": pathFilter,
+				},
+			},
+		})
+	case "graph":
+		// Route to graph queries (e.g. interface implementations)
+		return s.handleGetInterfaceImplementations(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"interface_name": query,
+				},
+			},
+		})
+	case "index_status":
+		// Route to index status
+		return s.handleIndexStatus(ctx, mcp.CallToolRequest{})
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf("Invalid action: %s. Must be 'vector', 'regex', 'graph', or 'index_status'", action)), nil
+	}
+}
