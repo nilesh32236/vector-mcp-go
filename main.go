@@ -18,42 +18,271 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/embedding"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
-	"github.com/nilesh32236/vector-mcp-go/internal/llm"
 	"github.com/nilesh32236/vector-mcp-go/internal/mcp"
 	"github.com/nilesh32236/vector-mcp-go/internal/onnx"
 	"github.com/nilesh32236/vector-mcp-go/internal/watcher"
 	"github.com/nilesh32236/vector-mcp-go/internal/worker"
 )
 
-// Dependencies encapsulates the application's shared resources,
-// eliminating global state and facilitating dependency injection.
-type Dependencies struct {
-	cfg         *config.Config
-	logger      *slog.Logger
-	store       *db.Store
-	embedPool   *embedding.EmbedderPool
-	indexQueue  chan string
-	progressMap *sync.Map
-	resetChan   chan string
-	dbMu        *sync.RWMutex
+var (
+	Version   = "1.0.0"
+	BuildTime = "unset"
+	Commit    = "none"
+)
+
+// App encapsulates the application's shared resources and lifecycle.
+type App struct {
+	cfg          *config.Config
+	logger       *slog.Logger
+	storeMu      sync.RWMutex
+	store        *db.Store
+	embedPool    *embedding.EmbedderPool
+	indexQueue   chan string
+	progressMap  *sync.Map
+	resetChan    chan string
+	isMaster     bool
+	daemonClient *daemon.Client
+	masterServer *daemon.MasterServer
+	mcpServer    *mcp.Server
+	apiServer    *api.Server
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
-func (d *Dependencies) getStore(ctx context.Context, forceRefresh bool, isMaster bool) (*db.Store, error) {
-	if !isMaster {
-		return nil, nil
+func NewApp(cfg *config.Config) *App {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &App{
+		cfg:         cfg,
+		logger:      cfg.Logger,
+		indexQueue:  make(chan string, 100),
+		progressMap: &sync.Map{},
+		resetChan:   make(chan string, 1),
+		ctx:         ctx,
+		cancel:      cancel,
+	}
+}
+
+func (a *App) getStore(ctx context.Context, forceRefresh bool) (*db.Store, error) {
+	if !a.isMaster {
+		return nil, fmt.Errorf("instance is not master")
 	}
 
-	d.dbMu.Lock()
-	defer d.dbMu.Unlock()
-	if d.store != nil && !forceRefresh {
-		return d.store, nil
+	a.storeMu.Lock()
+	defer a.storeMu.Unlock()
+
+	if a.store != nil && !forceRefresh {
+		return a.store, nil
 	}
-	store, err := db.Connect(ctx, d.cfg.DbPath, "project_context", d.cfg.Dimension)
+
+	store, err := db.Connect(ctx, a.cfg.DbPath, "project_context", a.cfg.Dimension)
 	if err != nil {
 		return nil, err
 	}
-	d.store = store
-	return d.store, nil
+	a.store = store
+	return a.store, nil
+}
+
+func (a *App) Init(socketPath string) error {
+	// 1. Master/Slave Detection
+	var err error
+	a.masterServer, err = daemon.StartMasterServer(socketPath, nil, a.indexQueue, nil, a.progressMap)
+	if err == nil {
+		a.isMaster = true
+		a.logger.Info("Starting as MASTER instance", "socket", socketPath, "version", Version)
+	} else {
+		a.isMaster = false
+		a.logger.Info("Starting as SLAVE instance (master already running)", "socket", socketPath, "version", Version)
+		a.daemonClient = daemon.NewClient(socketPath)
+		a.cfg.DisableWatcher = true
+	}
+
+	var embedder indexer.Embedder
+
+	if a.isMaster {
+		if err := onnx.Init(); err != nil {
+			return fmt.Errorf("failed to initialize ONNX: %w", err)
+		}
+
+		mc, err := embedding.EnsureModel(a.cfg.ModelsDir, a.cfg.ModelName)
+		if err != nil {
+			return fmt.Errorf("failed to ensure models: %w", err)
+		}
+		a.cfg.Dimension = mc.Dimension
+
+		var rerankerMc *embedding.ModelConfig
+		if a.cfg.RerankerModelName != "" {
+			rmc, err := embedding.EnsureModel(a.cfg.ModelsDir, a.cfg.RerankerModelName)
+			if err != nil {
+				a.logger.Warn("Failed to ensure reranker model", "error", err)
+			} else {
+				rerankerMc = &rmc
+			}
+		}
+
+		pool, err := embedding.NewEmbedderPool(a.ctx, a.cfg.ModelsDir, a.cfg.EmbedderPoolSize, mc, rerankerMc)
+		if err != nil {
+			return fmt.Errorf("failed to init embedder pool: %w", err)
+		}
+		a.embedPool = pool
+		realEmbedder := &poolEmbedder{pool: a.embedPool}
+		embedder = realEmbedder
+
+		store, err := a.getStore(a.ctx, false)
+		if err != nil {
+			return fmt.Errorf("failed to init store: %w", err)
+		}
+
+		a.masterServer.UpdateEmbedder(realEmbedder)
+		a.masterServer.UpdateStore(store)
+
+		if a.cfg.EnableLiveIndexing {
+			go a.runLiveIndexing(embedder)
+		}
+	} else {
+		embedder = daemon.NewRemoteEmbedder(socketPath)
+	}
+
+	// Initialize MCP Server
+	resolver := indexer.InitResolver(a.cfg.ProjectRoot)
+	storeGetter := func(ctx context.Context) (*db.Store, error) {
+		return a.getStore(ctx, false)
+	}
+	a.mcpServer = mcp.NewServer(a.cfg, a.logger, storeGetter, embedder, a.indexQueue, a.daemonClient, a.progressMap, a.resetChan, resolver)
+
+	if !a.isMaster {
+		a.mcpServer.WithRemoteStore(daemon.NewRemoteStore(socketPath))
+	}
+
+	// Initialize API Server
+	if a.isMaster {
+		a.apiServer = api.NewServer(a.cfg, storeGetter, embedder, a.mcpServer)
+	}
+
+	return nil
+}
+
+func (a *App) runLiveIndexing(embedder indexer.Embedder) {
+	a.logger.Info("Starting live indexing scan")
+	store, err := a.getStore(a.ctx, false)
+	if err != nil {
+		a.logger.Error("Live indexing failed to get store", "error", err)
+		return
+	}
+	opts := indexer.IndexerOptions{
+		Config:      a.cfg,
+		Store:       store,
+		Embedder:    embedder,
+		ProgressMap: a.progressMap,
+		Logger:      a.logger,
+	}
+	summary, err := indexer.IndexFullCodebase(context.Background(), opts)
+	if err != nil {
+		a.logger.Error("Live indexing failed", "error", err)
+	} else {
+		a.logger.Info("Live indexing complete", "files_indexed", summary.FilesIndexed, "files_skipped", summary.FilesSkipped)
+	}
+}
+
+func (a *App) Start(indexFlag, daemonFlag bool) error {
+	if a.isMaster {
+		// Start API
+		go func() {
+			if err := a.apiServer.Start(); err != nil {
+				a.logger.Error("API server error", "error", err)
+			}
+		}()
+
+		// Start Worker
+		idxWorker := worker.NewIndexWorker(a.cfg, a.logger, a.indexQueue, a.progressMap, func(ctx context.Context) (*db.Store, error) {
+			return a.getStore(ctx, false)
+		}, a.mcpServer.GetEmbedder())
+		go idxWorker.Start(a.ctx)
+
+		// Start Watcher
+		if !a.cfg.DisableWatcher {
+			store, _ := a.getStore(a.ctx, false)
+			sg := func(ctx context.Context) (*db.Store, error) { return store, nil }
+			fw, err := watcher.NewFileWatcher(a.cfg, a.logger, a.resetChan, sg, a.mcpServer.GetEmbedder())
+			if err == nil {
+				go fw.Start(a.ctx)
+			} else {
+				a.logger.Error("Failed to start watcher", "error", err)
+			}
+		}
+	}
+
+	if indexFlag {
+		if !a.isMaster {
+			return fmt.Errorf("indexing requires master instance")
+		}
+		store, _ := a.getStore(a.ctx, false)
+		opts := indexer.IndexerOptions{
+			Config:      a.cfg,
+			Store:       store,
+			Embedder:    a.mcpServer.GetEmbedder(),
+			ProgressMap: a.progressMap,
+			Logger:      a.logger,
+		}
+		_, err := indexer.IndexFullCodebase(a.ctx, opts)
+		return err
+	}
+
+	if daemonFlag {
+		a.logger.Info("Daemon mode active")
+		<-a.ctx.Done()
+		return nil
+	}
+
+	return a.mcpServer.Serve()
+}
+
+func (a *App) Stop() {
+	a.logger.Info("Shutting down...")
+	a.cancel()
+	if a.isMaster && a.masterServer != nil {
+		a.masterServer.Close()
+	}
+	// Give time for background tasks to clean up
+	time.Sleep(200 * time.Millisecond)
+}
+
+func main() {
+	dataDirFlag := flag.String("data-dir", "", "Base directory for DB and models")
+	modelsDirFlag := flag.String("models-dir", "", "Specific directory for models")
+	dbPathFlag := flag.String("db-path", "", "Specific path for the database")
+	indexFlag := flag.Bool("index", false, "Run full codebase indexing and exit")
+	daemonFlag := flag.Bool("daemon", false, "Run as background daemon (master worker) without MCP stdio server")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
+	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("vector-mcp-go version %s (commit: %s, built: %s)\n", Version, Commit, BuildTime)
+		return
+	}
+
+	cfg := config.LoadConfig(*dataDirFlag, *modelsDirFlag, *dbPathFlag)
+	app := NewApp(cfg)
+
+	// Graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigChan
+		cfg.Logger.Info("Received signal", "signal", sig)
+		app.Stop()
+		os.Exit(0)
+	}()
+
+	socketPath := filepath.Join(cfg.DataDir, "daemon.sock")
+	if err := app.Init(socketPath); err != nil {
+		cfg.Logger.Error("Initialization failed", "error", err)
+		os.Exit(1)
+	}
+
+	if err := app.Start(*indexFlag, *daemonFlag); err != nil {
+		cfg.Logger.Error("Application error", "error", err)
+		os.Exit(1)
+	}
 }
 
 type poolEmbedder struct {
@@ -78,224 +307,6 @@ func (pe *poolEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]flo
 	return e.EmbedBatch(ctx, texts)
 }
 
-func main() {
-	dataDirFlag := flag.String("data-dir", "", "Base directory for DB and models")
-	modelsDirFlag := flag.String("models-dir", "", "Specific directory for models")
-	dbPathFlag := flag.String("db-path", "", "Specific path for the database")
-	indexFlag := flag.Bool("index", false, "Run full codebase indexing and exit")
-	daemonFlag := flag.Bool("daemon", false, "Run as background daemon (master worker) without MCP stdio server")
-	flag.Parse()
-
-	cfg := config.LoadConfig(*dataDirFlag, *modelsDirFlag, *dbPathFlag)
-	logger := cfg.Logger
-
-	deps := &Dependencies{
-		cfg:         cfg,
-		logger:      logger,
-		indexQueue:  make(chan string, 100),
-		progressMap: &sync.Map{},
-		resetChan:   make(chan string, 1),
-		dbMu:        &sync.RWMutex{},
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// 1. Master/Slave Detection using Unix Socket
-	socketPath := filepath.Join(cfg.DataDir, "daemon.sock")
-	var isMaster bool
-	var daemonClient *daemon.Client
-	var embedder indexer.Embedder
-	var masterServer *daemon.MasterServer
-	var err error
-
-	// Try to listen on the socket to see if we are the master
-	masterServer, err = daemon.StartMasterServer(socketPath, nil, deps.indexQueue, nil, deps.progressMap)
-	if err == nil {
-		isMaster = true
-		logger.Info("Starting as MASTER instance", "socket", socketPath)
-		defer masterServer.Close()
-	} else {
-		isMaster = false
-		logger.Info("Starting as SLAVE instance (master already running)", "socket", socketPath)
-		daemonClient = daemon.NewClient(socketPath)
-		embedder = daemon.NewRemoteEmbedder(socketPath)
-		cfg.DisableWatcher = true
-	}
-
-	// 2. Master-only Initialization
-	if isMaster {
-		if err := onnx.Init(); err != nil {
-			logger.Error("Failed to initialize ONNX", "error", err)
-			os.Exit(1)
-		}
-
-		mc, err := embedding.EnsureModel(cfg.ModelsDir, cfg.ModelName)
-		if err != nil {
-			logger.Error("Failed to ensure models exist", "error", err)
-			os.Exit(1)
-		}
-		cfg.Dimension = mc.Dimension
-
-		var rerankerMc *embedding.ModelConfig
-		if cfg.RerankerModelName != "" {
-			rmc, err := embedding.EnsureModel(cfg.ModelsDir, cfg.RerankerModelName)
-			if err != nil {
-				logger.Warn("Failed to ensure reranker model, continuing without it", "error", err)
-			} else {
-				rerankerMc = &rmc
-			}
-		}
-
-		pool, err := embedding.NewEmbedderPool(ctx, cfg.ModelsDir, cfg.EmbedderPoolSize, mc, rerankerMc)
-		if err != nil {
-			logger.Error("Failed to initialize embedder pool", "error", err)
-			os.Exit(1)
-		}
-		deps.embedPool = pool
-
-		realEmbedder := &poolEmbedder{pool: deps.embedPool}
-		embedder = realEmbedder
-
-		// Initialize store for Master
-		store, err := deps.getStore(ctx, false, true)
-		if err != nil {
-			logger.Error("Failed to initialize store", "error", err)
-			os.Exit(1)
-		}
-
-		// Update daemon with real embedder and store
-		masterServer.UpdateEmbedder(realEmbedder)
-		masterServer.UpdateStore(store)
-
-		// 4. Background Indexing on Startup (Live Indexing)
-		if cfg.EnableLiveIndexing {
-			logger.Info("Live Indexing enabled - starting initial codebase scan in background")
-			go func() {
-				store, err := deps.getStore(ctx, false, true)
-				if err != nil {
-					logger.Error("Failed to get store for live indexing", "error", err)
-					return
-				}
-				opts := indexer.IndexerOptions{
-					Config:      cfg,
-					Store:       store,
-					Embedder:    embedder,
-					ProgressMap: deps.progressMap,
-					Logger:      logger,
-				}
-				summary, err := indexer.IndexFullCodebase(context.Background(), opts)
-				if err != nil {
-					logger.Error("Live indexing failed", "error", err)
-				} else {
-					logger.Info("Live indexing complete", "files_indexed", summary.FilesIndexed, "files_skipped", summary.FilesSkipped)
-				}
-			}()
-		}
-	}
-
-	// 3. Define store getters that handle local/remote transparency
-	storeGetter := func(ctx context.Context) (*db.Store, error) {
-		if isMaster {
-			return deps.getStore(ctx, false, true)
-		}
-		return nil, fmt.Errorf("slave instance cannot use local store getter")
-	}
-
-	// Start MCP server
-	resolver := indexer.InitResolver(cfg.ProjectRoot)
-	srv := mcp.NewServer(cfg, logger, storeGetter, embedder, deps.indexQueue, daemonClient, deps.progressMap, deps.resetChan, resolver)
-	if !isMaster {
-		remoteStore := daemon.NewRemoteStore(socketPath)
-		srv.WithRemoteStore(remoteStore)
-	}
-
-	// Start API server (Master only)
-	if isMaster {
-		apiSrv := api.NewServer(cfg, storeGetter, embedder, srv)
-		go func() {
-			if err := apiSrv.Start(); err != nil {
-				logger.Error("API server error", "error", err)
-			}
-		}()
-	}
-
-	// Graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigChan
-		logger.Info("Received signal, shutting down", "signal", sig)
-		cancel()
-		if isMaster && masterServer != nil {
-			masterServer.Close()
-		}
-		time.Sleep(500 * time.Millisecond)
-		os.Exit(0)
-	}()
-
-	// Initialize worker (only Master processes the queue)
-	if isMaster {
-		idxWorker := worker.NewIndexWorker(cfg, logger, deps.indexQueue, deps.progressMap, storeGetter, embedder)
-		go idxWorker.Start(ctx)
-	}
-
-	// Standalone indexing logic
-	if *indexFlag {
-		if !isMaster {
-			logger.Error("Standalone indexing can only be run when no other instance is active (Master only)")
-			os.Exit(1)
-		}
-		store, err := deps.getStore(ctx, false, true)
-		if err != nil {
-			logger.Error("Failed to get store for indexing", "error", err)
-			os.Exit(1)
-		}
-		opts := indexer.IndexerOptions{
-			Config:      cfg,
-			Store:       store,
-			Embedder:    embedder,
-			ProgressMap: deps.progressMap,
-			Logger:      logger,
-		}
-		summary, err := indexer.IndexFullCodebase(ctx, opts)
-		if err != nil {
-			logger.Error("Full indexing failed", "error", err)
-			os.Exit(1)
-		}
-		logger.Info("Standalone index complete", "summary", summary)
-		return
-	}
-
-	// Start file watcher
-	if !cfg.DisableWatcher && isMaster {
-		store, err := deps.getStore(ctx, false, true)
-		if err != nil {
-			logger.Error("Failed to get store for watcher", "error", err)
-			os.Exit(1)
-		}
-		sg := func(ctx context.Context) (*db.Store, error) { return store, nil }
-		fw, err := watcher.NewFileWatcher(cfg, logger, deps.resetChan, sg, embedder)
-		if err != nil {
-			logger.Error("Failed to initialize file watcher", "error", err)
-			os.Exit(1)
-		}
-		go fw.Start(ctx)
-	} else if cfg.DisableWatcher {
-		logger.Info("File watcher is disabled (Slave instance or explicit config)")
-	}
-
-	if *daemonFlag {
-		logger.Info("Daemon mode active - background workers running. Waiting for signal...")
-		<-ctx.Done()
-		return
-	}
-
-	if err := srv.Serve(); err != nil {
-		logger.Error("Server error", "error", err)
-		os.Exit(1)
-	}
-}
 func (pe *poolEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
 	e, err := pe.pool.Get(ctx)
 	if err != nil {

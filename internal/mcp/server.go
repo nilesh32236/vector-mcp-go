@@ -7,6 +7,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -72,7 +73,7 @@ type Server struct {
 }
 
 // NewServer initializes and returns a new Server instance.
-// It sets up the internal MCP server and registers all supported tools.
+// It sets up the internal MCP server and registers all supported tools, resources, and prompts.
 func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx context.Context) (*db.Store, error), embedder indexer.Embedder, queue chan string, daemonClient *daemon.Client, progress *sync.Map, resetChan chan string, resolver *indexer.WorkspaceResolver) *Server {
 	s := server.NewMCPServer("vector-mcp-go", "1.0.0", server.WithLogging())
 	srv := &Server{
@@ -88,6 +89,8 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 		monorepoResolver: resolver,
 		toolHandlers:     make(map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)),
 	}
+	srv.registerResources()
+	srv.registerPrompts()
 	srv.registerTools()
 	return srv
 }
@@ -111,6 +114,142 @@ func (s *Server) getStore(ctx context.Context) (IndexerStore, error) {
 func (s *Server) Serve() error {
 	s.logger.Info("MCP Server listening on stdio...")
 	return server.ServeStdio(s.MCPServer)
+}
+
+// registerResources defines and registers all available MCP resources.
+func (s *Server) registerResources() {
+	// 1. index://status
+	s.MCPServer.AddResource(mcp.NewResource("index://status", "Indexing Status",
+		mcp.WithResourceDescription("Current indexing status and background progress diagnostics."),
+		mcp.WithMIMEType("application/json"),
+	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+		status := "Idle"
+		if s.progressMap != nil {
+			if val, ok := s.progressMap.Load(s.cfg.ProjectRoot); ok {
+				status = val.(string)
+			}
+		}
+
+		store, _ := s.getStore(ctx)
+		count := int64(0)
+		if store != nil {
+			count = store.Count()
+		}
+
+		data := map[string]interface{}{
+			"project_root": s.cfg.ProjectRoot,
+			"status":       status,
+			"record_count": count,
+			"is_master":    s.remoteStore == nil,
+			"model":        s.cfg.ModelName,
+		}
+		jsonBytes, _ := json.MarshalIndent(data, "", "  ")
+
+		return []mcp.ResourceContents{
+			mcp.TextResourceContents{
+				URI:      "index://status",
+				MIMEType: "application/json",
+				Text:     string(jsonBytes),
+			},
+		}, nil
+	})
+
+	// 2. config://project
+	s.MCPServer.AddResource(mcp.NewResource("config://project", "Project Configuration",
+		mcp.WithResourceDescription("Active configuration for the vector-mcp-go server."),
+		mcp.WithMIMEType("application/json"),
+	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+		jsonBytes, _ := json.MarshalIndent(s.cfg, "", "  ")
+		return []mcp.ResourceContents{
+			mcp.TextResourceContents{
+				URI:      "config://project",
+				MIMEType: "application/json",
+				Text:     string(jsonBytes),
+			},
+		}, nil
+	})
+
+	// 3. docs://guide
+	s.MCPServer.AddResource(mcp.NewResource("docs://guide", "Usage Guide",
+		mcp.WithResourceDescription("Quick guide on how to use vector-mcp-go effectively."),
+		mcp.WithMIMEType("text/markdown"),
+	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+		guide := `
+# Vector MCP Go Usage Guide
+
+This server provides semantic search and code analysis for your project.
+
+## Core Resources
+- **index://status**: Check if indexing is complete.
+- **config://project**: View active server settings.
+
+## Recommended Prompts
+- **generate-docstring**: Use this to write high-quality documentation for functions or classes.
+- **analyze-architecture**: Get a visual overview of your project structure.
+
+## Key Tools
+- **search_codebase**: Your primary tool for semantic search.
+- **get_related_context**: Best for understanding a specific file's dependencies.
+- **trigger_project_index**: Run this if you've made major changes to ensure the index is fresh.
+`
+		return []mcp.ResourceContents{
+			mcp.TextResourceContents{
+				URI:      "docs://guide",
+				MIMEType: "text/markdown",
+				Text:     guide,
+			},
+		}, nil
+	})
+}
+
+// registerPrompts defines and registers all available MCP prompts.
+func (s *Server) registerPrompts() {
+	// 1. generate-docstring
+	s.MCPServer.AddPrompt(mcp.NewPrompt("generate-docstring",
+		mcp.WithPromptDescription("Generates a highly contextual prompt for an LLM to write professional documentation."),
+		mcp.WithArgument("file_path", mcp.ArgumentDescription("The relative path of the file"), mcp.RequiredArgument()),
+		mcp.WithArgument("entity_name", mcp.ArgumentDescription("The name of the function or class to document"), mcp.RequiredArgument()),
+	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		filePath := request.Params.Arguments["file_path"]
+		entityName := request.Params.Arguments["entity_name"]
+
+		prompt := fmt.Sprintf("Please generate a professional docstring for the entity '%s' in file '%s'. "+
+			"Include parameter descriptions, return values, and any relevant implementation details based on the context.",
+			entityName, filePath)
+
+		return &mcp.GetPromptResult{
+			Description: "Prompt for generating documentation",
+			Messages: []mcp.PromptMessage{
+				{
+					Role: mcp.RoleUser,
+					Content: mcp.TextContent{
+						Type: "text",
+						Text: prompt,
+					},
+				},
+			},
+		}, nil
+	})
+
+	// 2. analyze-architecture
+	s.MCPServer.AddPrompt(mcp.NewPrompt("analyze-architecture",
+		mcp.WithPromptDescription("Analyzes the project architecture and generates a summary prompt."),
+	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		prompt := "Analyze the current project's architecture. Focus on package boundaries, dependency flow, and key design patterns used. If this is a monorepo, identify the core packages and their interactions."
+
+		return &mcp.GetPromptResult{
+			Description: "Architectural analysis prompt",
+			Messages: []mcp.PromptMessage{
+				{
+					Role: mcp.RoleUser,
+					Content: mcp.TextContent{
+						Type: "text",
+						Text: prompt,
+					},
+				},
+			},
+		}, nil
+	})
 }
 
 // registerTools defines and registers all available MCP tools and their handlers.
@@ -308,4 +447,9 @@ func (s *Server) ListTools() []mcp.Tool {
 		tools = append(tools, t.Tool)
 	}
 	return tools
+}
+
+// GetEmbedder returns the embedding engine used by the server.
+func (s *Server) GetEmbedder() indexer.Embedder {
+	return s.embedder
 }

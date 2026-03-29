@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
@@ -36,71 +38,149 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 		}
 	}
 
-	var results []string
 	maxMatches := 100
-	matchCount := 0
+	type Match struct {
+		Path    string
+		Line    int
+		Content string
+	}
+	matchChan := make(chan Match, maxMatches)
+	errChan := make(chan error, 1)
+	doneChan := make(chan struct{})
 
-	err := filepath.WalkDir(s.cfg.ProjectRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if matchCount >= maxMatches {
-			return filepath.SkipDir
-		}
+	// Context with timeout to prevent hanging
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
-		relPath, _ := filepath.Rel(s.cfg.ProjectRoot, path)
-		if indexer.IsIgnoredDir(filepath.Base(filepath.Dir(path))) || indexer.IsIgnoredFile(d.Name()) {
-			return nil
-		}
+	// File discovery and worker pool
+	paths := make(chan string, 100)
+	var wg sync.WaitGroup
+	numWorkers := 8
 
-		if includePattern != "" {
-			matched, _ := filepath.Match(includePattern, d.Name())
-			if !matched {
-				return nil
-			}
-		}
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for path := range paths {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					content, err := os.ReadFile(path)
+					if err != nil {
+						continue
+					}
 
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
+					relPath, _ := filepath.Rel(s.cfg.ProjectRoot, path)
+					lines := strings.Split(string(content), "\n")
+					for i, line := range lines {
+						matched := false
+						if isRegex {
+							matched = re.MatchString(line)
+						} else {
+							matched = strings.Contains(strings.ToLower(line), strings.ToLower(query))
+						}
 
-		lines := strings.Split(string(content), "\n")
-		for i, line := range lines {
-			matched := false
-			if isRegex {
-				matched = re.MatchString(line)
-			} else {
-				matched = strings.Contains(strings.ToLower(line), strings.ToLower(query))
-			}
-
-			if matched {
-				results = append(results, fmt.Sprintf("%s:%d: %s", relPath, i+1, strings.TrimSpace(line)))
-				matchCount++
-				if matchCount >= maxMatches {
-					break
+						if matched {
+							select {
+							case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
+							case <-ctx.Done():
+								return
+							default:
+								return // matches limit reach implicitly by channel capacity if we were careful, but we handle it below
+							}
+						}
+					}
 				}
 			}
+		}()
+	}
+
+	go func() {
+		defer close(paths)
+		err := filepath.WalkDir(s.cfg.ProjectRoot, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if indexer.IsIgnoredDir(d.Name()) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			if indexer.IsIgnoredFile(d.Name()) {
+				return nil
+			}
+
+			if includePattern != "" {
+				matched, _ := filepath.Match(includePattern, d.Name())
+				if !matched {
+					return nil
+				}
+			}
+
+			select {
+			case paths <- path:
+			case <-ctx.Done():
+				return filepath.SkipDir
+			}
+			return nil
+		})
+		if err != nil {
+			errChan <- err
 		}
+	}()
 
-		return nil
-	})
+	go func() {
+		wg.Wait()
+		close(doneChan)
+	}()
 
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Error during grep: %v", err)), nil
+	var results []Match
+	limitReached := false
+
+collect:
+	for {
+		select {
+		case match := <-matchChan:
+			results = append(results, match)
+			if len(results) >= maxMatches {
+				limitReached = true
+				cancel() // Stop workers
+				break collect
+			}
+		case <-doneChan:
+			break collect
+		case err := <-errChan:
+			return mcp.NewToolResultError(fmt.Sprintf("Error during grep: %v", err)), nil
+		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				return mcp.NewToolResultError("Grep timed out"), nil
+			}
+			break collect
+		}
 	}
 
 	if len(results) == 0 {
 		return mcp.NewToolResultText("No matches found."), nil
 	}
 
+	// Sort results by path and line
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Path != results[j].Path {
+			return results[i].Path < results[j].Path
+		}
+		return results[i].Line < results[j].Line
+	})
+
 	var out strings.Builder
 	out.WriteString(fmt.Sprintf("### Grep Results for '%s' (%d matches):\n\n", query, len(results)))
 	for _, res := range results {
-		out.WriteString(fmt.Sprintf("%s\n", res))
+		out.WriteString(fmt.Sprintf("%s:%d: %s\n", res.Path, res.Line, res.Content))
 	}
 
-	if matchCount >= maxMatches {
+	if limitReached {
 		out.WriteString("\n... (limit reached, more matches may exist)")
 	}
 

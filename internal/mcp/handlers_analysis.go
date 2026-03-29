@@ -7,14 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 	"github.com/nilesh32236/vector-mcp-go/internal/llm"
@@ -1227,7 +1225,7 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if s.cfg.LlmProvider == "gemini" && apiKey == "" {
-		return mcp.NewToolResultError("GEMINI_API_KEY is required for knowledge distillation")
+		return mcp.NewToolResultError("GEMINI_API_KEY is required for knowledge distillation"), nil
 	}
 
 	s.logger.Info("Distilling knowledge", "path", path, "record_count", count)
@@ -1254,7 +1252,7 @@ Keep it concise and actionable.`
 		})
 	}
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Errorf("LLM distillation failed: %w", err).Error())
+		return mcp.NewToolResultError(fmt.Errorf("LLM distillation failed: %w", err).Error()), nil
 	}
 
 	// 2. Automatically store the distilled context

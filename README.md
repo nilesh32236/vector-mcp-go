@@ -37,63 +37,65 @@ The project is organized into modular internal packages for maintainability:
 
 ---
 
+---
+
 ## 🏗️ Setup & Installation
 
 ### Prerequisites
 
 1. **Go 1.21+**
-2. **ONNX Shared Library**: `libonnxruntime.so` (Linux). The server attempts to discover this in several standard locations.
+2. **ONNX Shared Library**: `libonnxruntime.so` (Linux).
 
 ### Installation
-
-#### Method 1: Direct via GitHub (Recommended for Go Users)
-
-Install the latest version directly using `go install`:
-
-```bash
-go install github.com/nilesh32236/vector-mcp-go@latest
-```
-
-#### Method 2: Download Binary
-
-Download pre-built binaries for Linux, macOS, or Windows from the [GitHub Releases](https://github.com/nilesh32236/vector-mcp-go/releases) page.
-
-#### Method 3: From Source
 
 ```bash
 git clone https://github.com/nilesh32236/vector-mcp-go.git
 cd vector-mcp-go
-go build -o vector-mcp-go main.go
-```
-
-### Environment Configuration
-
-Optionally set `ONNX_LIB_PATH` if the library is in a custom location:
-
-```bash
-export ONNX_LIB_PATH="/custom/path/to/libonnxruntime.so"
+make build
 ```
 
 ---
 
-## 🔌 MCP Tools
+## 🔌 MCP Protocol Features
+
+### 💎 Resources
+Resources provide structured data and status information to the client.
+
+- **`index://status`**: Real-time indexing progress, record counts, and master/slave status.
+- **`config://project`**: Current server configuration, active project root, and model settings.
+- **`docs://guide`**: An interactive guide for using the vector-mcp-go server effectively.
+
+### 📝 Prompts
+Pre-defined prompt templates to streamline common AI workflows.
+
+- **`generate-docstring`**: Context-aware prompt for writing high-quality documentation.
+- **`analyze-architecture`**: High-level architectural analysis and summary prompt.
+
+### 🛠️ Tools
 
 | Tool                      | Description                                                                                                       |
 | :------------------------ | :---------------------------------------------------------------------------------------------------------------- |
-| `ping`                    | Check server connectivity.                                                                                        |
-| `set_project_root`        | Dynamically switch the active project root and reset the file watcher.                                            |
-| `trigger_project_index`   | Manually trigger a full background index of a project path.                                                       |
-| `get_related_context`     | Retrieve code chunks and dependencies for a specific file.                                                        |
-| `store_context`           | Save architectural decisions, rules, or shared context globally.                                                  |
-| `find_duplicate_code`     | Scan for logic duplication across namespaces.                                                                     |
-| `get_codebase_skeleton`   | View a topological tree of the project structure.                                                                 |
-| `index_status`            | Monitor indexing progress and database health.                                                                    |
-| `search_codebase`         | Unified semantic and lexical search across the codebase. Replaces retrieve_context and retrieve_docs.             |
-| `delete_context`          | Remove specific files or wipe entire project indices.                                                             |
-| `check_dependency_health` | Analyzes a directory's package.json against its indexed imports to identify missing dependencies in the manifest. |
-| `generate_docstring_prompt`| Generates a highly contextual prompt for an LLM to write professional documentation for a specific entity, with optional language support. |
-| `analyze_architecture`    | Generates a Mermaid.js dependency graph between packages in a monorepo.                                           |
-| `find_dead_code`          | Identifies potentially dead code by finding exported symbols that are never imported or called. Supports exclusion paths and library mode. |
+| `search_codebase`         | **Primary tool**. Semantic & lexical search with reranking.                                                       |
+| `get_codebase_skeleton`   | Efficient topological tree view of the project (optimized for large codebases).                                   |
+| `handle_filesystem_grep`  | **High-performance concurrent grep** (regex & keyword).                                                           |
+| `get_related_context`     | Retrieve imports and dependencies for a specific file.                                                             |
+| `trigger_project_index`   | Manually restart indexing for any directory.                                                                     |
+| `set_project_root`        | Switch the active project root on the fly.                                                                        |
+| `check_dependency_health` | Analyzes dependency manifests against actual imports.                                                              |
+| `find_dead_code`          | Locates unused exported symbols.                                                                                  |
+
+---
+
+## ⚙️ Development
+
+A `Makefile` is provided for common development tasks:
+
+```bash
+make build    # Build binary with version metadata
+make test     # Run the test suite
+make run      # Build and execute locally
+make version  # Show version/build information
+```
 
 ---
 
