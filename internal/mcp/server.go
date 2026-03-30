@@ -280,28 +280,75 @@ func (s *Server) registerTools() {
 		s.toolHandlers[tool.Name] = handler
 	}
 
-	// Tool registration (Note: numbering below is for logical grouping, not strict sequence)
-	addTool(mcp.NewTool("ping", mcp.WithDescription("Check server connectivity")),
-		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return mcp.NewToolResultText("pong"), nil
-		})
+	// 1. search_workspace: Unified search engine (Fat Tool)
+	addTool(mcp.NewTool("search_workspace",
+		mcp.WithDescription("Unified search engine for deep codebase exploration. Use this for semantic search (vector), exact text/regex matching (ripgrep), following code relationship graphs (calls/imports), or checking indexing progress."),
+		mcp.WithString("action", mcp.Description("The type of search: 'vector' (semantic similarity), 'regex' (exact text/pattern match), 'graph' (follow relationships), or 'index_status' (check background progress).")),
+		mcp.WithString("query", mcp.Description("The search query, symbol name, or regex pattern.")),
+		mcp.WithNumber("limit", mcp.Description("Max number of results to return (default 10).")),
+		mcp.WithString("path", mcp.Description("Optional file or directory path to restrict the search scope.")),
+	), s.handleSearchWorkspace)
+
+	// 2. workspace_manager: Project lifecycle commands (Fat Tool)
+	addTool(mcp.NewTool("workspace_manager",
+		mcp.WithDescription("Core project management tools. Use this to switch active project roots, trigger specialized indexing runs, or retrieve detailed system diagnostics and state reports."),
+		mcp.WithString("action", mcp.Description("Management action: 'set_project_root' (update active workspace), 'trigger_index' (start re-indexing), or 'get_indexing_diagnostics' (detailed health/state report).")),
+		mcp.WithString("path", mcp.Description("The absolute path to the project root or a specific directory to act upon.")),
+	), s.handleWorkspaceManager)
+
+	// 3. lsp_query: Deep Language Server Protocol integration (Fat Tool)
+	addTool(mcp.NewTool("lsp_query",
+		mcp.WithDescription("High-precision symbol analysis via the Language Server Protocol (LSP). Use this for jumping to definitions, finding all references across the workspace, exploring large type hierarchies, or analyzing the impact of cross-file changes."),
+		mcp.WithString("action", mcp.Description("LSP capability: 'definition' (find symbol source), 'references' (find all usages), 'type_hierarchy' (supertypes/subtypes), or 'impact_analysis' (downstream dependencies).")),
+		mcp.WithString("path", mcp.Description("Absolute path to the file containing the symbol.")),
+		mcp.WithNumber("line", mcp.Description("0-indexed line number of the symbol.")),
+		mcp.WithNumber("character", mcp.Description("0-indexed character offset of the symbol.")),
+	), s.handleLspQuery)
+
+	// 4. analyze_code: Codebase diagnostics (Fat Tool)
+	addTool(mcp.NewTool("analyze_code",
+		mcp.WithDescription("Advanced codebase diagnostic suite. Use this to generate AST-based structural skeletons, detect dead (unused) exported symbols, find semantically duplicated code blocks, or validate dependency health against manifest files."),
+		mcp.WithString("action", mcp.Description("Analysis type: 'ast_skeleton' (structural map), 'dead_code' (find unused exports), 'duplicate_code' (semantic clones), or 'dependencies' (validate package.json/go.mod imports).")),
+		mcp.WithString("path", mcp.Description("Subdirectory or file path to analyze.")),
+	), s.handleAnalyzeCode)
+
+	// 5. modify_workspace: Safe file mutation (Fat Tool)
+	addTool(mcp.NewTool("modify_workspace",
+		mcp.WithDescription("Safe and structured codebase mutation tools. Use this for applying small search-and-replace patches, creating new files with content, or running formatters/linters (like go fmt) to ensure code quality."),
+		mcp.WithString("action", mcp.Description("Mutation action: 'apply_patch' (search-and-replace), 'create_file' (new file), 'run_linter' (format code), 'verify_patch' (dry-run/check integrity), or 'auto_fix' (LSP-driven fixes).")),
+		mcp.WithString("path", mcp.Description("Target file path for the mutation.")),
+		mcp.WithString("content", mcp.Description("Complete file content or patch context.")),
+		mcp.WithString("search", mcp.Description("Exact text block to find and replace.")),
+		mcp.WithString("replace", mcp.Description("New text block to insert.")),
+		mcp.WithString("tool", mcp.Description("Linter or formatter tool name (e.g., 'go fmt').")),
+	), s.handleModifyWorkspace)
+
+	// Individual Utility Tools
+	addTool(mcp.NewTool("index_status", mcp.WithDescription("Check current indexing status and background progress.")), s.handleIndexStatus)
+	addTool(mcp.NewTool("trigger_project_index",
+		mcp.WithDescription("Manually trigger a full re-index of the project."),
+		mcp.WithString("project_path", mcp.Description("Absolute path to the project root.")),
+	), s.handleTriggerProjectIndex)
+	addTool(mcp.NewTool("get_related_context",
+		mcp.WithDescription("Retrieve semantically related code and symbols for a specific file."),
+		mcp.WithString("filePath", mcp.Description("Path to the source file.")),
+	), s.handleGetRelatedContext)
+
+	// Knowledge & Memory Tools
 	addTool(mcp.NewTool("store_context",
-		mcp.WithDescription("Store general project rules, architectural decisions, or shared context for other agents to read. This helps maintain consistency across different AI sessions."),
+		mcp.WithDescription("Store general project rules or architectural decisions."),
 		mcp.WithString("text", mcp.Description("The text context to store.")),
-		mcp.WithString("project_id", mcp.Description("The project this context belongs to. Defaults to the current project.")),
 	), s.handleStoreContext)
 	addTool(mcp.NewTool("delete_context",
 		mcp.WithDescription("Delete specific shared memory context, or completely wipe a project's vector index."),
 		mcp.WithString("target_path", mcp.Description("The exact file path, context ID, or 'ALL' to clear the whole project.")),
-		mcp.WithString("project_id", mcp.Description("The project ID to target. Defaults to the current project.")),
-		mcp.WithBoolean("dry_run", mcp.Description("Optional: If true, returns the list of files that would be deleted without actually deleting them.")),
 	), s.handleDeleteContext)
 	addTool(mcp.NewTool("distill_package_purpose",
-		mcp.WithDescription("Generates a high-level semantic summary of a package's primary purpose and key entities. This distillation is re-indexed with a 2.0x priority boost to prime the agent's architectural context."),
+		mcp.WithDescription("Generates a high-level semantic summary of a package's primary purpose and key entities."),
 		mcp.WithString("path", mcp.Description("Relative or absolute path of the package directory to distill.")),
 	), s.handleDistillPackagePurpose)
 	addTool(mcp.NewTool("trace_data_flow",
-		mcp.WithDescription("Traces the usage of a specific field or symbol across the project to understand data dependencies. High-precision structural analysis."),
+		mcp.WithDescription("Traces the usage of a specific field or symbol across the project."),
 		mcp.WithString("field_name", mcp.Description("The name of the field or symbol to trace")),
 	), s.handleTraceDataFlow)
 }
