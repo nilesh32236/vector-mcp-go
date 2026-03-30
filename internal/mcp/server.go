@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -20,6 +21,8 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
 	"github.com/nilesh32236/vector-mcp-go/internal/mutation"
+	"github.com/nilesh32236/vector-mcp-go/internal/system"
+	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
 // Searcher defines the interface for searching the vector database.
@@ -72,7 +75,9 @@ type Server struct {
 	progressMap      *sync.Map                                                                                      // Thread-safe map for tracking indexing progress
 	watcherResetChan chan string                                                                                    // Channel to signal file watcher resets
 	monorepoResolver *indexer.WorkspaceResolver                                                                     // Resolver for monorepo package structures
-	lspManager       *lsp.LSPManager                                                                                // High-precision language server manager
+	lspSessions      map[string]*lsp.LSPManager                                                                     // Map of root paths to LSP managers
+	lspMu            sync.Mutex                                                                                     // Mutex for lspSessions map
+	throttler        *system.MemThrottler                                                                           // Shared system memory throttler
 	safety           *mutation.SafetyChecker                                                                        // Safety checker for mutation integrity
 	graph            *db.KnowledgeGraph                                                                             // Code relationship graph for reasoning
 	toolHandlers     map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) // Map of tool names to handlers
@@ -80,7 +85,7 @@ type Server struct {
 
 // NewServer initializes and returns a new Server instance.
 // It sets up the internal MCP server and registers all supported tools, resources, and prompts.
-func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx context.Context) (*db.Store, error), embedder indexer.Embedder, queue chan string, daemonClient *daemon.Client, progress *sync.Map, resetChan chan string, resolver *indexer.WorkspaceResolver, lspManager *lsp.LSPManager, safety *mutation.SafetyChecker) *Server {
+func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx context.Context) (*db.Store, error), embedder indexer.Embedder, queue chan string, daemonClient *daemon.Client, progress *sync.Map, resetChan chan string, resolver *indexer.WorkspaceResolver, throttler *system.MemThrottler) *Server {
 	s := server.NewMCPServer("vector-mcp-go", "1.0.0", server.WithLogging())
 	srv := &Server{
 		cfg:              cfg,
@@ -93,15 +98,53 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 		progressMap:      progress,
 		watcherResetChan: resetChan,
 		monorepoResolver: resolver,
-		lspManager:       lspManager,
-		safety:           safety,
+		lspSessions:      make(map[string]*lsp.LSPManager),
+		throttler:        throttler,
 		graph:            db.NewKnowledgeGraph(),
 		toolHandlers:     make(map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)),
 	}
+
+	// Initialize SafetyChecker with a provider that uses the server's session management
+	srv.safety = mutation.NewSafetyChecker(func(path string) (*lsp.LSPManager, error) {
+		manager, _, err := srv.getLSPManagerForFile(path)
+		return manager, err
+	})
+
 	srv.registerResources()
 	srv.registerPrompts()
 	srv.registerTools()
 	return srv
+}
+
+// getLSPManagerForFile resolves the workspace root for a given file and returns
+// the appropriate LSPManager session, starting it if necessary.
+func (s *Server) getLSPManagerForFile(filePath string) (*lsp.LSPManager, string, error) {
+	// 1. Resolve workspace root
+	root, err := util.FindWorkspaceRoot(filePath)
+	if err != nil {
+		s.logger.Warn("Failed to find workspace root, falling back to project root", "path", filePath, "error", err)
+		root = s.cfg.ProjectRoot
+	}
+
+	// 2. Determine LSP command for file extension
+	ext := filepath.Ext(filePath)
+	cmd, ok := lsp.GetServerCommand(ext)
+	if !ok {
+		return nil, "", fmt.Errorf("no language server configured for extension %s", ext)
+	}
+
+	// 3. Get or create session
+	s.lspMu.Lock()
+	defer s.lspMu.Unlock()
+
+	sessionKey := fmt.Sprintf("%s:%s", root, cmd[0])
+	if manager, ok := s.lspSessions[sessionKey]; ok {
+		return manager, root, nil
+	}
+
+	manager := lsp.NewLSPManager(cmd, root, s.logger, s.throttler)
+	s.lspSessions[sessionKey] = manager
+	return manager, root, nil
 }
 
 // WithRemoteStore sets a remote store for the server, enabling it to act as a slave

@@ -17,12 +17,28 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/system"
 )
 
+// LanguageServerMapping associates file extensions with their respective LSP server commands.
+var LanguageServerMapping = map[string][]string{
+	".go":  {"gopls"},
+	".js":  {"typescript-language-server", "--stdio"},
+	".ts":  {"typescript-language-server", "--stdio"},
+	".jsx": {"typescript-language-server", "--stdio"},
+	".tsx": {"typescript-language-server", "--stdio"},
+}
+
+// GetServerCommand returns the command and arguments for the LSP server
+// associated with a given file extension.
+func GetServerCommand(extension string) ([]string, bool) {
+	cmd, ok := LanguageServerMapping[strings.ToLower(extension)]
+	return cmd, ok
+}
+
 // LSPManager handles the lifecycle and communication with a language server.
 type LSPManager struct {
-	serverPath string
-	rootPath   string
-	logger     *slog.Logger
-	throttler  *system.MemThrottler
+	serverCmd []string
+	rootPath  string
+	logger    *slog.Logger
+	throttler *system.MemThrottler
 
 	mu         sync.Mutex
 	cmd        *exec.Cmd
@@ -36,14 +52,14 @@ type LSPManager struct {
 }
 
 // NewLSPManager creates a new LSPManager instance.
-func NewLSPManager(serverPath, rootPath string, logger *slog.Logger, throttler *system.MemThrottler) *LSPManager {
+func NewLSPManager(serverCmd []string, rootPath string, logger *slog.Logger, throttler *system.MemThrottler) *LSPManager {
 	return &LSPManager{
-		serverPath: serverPath,
-		rootPath:   rootPath,
-		logger:     logger,
-		throttler:  throttler,
-		pending:    make(map[int64]chan []byte),
-		handlers:   make(map[string][]func([]byte)),
+		serverCmd: serverCmd,
+		rootPath:  rootPath,
+		logger:    logger,
+		throttler: throttler,
+		pending:   make(map[int64]chan []byte),
+		handlers:  make(map[string][]func([]byte)),
 	}
 }
 
@@ -62,8 +78,12 @@ func (m *LSPManager) EnsureStarted(ctx context.Context) error {
 		return fmt.Errorf("system memory pressure too high to start LSP")
 	}
 
-	m.logger.Info("Starting LSP server", "path", m.serverPath, "root", m.rootPath)
-	cmd := exec.Command(m.serverPath)
+	if len(m.serverCmd) == 0 {
+		return fmt.Errorf("no server command configured")
+	}
+
+	m.logger.Info("Starting LSP server", "command", m.serverCmd, "root", m.rootPath)
+	cmd := exec.Command(m.serverCmd[0], m.serverCmd[1:]...)
 	cmd.Dir = m.rootPath
 
 	stdin, err := cmd.StdinPipe()

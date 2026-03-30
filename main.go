@@ -20,9 +20,7 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/embedding"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
-	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
 	"github.com/nilesh32236/vector-mcp-go/internal/mcp"
-	"github.com/nilesh32236/vector-mcp-go/internal/mutation"
 	"github.com/nilesh32236/vector-mcp-go/internal/onnx"
 	"github.com/nilesh32236/vector-mcp-go/internal/system"
 	"github.com/nilesh32236/vector-mcp-go/internal/watcher"
@@ -152,9 +150,6 @@ func (a *App) Init(socketPath string) error {
 	}
 
 	// Initialize LSP and Safety components
-	goplsPath := filepath.Join(os.Getenv("HOME"), "go", "bin", "gopls")
-	lspManager := lsp.NewLSPManager(goplsPath, a.cfg.ProjectRoot, a.logger, a.throttler)
-	safetyChecker := mutation.NewSafetyChecker(lspManager)
 	a.analyzer = analysis.NewMultiAnalyzer(analysis.NewPatternAnalyzer(), analysis.NewVettingAnalyzer(a.cfg.ProjectRoot))
 
 	// Initialize MCP Server
@@ -162,7 +157,7 @@ func (a *App) Init(socketPath string) error {
 	storeGetter := func(ctx context.Context) (*db.Store, error) {
 		return a.getStore(ctx, false)
 	}
-	a.mcpServer = mcp.NewServer(a.cfg, a.logger, storeGetter, embedder, a.indexQueue, a.daemonClient, a.progressMap, a.resetChan, resolver, lspManager, safetyChecker)
+	a.mcpServer = mcp.NewServer(a.cfg, a.logger, storeGetter, embedder, a.indexQueue, a.daemonClient, a.progressMap, a.resetChan, resolver, a.throttler)
 
 	if !a.isMaster {
 		a.mcpServer.WithRemoteStore(daemon.NewRemoteStore(socketPath))

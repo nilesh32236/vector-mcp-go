@@ -76,8 +76,12 @@ func IndexFullCodebase(ctx context.Context, opts IndexerOptions) (IndexSummary, 
 	}
 	summary.FilesProcessed = len(files)
 
+	// Phase 1: Discovery (Efficient Hash Comparison)
 	hashMapping, _ := opts.Store.GetPathHashMapping(ctx, opts.Config.ProjectRoot)
-	var toIndex []string
+	var toIndex []struct {
+		Path string
+		Hash string
+	}
 	for _, path := range files {
 		relPath := config.GetRelativePath(path, opts.Config.ProjectRoot)
 		currentHash, _ := GetHash(path)
@@ -85,29 +89,27 @@ func IndexFullCodebase(ctx context.Context, opts IndexerOptions) (IndexSummary, 
 			summary.FilesSkipped++
 			continue
 		}
-		toIndex = append(toIndex, path)
+		toIndex = append(toIndex, struct {
+			Path string
+			Hash string
+		}{path, currentHash})
 	}
 
+	// Cleanup stale files that no longer exist on disk
 	filePathsSet := make(map[string]struct{}, len(files))
 	for _, absPath := range files {
 		relPath := config.GetRelativePath(absPath, opts.Config.ProjectRoot)
 		filePathsSet[relPath] = struct{}{}
 	}
 
-	var deleteErrs []error
 	for dbPath := range hashMapping {
 		if _, found := filePathsSet[dbPath]; !found {
 			if err := opts.Store.DeleteByPath(ctx, dbPath, opts.Config.ProjectRoot); err != nil {
 				opts.Logger.Error("Failed to delete stale path", "path", dbPath, "error", err)
 				summary.Errors = append(summary.Errors, fmt.Sprintf("failed to delete stale path %s: %v", dbPath, err))
 				summary.Status = "partially_completed"
-				deleteErrs = append(deleteErrs, err)
 			}
 		}
-	}
-
-	if len(deleteErrs) > 0 {
-		return summary, fmt.Errorf("failed to complete cleanup: %d deletions failed", len(deleteErrs))
 	}
 
 	if len(toIndex) == 0 {
@@ -115,23 +117,27 @@ func IndexFullCodebase(ctx context.Context, opts IndexerOptions) (IndexSummary, 
 		return summary, nil
 	}
 
+	// Phase 2: Processing and Atomic Update
 	var wg sync.WaitGroup
 	results := make(chan Result, len(toIndex))
-	tasks := make(chan string, len(toIndex))
+	tasks := make(chan struct {
+		Path string
+		Hash string
+	}, len(toIndex))
 
 	for i := 0; i < runtime.NumCPU(); i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for path := range tasks {
-				results <- ProcessFile(ctx, path, opts)
+			for task := range tasks {
+				results <- ProcessFile(ctx, task.Path, opts, task.Hash)
 			}
 		}()
 	}
 
 	go func() {
-		for _, path := range toIndex {
-			tasks <- path
+		for _, task := range toIndex {
+			tasks <- task
 		}
 		close(tasks)
 	}()
@@ -151,6 +157,11 @@ func IndexFullCodebase(ctx context.Context, opts IndexerOptions) (IndexSummary, 
 		}
 		if r.Indexed {
 			summary.FilesIndexed++
+			// Atomic Update: Delete old chunks before inserting new ones
+			// This prevents the "ghost-chunk" bug
+			if err := opts.Store.DeleteByPath(ctx, r.RelPath, opts.Config.ProjectRoot); err != nil {
+				opts.Logger.Error("Failed to delete old chunks for path", "path", r.RelPath, "error", err)
+			}
 			batch = append(batch, r.Records...)
 		}
 		if r.Skipped {
@@ -180,7 +191,7 @@ func IndexFullCodebase(ctx context.Context, opts IndexerOptions) (IndexSummary, 
 }
 
 // ProcessFile indexes a single file if its hash has changed.
-func ProcessFile(ctx context.Context, path string, opts IndexerOptions) Result {
+func ProcessFile(ctx context.Context, path string, opts IndexerOptions, currentHash string) Result {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("Panic processing file", "path", path, "recover", r)
@@ -188,10 +199,6 @@ func ProcessFile(ctx context.Context, path string, opts IndexerOptions) Result {
 	}()
 
 	relPath := config.GetRelativePath(path, opts.Config.ProjectRoot)
-	currentHash, err := GetHash(path)
-	if err != nil {
-		return Result{Err: err.Error(), RelPath: relPath}
-	}
 
 	// Capture modification time for recency boosting
 	var updatedAt string
@@ -199,11 +206,6 @@ func ProcessFile(ctx context.Context, path string, opts IndexerOptions) Result {
 		updatedAt = strconv.FormatInt(info.ModTime().Unix(), 10)
 	} else {
 		updatedAt = strconv.FormatInt(time.Now().Unix(), 10)
-	}
-
-	existingHash, _ := opts.Store.GetFileHash(ctx, relPath, opts.Config.ProjectRoot)
-	if existingHash == currentHash {
-		return Result{Skipped: true, RelPath: relPath}
 	}
 
 	priority := GetPriority(relPath)
@@ -289,7 +291,8 @@ func ProcessFile(ctx context.Context, path string, opts IndexerOptions) Result {
 				"hash":                currentHash,
 				"relationships":       string(relJSON),
 				"symbols":             string(symJSON),
-				"type":                chunk.Type,
+				"parent_symbol":       chunk.ParentSymbol,
+				"type":                "chunk",
 				"name":                name,
 				"calls":               string(callsJSON),
 				"priority":            fmt.Sprintf("%.1f", priority),
@@ -300,8 +303,10 @@ func ProcessFile(ctx context.Context, path string, opts IndexerOptions) Result {
 				"end_line":            strconv.Itoa(chunk.EndLine),
 			}
 
+			// Deterministic ID for easier debugging
+			id := fmt.Sprintf("chunk:%s:%s:%d", opts.Config.ProjectRoot, relPath, i)
 			records = append(records, db.Record{
-				ID:        fmt.Sprintf("%s-%s-%d-%d", opts.Config.ProjectRoot, relPath, time.Now().UnixNano(), i),
+				ID:        id,
 				Content:   chunk.Content,
 				Embedding: embs[i],
 				Metadata:  metadata,
@@ -309,19 +314,41 @@ func ProcessFile(ctx context.Context, path string, opts IndexerOptions) Result {
 		}
 	}
 
-	if len(records) > 0 {
-		return Result{Indexed: true, Records: records, RelPath: relPath}
-	}
-	return Result{RelPath: relPath}
+	// Add the file metadata record
+	// Ensure dummyEmb has a consistent dimension from the store
+	dummyEmb := make([]float32, opts.Store.Dimension)
+
+	records = append(records, db.Record{
+		ID:        fmt.Sprintf("filemeta:%s:%s", opts.Config.ProjectRoot, relPath),
+		Content:   "", // No content for metadata
+		Embedding: dummyEmb,
+		Metadata: map[string]string{
+			"type":       "file_meta",
+			"path":       relPath,
+			"project_id": opts.Config.ProjectRoot,
+			"hash":       currentHash,
+			"updated_at": updatedAt,
+		},
+	})
+
+	return Result{Indexed: true, Records: records, RelPath: relPath}
 }
 
 // IndexSingleFile indexes a single file and updates the database.
 func IndexSingleFile(ctx context.Context, path string, opts IndexerOptions) (IndexSummary, error) {
-	res := ProcessFile(ctx, path, opts)
+	currentHash, err := GetHash(path)
+	if err != nil {
+		return IndexSummary{Status: "error", Errors: []string{err.Error()}}, err
+	}
+
+	relPath := config.GetRelativePath(path, opts.Config.ProjectRoot)
+	res := ProcessFile(ctx, path, opts, currentHash)
 	if res.Err != "" {
-		return IndexSummary{Status: "error"}, nil
+		return IndexSummary{Status: "error", Errors: []string{res.Err}}, nil
 	}
 	if res.Indexed {
+		// Delete old chunks before inserting new ones
+		opts.Store.DeleteByPath(ctx, relPath, opts.Config.ProjectRoot)
 		opts.Store.Insert(ctx, res.Records)
 	}
 	return IndexSummary{Status: "completed", FilesIndexed: 1}, nil

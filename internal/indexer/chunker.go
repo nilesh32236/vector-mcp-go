@@ -21,6 +21,7 @@ type Chunk struct {
 	Content            string
 	ContextualString   string
 	Symbols            []string
+	ParentSymbol       string
 	Relationships      []string
 	Type               string
 	Calls              []string
@@ -51,6 +52,15 @@ func CreateChunks(text string, filePath string) []Chunk {
 	for i := range chunks {
 		chunks[i].Relationships = relationships
 
+		// Prepend parent context to content for better embedding
+		if chunks[i].ParentSymbol != "" {
+			scope := "Global"
+			if len(chunks[i].Symbols) > 0 {
+				scope = chunks[i].Symbols[0]
+			}
+			chunks[i].Content = fmt.Sprintf("// Context: %s -> %s\n%s", chunks[i].ParentSymbol, scope, chunks[i].Content)
+		}
+
 		docStr := "None"
 		if chunks[i].Docstring != "" {
 			docStr = chunks[i].Docstring
@@ -72,13 +82,18 @@ func CreateChunks(text string, filePath string) []Chunk {
 			scope = chunks[i].Symbols[0]
 		}
 
+		parentInfo := ""
+		if chunks[i].ParentSymbol != "" {
+			parentInfo = fmt.Sprintf(" Parent: %s.", chunks[i].ParentSymbol)
+		}
+
 		callsStr := "None"
 		if len(chunks[i].Calls) > 0 {
 			callsStr = strings.Join(chunks[i].Calls, ", ")
 		}
 
-		chunks[i].ContextualString = fmt.Sprintf("File: %s. Entity: %s. Type: %s. Docstring: %s. Calls: %s.%s Code:\n%s",
-			filePath, scope, chunks[i].Type, docStr, callsStr, structStr, chunks[i].Content)
+		chunks[i].ContextualString = fmt.Sprintf("File: %s. Entity: %s.%s Type: %s. Docstring: %s. Calls: %s.%s Code:\n%s",
+			filePath, scope, parentInfo, chunks[i].Type, docStr, callsStr, structStr, chunks[i].Content)
 	}
 	return chunks
 }
@@ -216,6 +231,47 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 							symbolName = nameNode.Content([]byte(content))
 						}
 
+						parentSymbol := ""
+						// Find parent symbol (e.g., Class or Struct)
+						if entityNode.Type() == "method_definition" {
+							// TS/JS
+							p := entityNode.Parent()
+							for p != nil {
+								// In TS/JS, method is in class_body, parent of class_body is class_declaration
+								if p.Type() == "class_declaration" || p.Type() == "class_definition" {
+									// Find the name of the class
+									for i := 0; i < int(p.ChildCount()); i++ {
+										c := p.Child(i)
+										if c.Type() == "type_identifier" || c.Type() == "identifier" {
+											parentSymbol = c.Content([]byte(content))
+											break
+										}
+									}
+									break
+								}
+								p = p.Parent()
+							}
+						} else if entityNode.Type() == "method_declaration" {
+							// Go
+							recv := entityNode.ChildByFieldName("receiver")
+							if recv != nil {
+								// Look for type_identifier inside receiver
+								var findType func(*sitter.Node) string
+								findType = func(n *sitter.Node) string {
+									if n.Type() == "type_identifier" {
+										return n.Content([]byte(content))
+									}
+									for i := 0; i < int(n.ChildCount()); i++ {
+										if t := findType(n.Child(i)); t != "" {
+											return t
+										}
+									}
+									return ""
+								}
+								parentSymbol = findType(recv)
+							}
+						}
+
 						chunkType := entityNode.Type()
 						calls := extractCallsGeneric(entityNode, content)
 						score := calculateScoreGeneric(entityNode, calls)
@@ -228,6 +284,7 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 							chunk: Chunk{
 								Content:            string(content[start:end]),
 								Symbols:            []string{symbolName},
+								ParentSymbol:       parentSymbol,
 								Type:               chunkType,
 								Calls:              calls,
 								FunctionScore:      score,

@@ -4,7 +4,8 @@
 # Run this as sudo if possible, or follow the manual steps below.
 
 SERVICE_DIR="/etc/systemd/system"
-PROJECT_DIR="/home/nilesh/Documents/vector-mcp-go"
+PROJECT_DIR="/home/nilesh/Documents/vector-mcp/vector-mcp-go"
+UI_PROJECT_DIR="/home/nilesh/Documents/vector-mcp/vector-mcp-ui"
 
 echo "Configuring Vector MCP services..."
 

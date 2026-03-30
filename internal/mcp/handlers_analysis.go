@@ -15,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
 // handleGetRelatedContext retrieves relevant code chunks and dependencies for a given file.
@@ -316,18 +317,25 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 		absPath = filepath.Join(s.cfg.ProjectRoot, dirPath)
 	}
 
-	// 1. Detect project type and find manifest
+	// 1. Resolve workspace root for manifest detection
+	workspaceRoot, err := util.FindWorkspaceRoot(absPath)
+	if err != nil {
+		s.logger.Warn("Failed to find workspace root for dependency check, falling back to directory", "path", absPath, "error", err)
+		workspaceRoot = absPath
+	}
+
+	// 2. Detect project type and find manifest
 	projectType := "unknown"
 	manifestPath := ""
-	if _, err := os.Stat(filepath.Join(absPath, "package.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "package.json")); err == nil {
 		projectType = "npm"
-		manifestPath = filepath.Join(absPath, "package.json")
-	} else if _, err := os.Stat(filepath.Join(absPath, "go.mod")); err == nil {
+		manifestPath = filepath.Join(workspaceRoot, "package.json")
+	} else if _, err := os.Stat(filepath.Join(workspaceRoot, "go.mod")); err == nil {
 		projectType = "go"
-		manifestPath = filepath.Join(absPath, "go.mod")
-	} else if _, err := os.Stat(filepath.Join(absPath, "requirements.txt")); err == nil {
+		manifestPath = filepath.Join(workspaceRoot, "go.mod")
+	} else if _, err := os.Stat(filepath.Join(workspaceRoot, "requirements.txt")); err == nil {
 		projectType = "python"
-		manifestPath = filepath.Join(absPath, "requirements.txt")
+		manifestPath = filepath.Join(workspaceRoot, "requirements.txt")
 	}
 
 	if manifestPath == "" {

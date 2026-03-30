@@ -9,7 +9,7 @@ LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X 
 all: fmt lint test build
 
 fmt:
-	go fmt ./...
+	gofmt -s -w .
 
 lint:
 	go vet ./...
@@ -33,11 +33,11 @@ version:
 	@echo "Commit: $(COMMIT)"
 
 help:
-	@echo "make all     - Format, lint, test, and build the binary"
-	@echo "make fmt     - Format the codebase"
-	@echo "make lint    - Run go vet on the codebase"
-	@echo "make build   - Build the binary"
-	@echo "make test    - Run tests"
-	@echo "make clean   - Remove binary and dist folder"
-	@echo "make run     - Build and run the binary"
-	@echo "make version - Show version information"
+	@echo "make all     - Format, lint, test, and build the binary (Standard Workflow)"
+	@echo "make fmt     - Format and simplify the codebase using gofmt -s"
+	@echo "make lint    - Run static analysis using go vet"
+	@echo "make build   - Compile the binary"
+	@echo "make test    - Execute all unit tests"
+	@echo "make clean   - Cleanup build artifacts and dist folder"
+	@echo "make run     - Build and execute the binary locally"
+	@echo "make version - Display version, build time, and commit hash"

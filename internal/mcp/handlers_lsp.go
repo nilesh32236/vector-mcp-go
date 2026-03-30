@@ -18,6 +18,11 @@ func (s *Server) handleGetPreciseDefinition(ctx context.Context, request mcp.Cal
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
+	lspManager, _, err := s.getLSPManagerForFile(path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
+	}
+
 	params := map[string]interface{}{
 		"textDocument": map[string]interface{}{
 			"uri": fmt.Sprintf("file://%s", path),
@@ -29,8 +34,7 @@ func (s *Server) handleGetPreciseDefinition(ctx context.Context, request mcp.Cal
 	}
 
 	var result []interface{}
-	// Note: a.mcpServer (Server) will need a field for LSPManager
-	err := s.lspManager.Call(ctx, "textDocument/definition", params, &result)
+	err = lspManager.Call(ctx, "textDocument/definition", params, &result)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LSP call failed: %v", err)), nil
 	}
@@ -53,6 +57,11 @@ func (s *Server) handleFindReferencesPrecise(ctx context.Context, request mcp.Ca
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
+	lspManager, _, err := s.getLSPManagerForFile(path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
+	}
+
 	params := map[string]interface{}{
 		"textDocument": map[string]interface{}{
 			"uri": fmt.Sprintf("file://%s", path),
@@ -67,7 +76,7 @@ func (s *Server) handleFindReferencesPrecise(ctx context.Context, request mcp.Ca
 	}
 
 	var result []interface{}
-	err := s.lspManager.Call(ctx, "textDocument/references", params, &result)
+	err = lspManager.Call(ctx, "textDocument/references", params, &result)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LSP call failed: %v", err)), nil
 	}
@@ -94,6 +103,11 @@ func (s *Server) handleGetTypeHierarchy(ctx context.Context, request mcp.CallToo
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
+	lspManager, _, err := s.getLSPManagerForFile(path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
+	}
+
 	params := map[string]interface{}{
 		"textDocument": map[string]interface{}{
 			"uri": fmt.Sprintf("file://%s", path),
@@ -106,7 +120,7 @@ func (s *Server) handleGetTypeHierarchy(ctx context.Context, request mcp.CallToo
 
 	var result interface{}
 	// First call textDocument/prepareTypeHierarchy
-	err := s.lspManager.Call(ctx, "textDocument/prepareTypeHierarchy", params, &result)
+	err = lspManager.Call(ctx, "textDocument/prepareTypeHierarchy", params, &result)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LSP call failed: %v", err)), nil
 	}

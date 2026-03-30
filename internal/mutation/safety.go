@@ -32,15 +32,24 @@ type Position struct {
 
 // SafetyChecker provides tools to verify code integrity before/after mutations.
 type SafetyChecker struct {
-	lspMgr *lsp.LSPManager
+	lspProvider func(path string) (*lsp.LSPManager, error)
 }
 
-func NewSafetyChecker(mgr *lsp.LSPManager) *SafetyChecker {
-	return &SafetyChecker{lspMgr: mgr}
+func NewSafetyChecker(provider func(path string) (*lsp.LSPManager, error)) *SafetyChecker {
+	return &SafetyChecker{lspProvider: provider}
 }
 
 // VerifyPatchIntegrity checks if applying a search-and-replace patch introduces compiler errors.
 func (c *SafetyChecker) VerifyPatchIntegrity(ctx context.Context, path, search, replace string) ([]Diagnostic, error) {
+	if c.lspProvider == nil {
+		return nil, fmt.Errorf("LSP provider not configured")
+	}
+
+	lspMgr, err := c.lspProvider(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LSP session: %w", err)
+	}
+
 	// 1. Read original
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -73,7 +82,7 @@ func (c *SafetyChecker) VerifyPatchIntegrity(ctx context.Context, path, search, 
 		}
 	}
 
-	c.lspMgr.RegisterNotificationHandler("textDocument/publishDiagnostics", handler)
+	lspMgr.RegisterNotificationHandler("textDocument/publishDiagnostics", handler)
 
 	// 4. Trigger LSP update
 	// We use didOpen with the new content (even if already open, gopls will update)
@@ -86,12 +95,12 @@ func (c *SafetyChecker) VerifyPatchIntegrity(ctx context.Context, path, search, 
 		},
 	}
 
-	if err := c.lspMgr.EnsureStarted(ctx); err != nil {
+	if err := lspMgr.EnsureStarted(ctx); err != nil {
 		return nil, err
 	}
 
 	// didOpen is a notification
-	_ = c.lspMgr.Notify(ctx, "textDocument/didOpen", params)
+	_ = lspMgr.Notify(ctx, "textDocument/didOpen", params)
 
 	// 5. Wait for diagnostics with timeout
 	select {

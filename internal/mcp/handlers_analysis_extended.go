@@ -19,6 +19,11 @@ func (s *Server) handleGetImpactAnalysis(ctx context.Context, request mcp.CallTo
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
+	lspManager, _, err := s.getLSPManagerForFile(path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
+	}
+
 	// 1. Get references via LSP
 	params := map[string]interface{}{
 		"textDocument": map[string]string{"uri": fmt.Sprintf("file://%s", path)},
@@ -27,7 +32,7 @@ func (s *Server) handleGetImpactAnalysis(ctx context.Context, request mcp.CallTo
 	}
 
 	var res interface{}
-	err := s.lspManager.Call(ctx, "textDocument/references", params, &res)
+	err = lspManager.Call(ctx, "textDocument/references", params, &res)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LSP references call failed: %v", err)), nil
 	}
