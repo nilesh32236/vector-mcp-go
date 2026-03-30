@@ -19,10 +19,8 @@ func TestLoadConfig(t *testing.T) {
 		t.Setenv("MODEL_NAME", "")
 		t.Setenv("EMBEDDER_POOL_SIZE", "")
 		t.Setenv("API_PORT", "")
-		t.Setenv("GEMINI_DEFAULT_MODEL", "")
 		t.Setenv("DISABLE_FILE_WATCHER", "")
 		t.Setenv("HF_TOKEN", "")
-		t.Setenv("GEMINI_API_KEY", "")
 
 		cfg := LoadConfig("", "", "")
 
@@ -41,9 +39,6 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.EmbedderPoolSize != 1 {
 			t.Errorf("expected EmbedderPoolSize 1, got %d", cfg.EmbedderPoolSize)
 		}
-		if cfg.DefaultGeminiModel != "gemini-1.5-flash" {
-			t.Errorf("expected DefaultGeminiModel gemini-1.5-flash, got %s", cfg.DefaultGeminiModel)
-		}
 	})
 
 	t.Run("Overrides and EnvVars", func(t *testing.T) {
@@ -55,10 +50,8 @@ func TestLoadConfig(t *testing.T) {
 		t.Setenv("MODEL_NAME", "custom-model")
 		t.Setenv("EMBEDDER_POOL_SIZE", "5")
 		t.Setenv("API_PORT", "9090")
-		t.Setenv("GEMINI_DEFAULT_MODEL", "gemini-pro")
 		t.Setenv("DISABLE_FILE_WATCHER", "true")
 		t.Setenv("HF_TOKEN", "test-hf-token")
-		t.Setenv("GEMINI_API_KEY", "test-gemini-key")
 
 		cfg := LoadConfig(customDataDir, customModelsDir, customDbPath)
 
@@ -83,17 +76,11 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.ApiPort != "9090" {
 			t.Errorf("expected ApiPort 9090, got %s", cfg.ApiPort)
 		}
-		if cfg.DefaultGeminiModel != "gemini-pro" {
-			t.Errorf("expected DefaultGeminiModel gemini-pro, got %s", cfg.DefaultGeminiModel)
-		}
 		if !cfg.DisableWatcher {
 			t.Errorf("expected DisableWatcher true, got %v", cfg.DisableWatcher)
 		}
 		if cfg.HFToken != "test-hf-token" {
 			t.Errorf("expected HFToken test-hf-token, got %s", cfg.HFToken)
-		}
-		if cfg.GeminiApiKey != "test-gemini-key" {
-			t.Errorf("expected GeminiApiKey test-gemini-key, got %s", cfg.GeminiApiKey)
 		}
 	})
 

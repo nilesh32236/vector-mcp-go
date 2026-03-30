@@ -15,7 +15,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
-	"github.com/nilesh32236/vector-mcp-go/internal/llm"
 )
 
 // handleGetRelatedContext retrieves relevant code chunks and dependencies for a given file.
@@ -639,6 +638,7 @@ func (s *Server) handleFindDeadCode(ctx context.Context, request mcp.CallToolReq
 		excludePaths = defaultExcludes
 	}
 
+	targetPath := request.GetString("target_path", "")
 	isLibrary := request.GetBool("is_library", false)
 
 	store, err := s.getStore(ctx)
@@ -665,6 +665,9 @@ func (s *Server) handleFindDeadCode(ctx context.Context, request mcp.CallToolReq
 
 	for _, r := range records {
 		filePath := r.Metadata["path"]
+		if targetPath != "" && !strings.HasPrefix(filePath, targetPath) {
+			continue
+		}
 
 		// Skip test files
 		if strings.HasSuffix(filePath, "_test.go") || strings.Contains(filePath, "/test/") || strings.Contains(filePath, "/tests/") {
@@ -1004,7 +1007,7 @@ func (s *Server) handleGetCodeHistory(ctx context.Context, request mcp.CallToolR
 	return mcp.NewToolResultText(out.String()), nil
 }
 
-// handleGetSummarizedContext retrieves context for a query and uses an LLM to provide a concise summary.
+// handleGetSummarizedContext retrieves context for a query and returns chunks programmatically.
 func (s *Server) handleGetSummarizedContext(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -1025,7 +1028,6 @@ func (s *Server) handleGetSummarizedContext(ctx context.Context, request mcp.Cal
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
 	}
 
-	// Search for both code and documents
 	records, err := store.HybridSearch(ctx, query, emb, topK, []string{s.cfg.ProjectRoot}, "")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to search database: %v", err)), nil
@@ -1036,48 +1038,15 @@ func (s *Server) handleGetSummarizedContext(ctx context.Context, request mcp.Cal
 	}
 
 	var combinedText strings.Builder
+	combinedText.WriteString(fmt.Sprintf("### 📚 Retrieved Context for: '%s'\n\n", query))
 	for _, r := range records {
-		combinedText.WriteString(fmt.Sprintf("File: %s\nContent:\n%s\n---\n", r.Metadata["path"], r.Content))
+		combinedText.WriteString(fmt.Sprintf("**File**: %s\n**Content**:\n%s\n---\n", r.Metadata["path"], r.Content))
 	}
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if s.cfg.LlmProvider == "gemini" && apiKey == "" {
-		return mcp.NewToolResultText("Summarization skipped: GEMINI_API_KEY environment variable is not set. Please set it to enable LLM features in Go."), nil
-	}
-
-	systemPrompt := "You are a senior software engineer. Summarize the provided code and documentation context in relation to the user's query. Be concise and technical."
-	userPrompt := fmt.Sprintf("Query: %s\n\nContext:\n%s", query, combinedText.String())
-
-	messages := []llm.Message{
-		{Role: "user", Content: userPrompt},
-	}
-
-	var resp llm.CompletionResponse
-	if s.cfg.LlmProvider == "ollama" {
-		resp, err = llm.GenerateOllamaCompletion(ctx, s.cfg.DefaultGeminiModel, systemPrompt, messages)
-	} else {
-		// Using the existing Gemini completion logic
-		resp, err = llm.GenerateGeminiCompletion(ctx, llm.GeminiConfig{
-			APIKey:       apiKey,
-			Model:        s.cfg.DefaultGeminiModel,
-			SystemPrompt: systemPrompt,
-			Messages:     messages,
-		})
-	}
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("LLM completion failed: %v", err)), nil
-	}
-
-	var out strings.Builder
-	out.WriteString(fmt.Sprintf("### 🤖 LLM Summary (via %s) for: '%s'\n\n", s.cfg.LlmProvider, query))
-	out.WriteString(resp.Text)
-	out.WriteString(fmt.Sprintf("\n\n---\n*Note: This summary was generated using %s.*", s.cfg.LlmProvider))
-
-	return mcp.NewToolResultText(out.String()), nil
+	return mcp.NewToolResultText(combinedText.String()), nil
 }
 
-// handleVerifyProposedChange checks a proposed code change against stored Knowledge Items
-// and Architectural Decisions to ensure pattern compliance.
+// handleVerifyProposedChange checks a proposed code change against stored Knowledge Items programmatically.
 func (s *Server) handleVerifyProposedChange(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -1103,92 +1072,41 @@ func (s *Server) handleVerifyProposedChange(ctx context.Context, request mcp.Cal
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed proposed change: %v", err)), nil
 	}
 
-	// 1. Search for relevant Architectural Decisions and Knowledge Items (Documents)
 	docRecords, err := store.HybridSearch(ctx, proposedChange, emb, 10, pids, "document")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to search documents: %v", err)), nil
 	}
 
-	// 2. Search for similar existing implementations (Code)
 	codeRecords, err := store.HybridSearch(ctx, proposedChange, emb, 5, pids, "code")
 	if err != nil {
-		// Non-critical, just won't have code examples
 		s.logger.Warn("Failed to fetch code examples for verification", "error", err)
 	}
 
-	if len(docRecords) == 0 {
-		return mcp.NewToolResultText("### 🛡️ Verification Result\n\nNo specific Knowledge Items or Architectural Decisions were found that directly relate to this change. \n\n**Recommendation**: Proceed with standard code review. If this is a new pattern, consider documenting it using `store_context`."), nil
-	}
-
-	var rulesContext strings.Builder
-	for _, r := range docRecords {
-		rulesContext.WriteString(fmt.Sprintf("Rule/Decision (from %s):\n%s\n---\n", r.Metadata["path"], r.Content))
-	}
-
-	var codeContext strings.Builder
-	if len(codeRecords) > 0 {
-		codeContext.WriteString("\nSimilar Existing Implementation Patterns:\n")
-		for _, r := range codeRecords {
-			codeContext.WriteString(fmt.Sprintf("File: %s\nContent:\n%s\n---\n", r.Metadata["path"], r.Content))
-		}
-	}
-
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if s.cfg.LlmProvider == "gemini" && apiKey == "" {
-		// Fallback for no API key: return the raw rules
-		var out strings.Builder
-		out.WriteString("### 🛡️ Verification Result (Manual Review Required)\n\n")
-		out.WriteString("No LLM available for automated verification. Please manually check your change against these identified rules:\n\n")
-		out.WriteString(rulesContext.String())
-		return mcp.NewToolResultText(out.String()), nil
-	}
-
-	systemPrompt := `You are an Architectural Safeguard AI. Your job is to verify if a proposed code change complies with established project rules and patterns.
-Analyze the provided Rules and patterns against the Proposed Change.
-Flag any direct violations, potential risks, or missed opportunities for following established conventions.
-Format your response as a structured report with:
-1. Status (Compliance Level: High/Medium/Low)
-2. Issues Found (if any)
-3. Recommendations`
-
-	userPrompt := fmt.Sprintf("Proposed Change:\n%s\n\nEstablished Rules/Patterns Context:\n%s%s", proposedChange, rulesContext.String(), codeContext.String())
-
-	messages := []llm.Message{
-		{Role: "user", Content: userPrompt},
-	}
-
-	var resp llm.CompletionResponse
-	if s.cfg.LlmProvider == "ollama" {
-		resp, err = llm.GenerateOllamaCompletion(ctx, s.cfg.DefaultGeminiModel, systemPrompt, messages)
-	} else {
-		resp, err = llm.GenerateGeminiCompletion(ctx, llm.GeminiConfig{
-			APIKey:       apiKey,
-			Model:        s.cfg.DefaultGeminiModel, // Configurable model
-			SystemPrompt: systemPrompt,
-			Messages:     messages,
-		})
-	}
-	if err != nil {
-		s.logger.Error("Verification LLM failed", "error", err)
-		// Fallback to manual review instead of erroring out
-		var out strings.Builder
-		out.WriteString("### 🛡️ Verification Result (Manual Review Required)\n\n")
-		out.WriteString("The automated verification tool encountered an error. Please manually review your changes against these identified rules:\n\n")
-		out.WriteString(rulesContext.String())
-		return mcp.NewToolResultText(out.String()), nil
+	if len(docRecords) == 0 && len(codeRecords) == 0 {
+		return mcp.NewToolResultText("### 🛡️ Verification Result\n\nNo specific Knowledge Items or Architectural Decisions were found that directly relate to this change.\n\n**Recommendation**: Proceed with standard code review. If this is a new pattern, consider documenting it using `store_context`."), nil
 	}
 
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("### 🛡️ Semantic Implementation Verification (via %s)\n\n", s.cfg.LlmProvider))
-	out.WriteString(resp.Text)
-	out.WriteString(fmt.Sprintf("\n\n---\n*Verified against indexed Knowledge Items using %s.*", s.cfg.LlmProvider))
+	out.WriteString("### 🛡️ Verification Result (Manual Review Required)\n\n")
+	out.WriteString("Please manually check your change against these identified rules:\n\n")
+
+	for _, r := range docRecords {
+		out.WriteString(fmt.Sprintf("#### Rule/Decision (from %s):\n%s\n---\n", r.Metadata["path"], r.Content))
+	}
+
+	if len(codeRecords) > 0 {
+		out.WriteString("\n### Similar Existing Implementation Patterns:\n")
+		for _, r := range codeRecords {
+			out.WriteString(fmt.Sprintf("#### File: %s\n%s\n---\n", r.Metadata["path"], r.Content))
+		}
+	}
 
 	return mcp.NewToolResultText(out.String()), nil
 }
 
-// handleDistillKnowledge analyzes a directory or file and automatically generates a Knowledge Item.
+// handleDistillKnowledge analyzes a directory or file and programmatically extracts content.
 func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second) // Longer timeout for distillation
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	path := request.GetString("path", "")
@@ -1201,18 +1119,17 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 		return mcp.NewToolResultError(fmt.Errorf("failed to get store: %w", err).Error()), nil
 	}
 
-	// 1. Retrieve all chunks for the path (recursive-ish via search)
-	// We'll use a broad search for the path in metadata
 	records, err := store.Search(ctx, make([]float32, 768), 50, []string{s.cfg.ProjectRoot}, "code")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Errorf("failed to retrieve records: %w", err).Error()), nil
 	}
 
-	// Filter records that match the path prefix
 	var relevantContent strings.Builder
 	count := 0
+
 	for _, r := range records {
 		relPath := r.Metadata["path"]
+
 		if strings.HasPrefix(relPath, path) {
 			relevantContent.WriteString(fmt.Sprintf("File: %s\nContent:\n%s\n---\n", relPath, r.Content))
 			count++
@@ -1223,46 +1140,19 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 		return mcp.NewToolResultError(fmt.Sprintf("No indexed content found for path: %s. Ensure the project is indexed.", path)), nil
 	}
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if s.cfg.LlmProvider == "gemini" && apiKey == "" {
-		return mcp.NewToolResultError("GEMINI_API_KEY is required for knowledge distillation"), nil
+	contentStr := relevantContent.String()
+	r := []rune(contentStr)
+	if len(r) > 10000 {
+		contentStr = string(r[:10000]) + "\n... [Truncated for length]"
 	}
 
-	s.logger.Info("Distilling knowledge", "path", path, "record_count", count)
-
-	systemPrompt := `You are a Senior Software Architect. Your task is to analyze the provided source code and "distill" it into a set of architectural patterns, coding standards, and business rules.
-Format the output as a high-quality Markdown Knowledge Item (KI) including:
-1. Overview: What is this component/module for?
-2. Key Architectural Decisions: Why was it built this way?
-3. Implementation Rules: Mandatory patterns for anyone modifying this code.
-4. Security/Compliance: PHI handling, encryption rules, etc. (if applicable).
-Keep it concise and actionable.`
-
-	userPrompt := fmt.Sprintf("Analyze these files from path '%s':\n\n%s", path, relevantContent.String())
-
-	var resp llm.CompletionResponse
-	if s.cfg.LlmProvider == "ollama" {
-		resp, err = llm.GenerateOllamaCompletion(ctx, s.cfg.DefaultGeminiModel, systemPrompt, []llm.Message{{Role: "user", Content: userPrompt}})
-	} else {
-		resp, err = llm.GenerateGeminiCompletion(ctx, llm.GeminiConfig{
-			APIKey:       apiKey,
-			Model:        s.cfg.DefaultGeminiModel,
-			SystemPrompt: systemPrompt,
-			Messages:     []llm.Message{{Role: "user", Content: userPrompt}},
-		})
-	}
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Errorf("LLM distillation failed: %w", err).Error()), nil
-	}
-
-	// 2. Automatically store the distilled context
-	storeErr := s.storeContext(ctx, resp.Text, s.cfg.ProjectRoot)
+	storeErr := s.storeContext(ctx, contentStr, s.cfg.ProjectRoot)
 	if storeErr != nil {
 		s.logger.Error("Failed to store distilled context", "error", storeErr)
-		return mcp.NewToolResultText(fmt.Sprintf("### 🧠 Distilled Knowledge (Storage Failed)\n\n%s\n\n**Warning**: Failed to index this KI automatically.", resp.Text)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("### 🧠 Distilled Knowledge (Storage Failed)\n\n%s\n\n**Warning**: Failed to index this KI automatically.", contentStr)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("### ✅ Knowledge Distilled & Indexed\n\n%s", resp.Text)), nil
+	return mcp.NewToolResultText(fmt.Sprintf("### ✅ Knowledge Distilled & Indexed\n\n%s", contentStr)), nil
 }
 
 // storeContext is a helper to save KIs to the database
@@ -1293,34 +1183,49 @@ func (s *Server) storeContext(ctx context.Context, text string, projectID string
 	return store.Insert(ctx, []db.Record{record})
 }
 
-// handleCheckLlmConnectivity tests the connection to the configured LLM provider.
-func (s *Server) handleCheckLlmConnectivity(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
+// handleAnalyzeCode unifies codebase analysis tasks into a single "Fat Tool".
+func (s *Server) handleAnalyzeCode(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	action := request.GetString("action", "")
+	path := request.GetString("path", "")
 
-	if s.cfg.LlmProvider == "ollama" {
-		// Basic check for Ollama: try to list models or just return status
-		return mcp.NewToolResultText(fmt.Sprintf("### ✅ LLM Connectivity Status (Ollama)\n\n**Status**: Connected\n**Model**: `%s`\n\n*Note: Ollama connectivity is checked by sending a test request.*", s.cfg.DefaultGeminiModel)), nil
+	switch action {
+	case "ast_skeleton":
+		// Route to topological mapping/skeleton logic
+		return s.handleGetCodebaseSkeleton(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"target_path": path,
+				},
+			},
+		})
+	case "dependencies":
+		// Route to dependency check
+		return s.handleCheckDependencyHealth(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"directory_path": path,
+				},
+			},
+		})
+	case "duplicate_code":
+		// Route to duplication check
+		return s.handleFindDuplicateCode(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"target_path": path,
+				},
+			},
+		})
+	case "dead_code":
+		// Route to dead code check
+		return s.handleFindDeadCode(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"target_path": path,
+				},
+			},
+		})
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf("Invalid action: %s. Must be 'ast_skeleton', 'dependencies', 'duplicate_code', or 'dead_code'", action)), nil
 	}
-
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return mcp.NewToolResultText("### ❌ LLM Connectivity Status\n\n**Status**: API Key Missing\n**Resolution**: Set the `GEMINI_API_KEY` environment variable."), nil
-	}
-
-	models, err := llm.ListGeminiModels(ctx, apiKey)
-	if err != nil {
-		return mcp.NewToolResultText(fmt.Sprintf("### ❌ LLM Connectivity Status\n\n**Status**: API Error\n**Error**: %v\n\n**Troubleshooting**:\n1. Verify your API key is correct.\n2. Ensure your key has permissions for the Generative Language API.\n3. Check if your project/region supports the requested models.", err)), nil
-	}
-
-	var out strings.Builder
-	out.WriteString("### ✅ LLM Connectivity Status (Gemini)\n\n")
-	out.WriteString("**Status**: Connected Successfully\n")
-	out.WriteString(fmt.Sprintf("**Configured Default**: `%s`\n\n", s.cfg.DefaultGeminiModel))
-	out.WriteString("**Available Models**:\n")
-	for _, m := range models {
-		out.WriteString(fmt.Sprintf("- `%s`\n", m))
-	}
-
-	return mcp.NewToolResultText(out.String()), nil
 }

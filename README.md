@@ -1,117 +1,39 @@
-# 🛰️ Vector MCP Go
+# Vector MCP Go
 
-A modular, high-performance Model Context Protocol (MCP) server for **local semantic search** and **project context management**. It leverages local embeddings (ONNX) and vector storage to provide AI agents with a "global brain" of your codebase while keeping all source code on your machine.
+A high-performance, purely deterministic Model Context Protocol (MCP) server written in Go. This server provides advanced semantic search, architectural analysis, and codebase mutation capabilities directly to your LLM agent.
 
----
+## Architecture
 
-## 🚀 Key Features
+`vector-mcp-go` is designed with a **"Fat Tool" pattern**, reducing the fragmented surface area of tools to minimize LLM context exhaustion and improve tool-selection accuracy. The server relies exclusively on the client LLM for generative reasoning, operating 100% deterministically.
 
-- **Local Embeddings**: Powered by `bge-m3` via ONNX Runtime for high-quality semantic understanding without external API calls.
-- **Modular Architecture**: Refactored for scalability with dedicated packages for indexing, background tasks, and file monitoring.
-- **Dynamic Project Switching**: Switch active project roots on the fly using the `set_project_root` tool.
-- **Deep Code Analysis**:
-  - **Symbol Extraction**: Automatically identifies Go/TS/JS symbols for scoped retrieval.
-  - **Relationship Mapping**: Traces imports and dependencies to provide holistic context.
-  - **Semantic Chunking**: Intelligent overlap-based chunking preserves meaning across boundaries.
-- **Real-time Indexing**: Built-in debounced file watcher synchronizes the vector index as you save.
-- **Architectural Insights**:
-  - **Dead Code Detection**: Identifies unused exported functions and classes.
-  - **Dependency Health**: Flags missing external packages in `package.json`.
-  - **Visual Mapping**: Generates Mermaid.js diagrams of project architecture.
-- **Multi-Instance Optimization**: Intelligent Master/Slave architecture ensures only one instance loads the heavy embedding models and runs the file watcher, drastically reducing RAM usage (~600MB → ~20MB for slave instances).
-- **Safety & Performance**: Non-blocking background workers and embedder resource pooling ensure server stability.
+It leverages **local ONNX embeddings** via `bge-m3` to provide extremely fast, privacy-preserving semantic understanding without external API calls.
 
----
+## Core Fat Tools
 
-## 🏗️ Architecture Overview
+The server exports five consolidated tools:
 
-The project is organized into modular internal packages for maintainability:
+1. **`search_workspace`**: A unified search engine routing across semantic (`vector`), exact match (`regex`), code relationship (`graph`), and indexing states (`index_status`).
+2. **`lsp_query`**: Deep Language Server Protocol integration providing precise absolute references, type hierarchies, definitions, and impact blast-radius analysis.
+3. **`analyze_code`**: Fast codebase diagnostics routing to AST parsing (`ast_skeleton`), dead code checks (`dead_code`), duplication checks (`duplicate_code`), and manifest validation (`dependencies`).
+4. **`workspace_manager`**: Project lifecycle commands allowing the agent to switch roots, trigger local indexing, and fetch deep system diagnostic reports.
+5. **`modify_workspace`**: Safe file mutation commands offering code patching, file creation, linting, and LSP-driven patch verification to ensure safe iterative development.
 
-- **`internal/onnx`**: Handles ONNX runtime initialization and shared library discovery.
-- **`internal/indexer`**: Core logic for file scanning, hashing, and semantic chunking.
-- **`internal/worker`**: Manages background indexing tasks via a priority queue.
-- **`internal/watcher`**: Monitors file system events with debounced trigger logic.
-- **`internal/mcp`**: Defines the MCP server and tool set.
-- **`internal/db`**: Vector storage abstraction (Connect, Insert, Search).
-- **`internal/config`**: Configuration management and path resolution.
-
----
-
----
-
-## 🏗️ Setup & Installation
+## Setup & Execution
 
 ### Prerequisites
+- Go 1.22 or higher
+- C++ build tools (for CGO ONNX runtime integration)
 
-1. **Go 1.21+**
-2. **ONNX Shared Library**: `libonnxruntime.so` (Linux).
-
-### Installation
-
+### Build
 ```bash
-git clone https://github.com/nilesh32236/vector-mcp-go.git
-cd vector-mcp-go
 make build
 ```
 
----
-
-## 🔌 MCP Protocol Features
-
-### 💎 Resources
-Resources provide structured data and status information to the client.
-
-- **`index://status`**: Real-time indexing progress, record counts, and master/slave status.
-- **`config://project`**: Current server configuration, active project root, and model settings.
-- **`docs://guide`**: An interactive guide for using the vector-mcp-go server effectively.
-
-### 📝 Prompts
-Pre-defined prompt templates to streamline common AI workflows.
-
-- **`generate-docstring`**: Context-aware prompt for writing high-quality documentation.
-- **`analyze-architecture`**: High-level architectural analysis and summary prompt.
-
-### 🛠️ Tools
-
-| Tool                      | Description                                                                                                       |
-| :------------------------ | :---------------------------------------------------------------------------------------------------------------- |
-| `search_codebase`         | **Primary tool**. Semantic & lexical search with reranking.                                                       |
-| `get_codebase_skeleton`   | Efficient topological tree view of the project (optimized for large codebases).                                   |
-| `handle_filesystem_grep`  | **High-performance concurrent grep** (regex & keyword).                                                           |
-| `get_related_context`     | Retrieve imports and dependencies for a specific file.                                                             |
-| `trigger_project_index`   | Manually restart indexing for any directory.                                                                     |
-| `set_project_root`        | Switch the active project root on the fly.                                                                        |
-| `check_dependency_health` | Analyzes dependency manifests against actual imports.                                                              |
-| `find_dead_code`          | Locates unused exported symbols.                                                                                  |
-
----
-
-## ⚙️ Development
-
-A `Makefile` is provided for common development tasks:
-
+### Run
 ```bash
-make build    # Build binary with version metadata
-make test     # Run the test suite
-make run      # Build and execute locally
-make version  # Show version/build information
+./bin/server
 ```
 
----
+## Agentic Memory
 
-## ⚙️ Configuration
-
-The following environment variables can be used to customize the server:
-
-| Variable               | Description                                          | Default                        |
-| :--------------------- | :--------------------------------------------------- | :----------------------------- |
-| `PROJECT_ROOT`         | Absolute path to the project to index.               | Current directory              |
-| `DATA_DIR`             | Base directory for DB and models.                    | `~/.local/share/vector-mcp-go` |
-| `DISABLE_FILE_WATCHER` | Set to `true` to disable the real-time file watcher. | `false`                        |
-| `MODEL_NAME`           | ONNX-compatible model to use for embeddings.         | `Xenova/bge-m3`                |
-
----
-
-## ⚖️ License
-
-MIT
+The server also supports an Agentic Memory system allowing the LLM to store structural decisions and context directly into the local `chromem-go` LanceDB instance.

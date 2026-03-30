@@ -24,9 +24,6 @@ type Config struct {
 	EnableLiveIndexing bool
 	EmbedderPoolSize   int
 	ApiPort            string
-	LlmProvider        string
-	GeminiApiKey       string
-	DefaultGeminiModel string
 	Logger             *slog.Logger
 }
 
@@ -112,21 +109,6 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 	if apiPort == "" {
 		apiPort = "47821"
 	}
-
-	llmProvider := os.Getenv("LLM_PROVIDER")
-	if llmProvider == "" {
-		llmProvider = "gemini"
-	}
-
-	defaultGeminiModel := os.Getenv("GEMINI_DEFAULT_MODEL")
-	if defaultGeminiModel == "" {
-		defaultGeminiModel = "gemini-1.5-flash"
-	}
-
-	if llmProvider == "ollama" && os.Getenv("OLLAMA_MODEL") != "" {
-		defaultGeminiModel = os.Getenv("OLLAMA_MODEL")
-	}
-
 	return &Config{
 		ProjectRoot:        projectRoot,
 		DataDir:            dataDir,
@@ -141,9 +123,6 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		EnableLiveIndexing: enableLiveIndexing,
 		EmbedderPoolSize:   embedderPoolSize,
 		ApiPort:            apiPort,
-		LlmProvider:        llmProvider,
-		GeminiApiKey:       os.Getenv("GEMINI_API_KEY"),
-		DefaultGeminiModel: defaultGeminiModel,
 		Logger:             logger,
 	}
 }

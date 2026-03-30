@@ -12,7 +12,6 @@ import (
 	"net/http"
 
 	mcp_server "github.com/mark3labs/mcp-go/server"
-	"github.com/nilesh32236/vector-mcp-go/internal/chat"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
@@ -28,18 +27,12 @@ type Server struct {
 	storeGetter StoreGetter      // Logic to retrieve the database store
 	embedder    indexer.Embedder // Local embedding engine
 	srv         *http.Server     // Underlying HTTP server
-	chatStore   *chat.Store      // Persistent storage for chat history
 	mcpServer   *mcp.Server      // Linked MCP server instance for tool execution
 }
 
 // NewServer initializes and returns a new API Server.
 // It sets up routing for chat sessions, semantic search, and MCP tool proxies.
 func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Embedder, mcpServer *mcp.Server) *Server {
-	chatStore, err := chat.NewStore(cfg.DataDir)
-	if err != nil && cfg.Logger != nil {
-		cfg.Logger.Error("Failed to initialize chat store", "error", err)
-		// We continue but some chat features might be disabled or return errors
-	}
 
 	mux := http.NewServeMux()
 
@@ -47,7 +40,6 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 		cfg:         cfg,
 		storeGetter: storeGetter,
 		embedder:    embedder,
-		chatStore:   chatStore,
 		mcpServer:   mcpServer,
 	}
 
@@ -79,15 +71,10 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 	}
 
 	// Chat sessions CRUD
-	mux.HandleFunc("GET /api/sessions", server.handleListSessions)
-	mux.HandleFunc("POST /api/sessions", server.handleCreateSession)
-	mux.HandleFunc("GET /api/sessions/{id}", server.handleGetSession)
-	mux.HandleFunc("DELETE /api/sessions/{id}", server.handleDeleteSession)
 
 	mux.HandleFunc("POST /api/search", server.handleSearch)
 	mux.HandleFunc("POST /api/context", server.handleContext)
 	mux.HandleFunc("POST /api/todo", server.handleTodo)
-	mux.HandleFunc("POST /api/chat", server.handleChat)
 
 	// New Tool Management Endpoints
 	mux.HandleFunc("GET /api/tools/repos", server.handleListRepos)

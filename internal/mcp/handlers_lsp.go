@@ -113,3 +113,56 @@ func (s *Server) handleGetTypeHierarchy(ctx context.Context, request mcp.CallToo
 
 	return mcp.NewToolResultText(fmt.Sprintf("Type Hierarchy Root: %+v", result)), nil
 }
+
+// handleLspQuery unifies precise LSP capabilities into a single "Fat Tool".
+func (s *Server) handleLspQuery(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	action := request.GetString("action", "")
+	path := request.GetString("path", "")
+	line := int(request.GetFloat("line", 0))
+	character := int(request.GetFloat("character", 0))
+
+	switch action {
+	case "definition":
+		return s.handleGetPreciseDefinition(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"path":      path,
+					"line":      float64(line),
+					"character": float64(character),
+				},
+			},
+		})
+	case "references":
+		return s.handleFindReferencesPrecise(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"path":      path,
+					"line":      float64(line),
+					"character": float64(character),
+				},
+			},
+		})
+	case "type_hierarchy":
+		return s.handleGetTypeHierarchy(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"path":      path,
+					"line":      float64(line),
+					"character": float64(character),
+				},
+			},
+		})
+	case "impact_analysis":
+		return s.handleGetImpactAnalysis(ctx, mcp.CallToolRequest{
+			Params: mcp.CallToolParams{
+				Arguments: map[string]interface{}{
+					"path":      path,
+					"line":      float64(line),
+					"character": float64(character),
+				},
+			},
+		})
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf("Invalid action: %s. Must be 'definition', 'references', 'type_hierarchy', or 'impact_analysis'", action)), nil
+	}
+}
