@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
 // handleFilesystemGrep performs a keyword or regex search across the project's files.
@@ -193,13 +194,14 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 	if query == "" {
 		return mcp.NewToolResultError("query is required"), nil
 	}
-	topK := int(request.GetFloat("topK", 10))
+	topK := util.ClampInt(int(request.GetFloat("topK", 10)), 1, 100)
 	category := request.GetString("category", "") // code, document, or empty
 	pathFilter := request.GetString("path_filter", "")
-	maxTokens := int(request.GetFloat("max_tokens", float64(indexer.MaxContextTokens)))
-	if maxTokens <= 0 {
-		maxTokens = indexer.MaxContextTokens
+	maxTokensFloat := request.GetFloat("max_tokens", float64(indexer.MaxContextTokens))
+	if maxTokensFloat <= 0 {
+		maxTokensFloat = float64(indexer.MaxContextTokens)
 	}
+	maxTokens := util.ClampInt(int(maxTokensFloat), 1, indexer.MaxContextTokens)
 
 	pids := request.GetStringSlice("cross_reference_projects", nil)
 	if len(pids) == 0 {
@@ -301,7 +303,13 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 		currentTokenCount += tokens
 	}
 
-	return mcp.NewToolResultText(out.String()), nil
+	resultText := out.String()
+	truncated := util.TruncateRuneSafe(resultText, 12000)
+	if truncated != resultText {
+		truncated += "\n... [Truncated for length]"
+	}
+
+	return mcp.NewToolResultText(truncated), nil
 }
 
 // handleSearchWorkspace unifies vector, regex, graph, and index status tools into a single "Fat Tool".
@@ -311,12 +319,10 @@ func (s *Server) handleSearchWorkspace(ctx context.Context, request mcp.CallTool
 	limitFloat := request.GetFloat("limit", 10)
 	pathFilter := request.GetString("path", "")
 
-	limit := int(limitFloat)
-	if limit <= 0 {
-		limit = 10
-	} else if limit > 100 {
-		limit = 100
+	if limitFloat <= 0 {
+		limitFloat = 10
 	}
+	limit := util.ClampInt(int(limitFloat), 1, 100)
 
 	switch action {
 	case "vector":

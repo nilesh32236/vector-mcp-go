@@ -1,0 +1,5 @@
+{
+  "min_recall": 0.66,
+  "min_mrr": 0.50,
+  "min_ndcg": 0.58
+}

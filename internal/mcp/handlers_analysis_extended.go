@@ -6,14 +6,15 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
 // handleGetImpactAnalysis uses the LSP to identify the "blast radius" of a change to a symbol.
 // It finds all references across the project and summarizes the potential impact.
 func (s *Server) handleGetImpactAnalysis(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path := request.GetString("path", "")
-	line := int(request.GetFloat("line", 0))
-	character := int(request.GetFloat("character", 0))
+	line := util.ClampInt(int(request.GetFloat("line", 0)), 0, 1_000_000)
+	character := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
 
 	if path == "" {
 		return mcp.NewToolResultError("path is required"), nil

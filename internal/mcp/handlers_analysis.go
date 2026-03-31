@@ -24,10 +24,11 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	filePath := request.GetString("filePath", "")
-	maxTokens := int(request.GetFloat("max_tokens", float64(indexer.MaxContextTokens)))
-	if maxTokens <= 0 {
-		maxTokens = indexer.MaxContextTokens
+	maxTokensFloat := request.GetFloat("max_tokens", float64(indexer.MaxContextTokens))
+	if maxTokensFloat <= 0 {
+		maxTokensFloat = float64(indexer.MaxContextTokens)
 	}
+	maxTokens := util.ClampInt(int(maxTokensFloat), 1, indexer.MaxContextTokens)
 
 	store, err := s.getStore(ctx)
 	if err != nil {
@@ -1024,7 +1025,7 @@ func (s *Server) handleGetSummarizedContext(ctx context.Context, request mcp.Cal
 	if query == "" {
 		return mcp.NewToolResultError("query is required"), nil
 	}
-	topK := int(request.GetFloat("topK", 5))
+	topK := util.ClampInt(int(request.GetFloat("topK", 5)), 1, 100)
 
 	store, err := s.getStore(ctx)
 	if err != nil {
@@ -1149,18 +1150,19 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 	}
 
 	contentStr := relevantContent.String()
-	r := []rune(contentStr)
-	if len(r) > 10000 {
-		contentStr = string(r[:10000]) + "\n... [Truncated for length]"
+	truncatedContent := util.TruncateRuneSafe(contentStr, 10000)
+	toolText := truncatedContent
+	if truncatedContent != contentStr {
+		toolText = truncatedContent + "\n... [Truncated for length]"
 	}
 
-	storeErr := s.storeContext(ctx, contentStr, s.cfg.ProjectRoot)
+	storeErr := s.storeContext(ctx, truncatedContent, s.cfg.ProjectRoot)
 	if storeErr != nil {
 		s.logger.Error("Failed to store distilled context", "error", storeErr)
-		return mcp.NewToolResultText(fmt.Sprintf("### 🧠 Distilled Knowledge (Storage Failed)\n\n%s\n\n**Warning**: Failed to index this KI automatically.", contentStr)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("### 🧠 Distilled Knowledge (Storage Failed)\n\n%s\n\n**Warning**: Failed to index this KI automatically.", toolText)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("### ✅ Knowledge Distilled & Indexed\n\n%s", contentStr)), nil
+	return mcp.NewToolResultText(fmt.Sprintf("### ✅ Knowledge Distilled & Indexed\n\n%s", toolText)), nil
 }
 
 // storeContext is a helper to save KIs to the database

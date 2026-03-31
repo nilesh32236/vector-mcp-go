@@ -10,15 +10,16 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
 // handleGetCodebaseSkeleton returns a topological tree map of the codebase.
 func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	targetPath := request.GetString("target_path", "")
-	maxDepth := int(request.GetFloat("max_depth", 3))
+	maxDepth := util.ClampInt(int(request.GetFloat("max_depth", 3)), 0, 20)
 	includePattern := request.GetString("include_pattern", "")
 	excludePattern := request.GetString("exclude_pattern", "")
-	maxItems := int(request.GetFloat("max_items", 1000))
+	maxItems := util.ClampInt(int(request.GetFloat("max_items", 1000)), 1, 10000)
 
 	root := s.cfg.ProjectRoot
 	if targetPath != "" {
