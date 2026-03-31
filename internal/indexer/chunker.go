@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/css"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/html"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/php"
 	"github.com/smacker/go-tree-sitter/python"
@@ -100,12 +102,15 @@ func CreateChunks(text string, filePath string) []Chunk {
 
 func isTreeSitterSupported(ext string) bool {
 	switch ext {
-	case ".go", ".js", ".jsx", ".ts", ".tsx", ".php", ".py", ".rs":
+	case ".go", ".js", ".jsx", ".ts", ".tsx", ".php", ".py", ".rs", ".html", ".css":
 		return true
 	}
 	return false
 }
 
+// treeSitterChunk builds semantically meaningful chunks using language-specific AST queries.
+// For HTML and CSS files, it extracts high-value blocks (tags, rulesets, and declarations)
+// and safely derives parent context without assuming fixed node shapes.
 func treeSitterChunk(content string, filePath string) []Chunk {
 	ext := filepath.Ext(filePath)
 	var lang *sitter.Language
@@ -125,6 +130,10 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 		lang = python.GetLanguage()
 	case ".rs":
 		lang = rust.GetLanguage()
+	case ".html":
+		lang = html.GetLanguage()
+	case ".css":
+		lang = css.GetLanguage()
 	default:
 		return fastChunk(content)
 	}
@@ -182,6 +191,18 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 			`(impl_item type: (type_identifier) @name) @entity`,
 			`(trait_item name: (type_identifier) @name) @entity`,
 		}
+	case ".html":
+		queries = []string{
+			`(element (start_tag (tag_name) @name) @entity)`,
+			`(script_element (start_tag (tag_name) @name) @entity)`,
+			`(style_element (start_tag (tag_name) @name) @entity)`,
+		}
+	case ".css":
+		queries = []string{
+			`(rule_set (selectors) @name) @entity`,
+			`(media_statement) @entity`,
+			`(keyframes_statement) @entity`,
+		}
 	}
 
 	var matches []entityMatch
@@ -232,7 +253,7 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 						}
 
 						parentSymbol := ""
-						// Find parent symbol (e.g., Class or Struct)
+						// Find parent symbol (e.g., class/struct/tag scope).
 						if entityNode.Type() == "method_definition" {
 							// TS/JS
 							p := entityNode.Parent()
@@ -269,6 +290,35 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 									return ""
 								}
 								parentSymbol = findType(recv)
+							}
+						} else if ext == ".html" {
+							for p := entityNode.Parent(); p != nil; p = p.Parent() {
+								if p.Type() != "element" && p.Type() != "script_element" && p.Type() != "style_element" {
+									continue
+								}
+								if tagName := findFirstNodeContentByType(p, []byte(content), "tag_name"); tagName != "" {
+									parentSymbol = tagName
+									break
+								}
+							}
+						} else if ext == ".css" {
+							for p := entityNode.Parent(); p != nil; p = p.Parent() {
+								switch p.Type() {
+								case "rule_set":
+									if selector := findFirstNodeContentByType(p, []byte(content), "selectors"); selector != "" {
+										parentSymbol = selector
+									}
+									if parentSymbol != "" {
+										break
+									}
+								case "media_statement":
+									parentSymbol = "@media"
+								case "keyframes_statement":
+									parentSymbol = "@keyframes"
+								}
+								if parentSymbol != "" {
+									break
+								}
 							}
 						}
 
@@ -484,10 +534,12 @@ func countLines(s string) int {
 	return strings.Count(s, "\n")
 }
 
+// splitIfNeeded splits large chunks using rune-safe slicing to avoid UTF-8 corruption.
+// The limits are tuned for large-context embedding models like nomic-embed-text-v1.5.
 func splitIfNeeded(c Chunk) []Chunk {
 	runes := []rune(c.Content)
-	maxRunes := 3000
-	overlap := 500
+	maxRunes := 8000
+	overlap := 800
 
 	if len(runes) <= maxRunes {
 		return []Chunk{c}
@@ -522,6 +574,21 @@ func splitIfNeeded(c Chunk) []Chunk {
 		i += (maxRunes - overlap)
 	}
 	return chunks
+}
+
+func findFirstNodeContentByType(node *sitter.Node, content []byte, wantType string) string {
+	if node == nil {
+		return ""
+	}
+	if node.Type() == wantType {
+		return node.Content(content)
+	}
+	for i := 0; i < int(node.ChildCount()); i++ {
+		if value := findFirstNodeContentByType(node.Child(i), content, wantType); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func extractCallsGeneric(node *sitter.Node, content string) []string {

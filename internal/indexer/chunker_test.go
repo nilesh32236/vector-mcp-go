@@ -18,6 +18,8 @@ func TestIsTreeSitterSupported(t *testing.T) {
 		{".php", true},
 		{".py", true},
 		{".rs", true},
+		{".html", true},
+		{".css", true},
 		{".txt", false},
 		{".md", false},
 		{"", false},
@@ -111,7 +113,7 @@ func TestSplitIfNeeded(t *testing.T) {
 	}
 
 	// Long chunk
-	longChunkRunes := make([]rune, 6000)
+	longChunkRunes := make([]rune, 16000)
 	for i := range longChunkRunes {
 		longChunkRunes[i] = 'a'
 	}
@@ -120,9 +122,9 @@ func TestSplitIfNeeded(t *testing.T) {
 	chunks = splitIfNeeded(longChunk)
 
 	// Expect 3 chunks:
-	// Chunk 1: 0 - 3000
-	// Chunk 2: 2500 - 5500
-	// Chunk 3: 5000 - 6000
+	// Chunk 1: 0 - 8000
+	// Chunk 2: 7200 - 15200
+	// Chunk 3: 14400 - 16000
 	expectedChunks := 3
 	if len(chunks) != expectedChunks {
 		t.Errorf("splitIfNeeded(longChunk) returned %v chunks; want %v", len(chunks), expectedChunks)

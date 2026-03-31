@@ -16,6 +16,7 @@ type ModelConfig struct {
 	IsReranker   bool
 }
 
+// Models contains all embedding and reranker model presets supported by the runtime downloader.
 var Models = map[string]ModelConfig{
 	"Xenova/bge-m3": {
 		OnnxURL:      "https://huggingface.co/Xenova/bge-m3/resolve/main/onnx/model_quantized.onnx",
@@ -42,16 +43,25 @@ var Models = map[string]ModelConfig{
 		Dimension:    1,
 		IsReranker:   true,
 	},
+	"Xenova/bge-reranker-base": {
+		OnnxURL:      "https://huggingface.co/Xenova/bge-reranker-base/resolve/main/onnx/model_quantized.onnx",
+		TokenizerURL: "https://huggingface.co/Xenova/bge-reranker-base/resolve/main/tokenizer.json",
+		Filename:     "bge-reranker-base-q4.onnx",
+		Dimension:    1,
+		IsReranker:   true,
+	},
 }
 
+// GetModelConfig resolves a named model preset.
 func GetModelConfig(modelName string) (ModelConfig, error) {
 	mc, ok := Models[modelName]
 	if !ok {
-		return ModelConfig{}, fmt.Errorf("unsupported model %q, choose from: Xenova/bge-m3, BAAI/bge-small-en-v1.5, BAAI/bge-base-en-v1.5", modelName)
+		return ModelConfig{}, fmt.Errorf("unsupported model %q, choose from: Xenova/bge-m3, BAAI/bge-small-en-v1.5, BAAI/bge-base-en-v1.5, cross-encoder/ms-marco-MiniLM-L-6-v2, Xenova/bge-reranker-base", modelName)
 	}
 	return mc, nil
 }
 
+// EnsureModel ensures the selected model and tokenizer are present locally.
 func EnsureModel(modelsDir, modelName string) (ModelConfig, error) {
 	mc, err := GetModelConfig(modelName)
 	if err != nil {
@@ -79,6 +89,7 @@ func EnsureModel(modelsDir, modelName string) (ModelConfig, error) {
 	return mc, nil
 }
 
+// downloadFile performs an atomic download by writing to a temporary file first.
 func downloadFile(url string, dest string) error {
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {

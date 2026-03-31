@@ -189,6 +189,7 @@ func (s *Server) Serve() error {
 
 // registerResources defines and registers all available MCP resources.
 func (s *Server) registerResources() {
+	// index://status exposes live indexing telemetry for health checks and agent orchestration.
 	s.MCPServer.AddResource(mcp.NewResource("index://status", "Indexing Status",
 		mcp.WithResourceDescription("Current indexing status and background progress diagnostics."),
 		mcp.WithMIMEType("application/json"),
@@ -223,6 +224,7 @@ func (s *Server) registerResources() {
 			},
 		}, nil
 	})
+	// config://project returns the active runtime configuration used by this server process.
 	s.MCPServer.AddResource(mcp.NewResource("config://project", "Project Configuration",
 		mcp.WithResourceDescription("Active configuration for the vector-mcp-go server."),
 		mcp.WithMIMEType("application/json"),
@@ -236,6 +238,7 @@ func (s *Server) registerResources() {
 			},
 		}, nil
 	})
+	// docs://guide provides a concise markdown quick-start for client agents and developers.
 	s.MCPServer.AddResource(mcp.NewResource("docs://guide", "Usage Guide",
 		mcp.WithResourceDescription("Quick guide on how to use vector-mcp-go effectively."),
 		mcp.WithMIMEType("text/markdown"),
@@ -270,6 +273,7 @@ This server provides semantic search and code analysis for your project.
 
 // registerPrompts defines and registers all available MCP prompts.
 func (s *Server) registerPrompts() {
+	// generate-docstring scaffolds a high-context writing prompt for entity-level documentation.
 	s.MCPServer.AddPrompt(mcp.NewPrompt("generate-docstring",
 		mcp.WithPromptDescription("Generates a highly contextual prompt to write professional documentation."),
 		mcp.WithArgument("file_path", mcp.ArgumentDescription("The relative path of the file"), mcp.RequiredArgument()),
@@ -295,6 +299,7 @@ func (s *Server) registerPrompts() {
 			},
 		}, nil
 	})
+	// analyze-architecture produces an architecture-review prompt for system-level reasoning.
 	s.MCPServer.AddPrompt(mcp.NewPrompt("analyze-architecture",
 		mcp.WithPromptDescription("Analyzes the project architecture and generates a summary prompt."),
 	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
@@ -323,7 +328,7 @@ func (s *Server) registerTools() {
 		s.toolHandlers[tool.Name] = handler
 	}
 
-	// 1. search_workspace: Unified search engine (Fat Tool)
+	// search_workspace is the unified discovery tool for semantic, lexical, and graph-driven lookups.
 	addTool(mcp.NewTool("search_workspace",
 		mcp.WithDescription("Unified search engine for deep codebase exploration. Use this for semantic search (vector), exact text/regex matching (ripgrep), following code relationship graphs (calls/imports), or checking indexing progress."),
 		mcp.WithString("action", mcp.Description("The type of search: 'vector' (semantic similarity), 'regex' (exact text/pattern match), 'graph' (follow relationships), or 'index_status' (check background progress).")),
@@ -332,14 +337,14 @@ func (s *Server) registerTools() {
 		mcp.WithString("path", mcp.Description("Optional file or directory path to restrict the search scope.")),
 	), s.handleSearchWorkspace)
 
-	// 2. workspace_manager: Project lifecycle commands (Fat Tool)
+	// workspace_manager centralizes workspace lifecycle operations and indexing control.
 	addTool(mcp.NewTool("workspace_manager",
 		mcp.WithDescription("Core project management tools. Use this to switch active project roots, trigger specialized indexing runs, or retrieve detailed system diagnostics and state reports."),
 		mcp.WithString("action", mcp.Description("Management action: 'set_project_root' (update active workspace), 'trigger_index' (start re-indexing), or 'get_indexing_diagnostics' (detailed health/state report).")),
 		mcp.WithString("path", mcp.Description("The absolute path to the project root or a specific directory to act upon.")),
 	), s.handleWorkspaceManager)
 
-	// 3. lsp_query: Deep Language Server Protocol integration (Fat Tool)
+	// lsp_query exposes high-precision LSP capabilities (definition, refs, hierarchy, impact).
 	addTool(mcp.NewTool("lsp_query",
 		mcp.WithDescription("High-precision symbol analysis via the Language Server Protocol (LSP). Use this for jumping to definitions, finding all references across the workspace, exploring large type hierarchies, or analyzing the impact of cross-file changes."),
 		mcp.WithString("action", mcp.Description("LSP capability: 'definition' (find symbol source), 'references' (find all usages), 'type_hierarchy' (supertypes/subtypes), or 'impact_analysis' (downstream dependencies).")),
@@ -348,14 +353,14 @@ func (s *Server) registerTools() {
 		mcp.WithNumber("character", mcp.Description("0-indexed character offset of the symbol.")),
 	), s.handleLspQuery)
 
-	// 4. analyze_code: Codebase diagnostics (Fat Tool)
+	// analyze_code provides structural and quality diagnostics over indexed project content.
 	addTool(mcp.NewTool("analyze_code",
 		mcp.WithDescription("Advanced codebase diagnostic suite. Use this to generate AST-based structural skeletons, detect dead (unused) exported symbols, find semantically duplicated code blocks, or validate dependency health against manifest files."),
 		mcp.WithString("action", mcp.Description("Analysis type: 'ast_skeleton' (structural map), 'dead_code' (find unused exports), 'duplicate_code' (semantic clones), or 'dependencies' (validate package.json/go.mod imports).")),
 		mcp.WithString("path", mcp.Description("Subdirectory or file path to analyze.")),
 	), s.handleAnalyzeCode)
 
-	// 5. modify_workspace: Safe file mutation (Fat Tool)
+	// modify_workspace handles guarded workspace mutations and post-change validation workflows.
 	addTool(mcp.NewTool("modify_workspace",
 		mcp.WithDescription("Safe and structured codebase mutation tools. Use this for applying small search-and-replace patches, creating new files with content, or running formatters/linters (like go fmt) to ensure code quality."),
 		mcp.WithString("action", mcp.Description("Mutation action: 'apply_patch' (search-and-replace), 'create_file' (new file), 'run_linter' (format code), 'verify_patch' (dry-run/check integrity), or 'auto_fix' (LSP-driven fixes).")),
@@ -366,30 +371,35 @@ func (s *Server) registerTools() {
 		mcp.WithString("tool", mcp.Description("Linter or formatter tool name (e.g., 'go fmt').")),
 	), s.handleModifyWorkspace)
 
-	// Individual Utility Tools
+	// index_status returns quick indexing progress for polling loops and readiness checks.
 	addTool(mcp.NewTool("index_status", mcp.WithDescription("Check current indexing status and background progress.")), s.handleIndexStatus)
+	// trigger_project_index starts full or scoped re-indexing operations.
 	addTool(mcp.NewTool("trigger_project_index",
 		mcp.WithDescription("Manually trigger a full re-index of the project."),
 		mcp.WithString("project_path", mcp.Description("Absolute path to the project root.")),
 	), s.handleTriggerProjectIndex)
+	// get_related_context returns nearest semantic neighbors for a target file.
 	addTool(mcp.NewTool("get_related_context",
 		mcp.WithDescription("Retrieve semantically related code and symbols for a specific file."),
 		mcp.WithString("filePath", mcp.Description("Path to the source file.")),
 	), s.handleGetRelatedContext)
 
-	// Knowledge & Memory Tools
+	// store_context persists deterministic project knowledge for future retrieval.
 	addTool(mcp.NewTool("store_context",
 		mcp.WithDescription("Store general project rules or architectural decisions."),
 		mcp.WithString("text", mcp.Description("The text context to store.")),
 	), s.handleStoreContext)
+	// delete_context removes targeted context entries or clears project memory entirely.
 	addTool(mcp.NewTool("delete_context",
 		mcp.WithDescription("Delete specific shared memory context, or completely wipe a project's vector index."),
 		mcp.WithString("target_path", mcp.Description("The exact file path, context ID, or 'ALL' to clear the whole project.")),
 	), s.handleDeleteContext)
+	// distill_package_purpose summarizes package intent and key entities.
 	addTool(mcp.NewTool("distill_package_purpose",
 		mcp.WithDescription("Generates a high-level semantic summary of a package's primary purpose and key entities."),
 		mcp.WithString("path", mcp.Description("Relative or absolute path of the package directory to distill.")),
 	), s.handleDistillPackagePurpose)
+	// trace_data_flow follows symbol usage patterns through project-level references.
 	addTool(mcp.NewTool("trace_data_flow",
 		mcp.WithDescription("Traces the usage of a specific field or symbol across the project."),
 		mcp.WithString("field_name", mcp.Description("The name of the field or symbol to trace")),
