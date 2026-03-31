@@ -32,6 +32,8 @@ Options:
   --queries PATH           TSV file of query and expected relative path pairs
   --top-k N                Search top_k. Default: 5
   --repetitions N          Repetitions per query for latency sampling. Default: 3
+  --warmup N               Warmup requests per query (excluded from metrics). Default: 1
+  --request-timeout SEC    curl max-time timeout in seconds. Default: 30
   --port-base N            Starting API port for per-run daemons. Default: 47921
   --out-dir PATH           Output directory. Default: /tmp/vector-mcp-model-compare-<ts>
   --embed-models LIST      Comma-separated embeddings to test
@@ -55,6 +57,21 @@ EOF
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+require_int_in_range() {
+  local name="$1"
+  local value="$2"
+  local min="$3"
+  local max="$4"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "Invalid integer for $name: $value" >&2
+    exit 1
+  fi
+  if (( value < min || value > max )); then
+    echo "Value out of range for $name: $value (expected ${min}-${max})" >&2
     exit 1
   fi
 }
@@ -120,6 +137,8 @@ REPO_PATH="$(pwd)"
 QUERY_FILE=""
 TOP_K=5
 REPETITIONS=3
+WARMUP=1
+REQUEST_TIMEOUT=30
 PORT_BASE=47921
 OUT_DIR="/tmp/vector-mcp-model-compare-$(date +%Y%m%d-%H%M%S)"
 KEEP_ARTIFACTS=0
@@ -143,6 +162,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --repetitions)
       REPETITIONS="$2"
+      shift 2
+      ;;
+    --warmup)
+      WARMUP="$2"
+      shift 2
+      ;;
+    --request-timeout)
+      REQUEST_TIMEOUT="$2"
       shift 2
       ;;
     --port-base)
@@ -185,12 +212,25 @@ require_cmd go
 require_cmd curl
 require_cmd python3
 
+require_int_in_range "--top-k" "$TOP_K" 1 1000
+require_int_in_range "--repetitions" "$REPETITIONS" 1 200
+require_int_in_range "--warmup" "$WARMUP" 0 200
+require_int_in_range "--request-timeout" "$REQUEST_TIMEOUT" 1 600
+require_int_in_range "--port-base" "$PORT_BASE" 1024 65535
+
 if [[ ! -d "$REPO_PATH" ]]; then
   echo "Repository path not found: $REPO_PATH" >&2
   exit 1
 fi
 
 if [[ -n "$QUERY_FILE" && ! -f "$QUERY_FILE" ]]; then
+  echo "Query file not found: $QUERY_FILE" >&2
+  exit 1
+fi
+if [[ -z "$QUERY_FILE" ]]; then
+  QUERY_FILE="$SCRIPT_DIR/model-compare-queries.tsv"
+fi
+if [[ ! -f "$QUERY_FILE" ]]; then
   echo "Query file not found: $QUERY_FILE" >&2
   exit 1
 fi
@@ -209,18 +249,22 @@ fi
 MODELS_DIR="$OUT_DIR/shared-models"
 mkdir -p "$MODELS_DIR"
 RESULTS_TSV="$OUT_DIR/results.tsv"
+QUERY_RESULTS_TSV="$OUT_DIR/query-results.tsv"
 
 printf "embedding\treranker\tdim\tindex_seconds\tdb_mb\temb_model_mb\treranker_mb\tavg_ms\tp50_ms\tp95_ms\ttop1_acc\thit_rate_at_k\tmrr\tqueries\trepetitions\n" > "$RESULTS_TSV"
+printf "embedding\treranker\tquery\texpected_path\trepetition\tlatency_ms\ttop1\thit_at_k\tmrr\n" > "$QUERY_RESULTS_TSV"
 
 IFS=',' read -r -a EMBEDDING_LIST <<<"$EMBED_MODELS"
 IFS=',' read -r -a RERANKER_LIST <<<"$RERANKERS"
 
 combo_index=0
 for embedding in "${EMBEDDING_LIST[@]}"; do
+  embedding="$(echo "$embedding" | xargs)"
   emb_file="$(model_filename "$embedding")"
   emb_dim="$(model_dimension "$embedding")"
 
   for reranker in "${RERANKER_LIST[@]}"; do
+    reranker="$(echo "$reranker" | xargs)"
     rerank_file="$(model_filename "$reranker")"
     combo_index=$((combo_index + 1))
     combo_label="$(sanitize_name "${embedding}__${reranker}")"
@@ -294,8 +338,23 @@ PY
           continue
         fi
         query_count=$((query_count + 1))
-        for _ in $(seq 1 "$REPETITIONS"); do
-          response_file="$metrics_dir/query_${query_count}.json"
+        for rep in $(seq 1 "$WARMUP"); do
+          payload="$(python3 - "$query" "$TOP_K" <<'PY'
+import json
+import sys
+print(json.dumps({"query": sys.argv[1], "top_k": int(sys.argv[2])}))
+PY
+)"
+          curl -fsS \
+            --max-time "$REQUEST_TIMEOUT" \
+            -H 'Content-Type: application/json' \
+            -o /dev/null \
+            -d "$payload" \
+            "http://127.0.0.1:${port}/api/search" >/dev/null
+          echo "Warmup query=$query_count repetition=$rep complete"
+        done
+        for rep in $(seq 1 "$REPETITIONS"); do
+          response_file="$metrics_dir/query_${query_count}_rep_${rep}.json"
           payload="$(python3 - "$query" "$TOP_K" <<'PY'
 import json
 import sys
@@ -304,13 +363,14 @@ PY
 )"
           latency_seconds="$(
             curl -fsS \
+              --max-time "$REQUEST_TIMEOUT" \
               -H 'Content-Type: application/json' \
               -o "$response_file" \
               -w '%{time_total}' \
               -d "$payload" \
               "http://127.0.0.1:${port}/api/search"
           )"
-          python3 - "$response_file" "$expected_path" "$TOP_K" "$latency_seconds" >> "$score_file" <<'PY'
+          metrics_line="$(python3 - "$response_file" "$expected_path" "$TOP_K" "$latency_seconds" <<'PY'
 import json
 import sys
 
@@ -339,6 +399,15 @@ for idx, path in enumerate(paths, start=1):
 
 print(f"{latency_ms:.3f}\t{top1:.6f}\t{hit:.6f}\t{mrr:.6f}")
 PY
+)"
+          echo "$metrics_line" >> "$score_file"
+          printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
+            "$query" \
+            "$expected_path" \
+            "$rep" \
+            "$metrics_line" \
+            "$embedding" \
+            "$reranker" | awk -F'\t' '{printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",$8,$9,$1,$2,$3,$4,$5,$6,$7}' >> "$QUERY_RESULTS_TSV"
         done
       done < "$QUERY_FILE"
     fi
@@ -437,6 +506,7 @@ done
 
 echo
 echo "Results written to $RESULTS_TSV"
+echo "Per-query results written to $QUERY_RESULTS_TSV"
 if command -v column >/dev/null 2>&1; then
   column -t -s $'\t' "$RESULTS_TSV"
 else
