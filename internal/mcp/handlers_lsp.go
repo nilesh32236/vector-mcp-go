@@ -9,7 +9,10 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
-// parseAndClampLSPPosition reads and clamps LSP line/character request arguments once.
+// parseAndClampLSPPosition reads line and character from the given CallToolRequest,
+// defaulting each to 0 if absent, converts them to ints, and clamps line to the
+// range 0–1_000_000 and character to the range 0–10_000. It returns the clamped
+// line and character.
 func parseAndClampLSPPosition(request mcp.CallToolRequest) (int, int) {
 	line := util.ClampInt(int(request.GetFloat("line", 0)), 0, 1_000_000)
 	character := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
