@@ -9,11 +9,15 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
-// handleGetPreciseDefinition uses the LSP to find exact symbol definitions.
-func (s *Server) handleGetPreciseDefinition(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	path := request.GetString("path", "")
+// parseAndClampLSPPosition reads and clamps LSP line/character request arguments once.
+func parseAndClampLSPPosition(request mcp.CallToolRequest) (int, int) {
 	line := util.ClampInt(int(request.GetFloat("line", 0)), 0, 1_000_000)
-	char := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
+	character := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
+	return line, character
+}
+
+// handleGetPreciseDefinition uses the LSP to find exact symbol definitions.
+func (s *Server) handleGetPreciseDefinition(ctx context.Context, path string, line, character int) (*mcp.CallToolResult, error) {
 
 	if path == "" {
 		return mcp.NewToolResultError("path is required"), nil
@@ -30,7 +34,7 @@ func (s *Server) handleGetPreciseDefinition(ctx context.Context, request mcp.Cal
 		},
 		"position": map[string]interface{}{
 			"line":      line,
-			"character": char,
+			"character": character,
 		},
 	}
 
@@ -49,11 +53,7 @@ func (s *Server) handleGetPreciseDefinition(ctx context.Context, request mcp.Cal
 }
 
 // handleFindReferencesPrecise uses the LSP to find all usages of a symbol.
-func (s *Server) handleFindReferencesPrecise(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	path := request.GetString("path", "")
-	line := util.ClampInt(int(request.GetFloat("line", 0)), 0, 1_000_000)
-	char := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
-
+func (s *Server) handleFindReferencesPrecise(ctx context.Context, path string, line, character int) (*mcp.CallToolResult, error) {
 	if path == "" {
 		return mcp.NewToolResultError("path is required"), nil
 	}
@@ -69,7 +69,7 @@ func (s *Server) handleFindReferencesPrecise(ctx context.Context, request mcp.Ca
 		},
 		"position": map[string]interface{}{
 			"line":      line,
-			"character": char,
+			"character": character,
 		},
 		"context": map[string]interface{}{
 			"includeDeclaration": true,
@@ -95,11 +95,7 @@ func (s *Server) handleFindReferencesPrecise(ctx context.Context, request mcp.Ca
 }
 
 // handleGetTypeHierarchy uses the LSP to map out type structures.
-func (s *Server) handleGetTypeHierarchy(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	path := request.GetString("path", "")
-	line := util.ClampInt(int(request.GetFloat("line", 0)), 0, 1_000_000)
-	char := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
-
+func (s *Server) handleGetTypeHierarchy(ctx context.Context, path string, line, character int) (*mcp.CallToolResult, error) {
 	if path == "" {
 		return mcp.NewToolResultError("path is required"), nil
 	}
@@ -115,7 +111,7 @@ func (s *Server) handleGetTypeHierarchy(ctx context.Context, request mcp.CallToo
 		},
 		"position": map[string]interface{}{
 			"line":      line,
-			"character": char,
+			"character": character,
 		},
 	}
 
@@ -133,40 +129,15 @@ func (s *Server) handleGetTypeHierarchy(ctx context.Context, request mcp.CallToo
 func (s *Server) handleLspQuery(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	action := request.GetString("action", "")
 	path := request.GetString("path", "")
-	line := util.ClampInt(int(request.GetFloat("line", 0)), 0, 1_000_000)
-	character := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
+	line, character := parseAndClampLSPPosition(request)
 
 	switch action {
 	case "definition":
-		return s.handleGetPreciseDefinition(ctx, mcp.CallToolRequest{
-			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
-					"path":      path,
-					"line":      float64(line),
-					"character": float64(character),
-				},
-			},
-		})
+		return s.handleGetPreciseDefinition(ctx, path, line, character)
 	case "references":
-		return s.handleFindReferencesPrecise(ctx, mcp.CallToolRequest{
-			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
-					"path":      path,
-					"line":      float64(line),
-					"character": float64(character),
-				},
-			},
-		})
+		return s.handleFindReferencesPrecise(ctx, path, line, character)
 	case "type_hierarchy":
-		return s.handleGetTypeHierarchy(ctx, mcp.CallToolRequest{
-			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
-					"path":      path,
-					"line":      float64(line),
-					"character": float64(character),
-				},
-			},
-		})
+		return s.handleGetTypeHierarchy(ctx, path, line, character)
 	case "impact_analysis":
 		return s.handleGetImpactAnalysis(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{

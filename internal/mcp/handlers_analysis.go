@@ -24,7 +24,11 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	filePath := request.GetString("filePath", "")
-	maxTokens := util.ClampInt(int(request.GetFloat("max_tokens", float64(indexer.MaxContextTokens))), 1, indexer.MaxContextTokens)
+	maxTokensFloat := request.GetFloat("max_tokens", float64(indexer.MaxContextTokens))
+	if maxTokensFloat <= 0 {
+		maxTokensFloat = float64(indexer.MaxContextTokens)
+	}
+	maxTokens := util.ClampInt(int(maxTokensFloat), 1, indexer.MaxContextTokens)
 
 	store, err := s.getStore(ctx)
 	if err != nil {
@@ -1146,18 +1150,19 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 	}
 
 	contentStr := relevantContent.String()
-	truncated := util.TruncateRuneSafe(contentStr, 10000)
-	if truncated != contentStr {
-		contentStr = truncated + "\n... [Truncated for length]"
+	truncatedContent := util.TruncateRuneSafe(contentStr, 10000)
+	toolText := truncatedContent
+	if truncatedContent != contentStr {
+		toolText = truncatedContent + "\n... [Truncated for length]"
 	}
 
-	storeErr := s.storeContext(ctx, contentStr, s.cfg.ProjectRoot)
+	storeErr := s.storeContext(ctx, truncatedContent, s.cfg.ProjectRoot)
 	if storeErr != nil {
 		s.logger.Error("Failed to store distilled context", "error", storeErr)
-		return mcp.NewToolResultText(fmt.Sprintf("### 🧠 Distilled Knowledge (Storage Failed)\n\n%s\n\n**Warning**: Failed to index this KI automatically.", contentStr)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("### 🧠 Distilled Knowledge (Storage Failed)\n\n%s\n\n**Warning**: Failed to index this KI automatically.", toolText)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("### ✅ Knowledge Distilled & Indexed\n\n%s", contentStr)), nil
+	return mcp.NewToolResultText(fmt.Sprintf("### ✅ Knowledge Distilled & Indexed\n\n%s", toolText)), nil
 }
 
 // storeContext is a helper to save KIs to the database

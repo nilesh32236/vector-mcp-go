@@ -133,8 +133,12 @@ Defer or redesign if:
 
 ## 7) Practical Next Steps (Immediate)
 
-1. Create a `benchmark/` fixture set and KPI script.
-2. Add shared helpers for parameter clamping + rune-safe truncation.
-3. Add `search_workspace` ranking action improvements behind a config flag.
-4. Run A/B benchmark and promote only if KPI gates pass.
+Completed baseline work in this branch:
 
+1. ✅ Added a deterministic `benchmark/` polyglot fixture set and KPI benchmark coverage.
+2. ✅ Added shared helpers and call-site adoption for parameter clamping + rune-safe truncation.
+
+Remaining immediate actions:
+
+1. Add `search_workspace` ranking action improvements behind a config flag.
+2. Run A/B benchmark and promote only if KPI gates pass.

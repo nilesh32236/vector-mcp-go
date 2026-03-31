@@ -2,6 +2,7 @@ package benchmark
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -21,6 +22,7 @@ type deterministicEmbedder struct {
 	dim int
 }
 
+// Embed returns a deterministic embedding for stable benchmark assertions.
 func (m *deterministicEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	if m.dim <= 0 {
 		m.dim = 384
@@ -37,6 +39,7 @@ func (m *deterministicEmbedder) Embed(ctx context.Context, text string) ([]float
 	return emb, nil
 }
 
+// EmbedBatch embeds a list of inputs using the same deterministic mapping as Embed.
 func (m *deterministicEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	out := make([][]float32, len(texts))
 	for i, txt := range texts {
@@ -49,6 +52,14 @@ func (m *deterministicEmbedder) EmbedBatch(ctx context.Context, texts []string) 
 	return out, nil
 }
 
+// retrievalKPIThresholds captures minimum acceptable quality values for the fixture benchmark.
+type retrievalKPIThresholds struct {
+	MinRecall float64 `json:"min_recall"`
+	MinMRR    float64 `json:"min_mrr"`
+	MinNDCG   float64 `json:"min_ndcg"`
+}
+
+// countLines returns the number of lines in a string.
 func countLines(s string) int {
 	if s == "" {
 		return 0
@@ -56,12 +67,31 @@ func countLines(s string) int {
 	return strings.Count(s, "\n") + 1
 }
 
+// loadKPIThresholds reads deterministic KPI thresholds for regression detection.
+func loadKPIThresholds(path string) (retrievalKPIThresholds, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return retrievalKPIThresholds{}, err
+	}
+	var thresholds retrievalKPIThresholds
+	if err := json.Unmarshal(b, &thresholds); err != nil {
+		return retrievalKPIThresholds{}, err
+	}
+	return thresholds, nil
+}
+
+// TestRetrievalKPIsOnPolyglotFixture validates benchmark quality KPIs against fixture-backed minimums.
 func TestRetrievalKPIsOnPolyglotFixture(t *testing.T) {
 	ctx := context.Background()
 	fixtureRoot := filepath.Join("fixtures", "polyglot")
+	thresholdPath := filepath.Join(fixtureRoot, "kpi_thresholds.json")
 
 	if _, err := os.Stat(fixtureRoot); err != nil {
 		t.Fatalf("fixture not found at %s: %v", fixtureRoot, err)
+	}
+	thresholds, err := loadKPIThresholds(thresholdPath)
+	if err != nil {
+		t.Fatalf("failed to load KPI thresholds from %s: %v", thresholdPath, err)
 	}
 
 	tempDBDir := t.TempDir()
@@ -173,17 +203,18 @@ func TestRetrievalKPIsOnPolyglotFixture(t *testing.T) {
 	t.Logf("KPI index_time_per_KLOC=%.3fs", indexPerKLOC)
 	t.Logf("KPI p50_latency=%s p95_latency=%s", p50Latency, p95Latency)
 
-	if recallAtK < 0 || recallAtK > 1 {
-		t.Fatalf("invalid recall@k: %f", recallAtK)
+	if recallAtK < thresholds.MinRecall {
+		t.Fatalf("recall@%d regression: got %.3f, want >= %.3f", k, recallAtK, thresholds.MinRecall)
 	}
-	if mrr < 0 || mrr > 1 {
-		t.Fatalf("invalid mrr: %f", mrr)
+	if mrr < thresholds.MinMRR {
+		t.Fatalf("mrr regression: got %.3f, want >= %.3f", mrr, thresholds.MinMRR)
 	}
-	if avgNDCG < 0 || avgNDCG > 1 {
-		t.Fatalf("invalid ndcg: %f", avgNDCG)
+	if avgNDCG < thresholds.MinNDCG {
+		t.Fatalf("ndcg@%d regression: got %.3f, want >= %.3f", k, avgNDCG, thresholds.MinNDCG)
 	}
 }
 
+// collectFixtureFiles returns all files under the fixture root.
 func collectFixtureFiles(root string) ([]string, error) {
 	files := []string{}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -199,6 +230,7 @@ func collectFixtureFiles(root string) ([]string, error) {
 	return files, err
 }
 
+// extractPaths pulls path metadata from records in ranked order.
 func extractPaths(records []db.Record) []string {
 	paths := make([]string, 0, len(records))
 	for _, r := range records {
@@ -207,6 +239,7 @@ func extractPaths(records []db.Record) []string {
 	return paths
 }
 
+// containsPath checks whether expected appears in the ranked path list.
 func containsPath(paths []string, expected string) bool {
 	for _, p := range paths {
 		if strings.Contains(p, expected) {
@@ -216,6 +249,7 @@ func containsPath(paths []string, expected string) bool {
 	return false
 }
 
+// reciprocalRank computes reciprocal rank for a single relevant expected path.
 func reciprocalRank(paths []string, expected string) float64 {
 	for i, p := range paths {
 		if strings.Contains(p, expected) {
@@ -225,6 +259,7 @@ func reciprocalRank(paths []string, expected string) float64 {
 	return 0
 }
 
+// ndcgAtK computes a binary-relevance NDCG at k for expected path membership.
 func ndcgAtK(paths []string, expected string, k int) float64 {
 	if k <= 0 {
 		return 0
@@ -245,6 +280,7 @@ func ndcgAtK(paths []string, expected string, k int) float64 {
 	return dcg / idcg
 }
 
+// mean returns the arithmetic average of values.
 func mean(values []float64) float64 {
 	if len(values) == 0 {
 		return 0
@@ -256,6 +292,7 @@ func mean(values []float64) float64 {
 	return total / float64(len(values))
 }
 
+// percentileDuration returns the nearest-rank percentile for a duration slice.
 func percentileDuration(values []time.Duration, p float64) time.Duration {
 	if len(values) == 0 {
 		return 0
@@ -274,6 +311,7 @@ func percentileDuration(values []time.Duration, p float64) time.Duration {
 	return copied[idx]
 }
 
+// min returns the smaller integer.
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -281,6 +319,7 @@ func min(a, b int) int {
 	return b
 }
 
+// max returns the larger integer.
 func max(a, b int) int {
 	if a > b {
 		return a
