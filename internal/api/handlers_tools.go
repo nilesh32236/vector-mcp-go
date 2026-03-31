@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
+	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
 // SearchRequest defines the criteria for a semantic and lexical search.
@@ -32,9 +33,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TopK <= 0 {
-		req.TopK = 5 // default
-	}
+	req.TopK = util.ClampInt(req.TopK, 1, 100)
 
 	emb, err := s.embedder.Embed(r.Context(), req.Query)
 	if err != nil {
@@ -60,9 +59,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	var resp []SearchResponse
 	for _, rec := range records {
+		text := util.TruncateRuneSafe(rec.Content, 4000)
+		if text != rec.Content {
+			text += "\n... [Truncated for length]"
+		}
 		resp = append(resp, SearchResponse{
 			ID:         rec.ID,
-			Text:       rec.Content,
+			Text:       text,
 			Similarity: rec.Similarity,
 			Metadata:   rec.Metadata,
 		})

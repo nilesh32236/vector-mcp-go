@@ -24,10 +24,7 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	filePath := request.GetString("filePath", "")
-	maxTokens := int(request.GetFloat("max_tokens", float64(indexer.MaxContextTokens)))
-	if maxTokens <= 0 {
-		maxTokens = indexer.MaxContextTokens
-	}
+	maxTokens := util.ClampInt(int(request.GetFloat("max_tokens", float64(indexer.MaxContextTokens))), 1, indexer.MaxContextTokens)
 
 	store, err := s.getStore(ctx)
 	if err != nil {
@@ -1024,7 +1021,7 @@ func (s *Server) handleGetSummarizedContext(ctx context.Context, request mcp.Cal
 	if query == "" {
 		return mcp.NewToolResultError("query is required"), nil
 	}
-	topK := int(request.GetFloat("topK", 5))
+	topK := util.ClampInt(int(request.GetFloat("topK", 5)), 1, 100)
 
 	store, err := s.getStore(ctx)
 	if err != nil {
@@ -1149,9 +1146,9 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 	}
 
 	contentStr := relevantContent.String()
-	r := []rune(contentStr)
-	if len(r) > 10000 {
-		contentStr = string(r[:10000]) + "\n... [Truncated for length]"
+	truncated := util.TruncateRuneSafe(contentStr, 10000)
+	if truncated != contentStr {
+		contentStr = truncated + "\n... [Truncated for length]"
 	}
 
 	storeErr := s.storeContext(ctx, contentStr, s.cfg.ProjectRoot)

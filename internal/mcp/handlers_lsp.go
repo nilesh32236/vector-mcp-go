@@ -6,13 +6,14 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
 // handleGetPreciseDefinition uses the LSP to find exact symbol definitions.
 func (s *Server) handleGetPreciseDefinition(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path := request.GetString("path", "")
-	line := request.GetFloat("line", 0)
-	char := request.GetFloat("character", 0)
+	line := util.ClampInt(int(request.GetFloat("line", 0)), 0, 1_000_000)
+	char := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
 
 	if path == "" {
 		return mcp.NewToolResultError("path is required"), nil
@@ -28,8 +29,8 @@ func (s *Server) handleGetPreciseDefinition(ctx context.Context, request mcp.Cal
 			"uri": fmt.Sprintf("file://%s", path),
 		},
 		"position": map[string]interface{}{
-			"line":      int(line),
-			"character": int(char),
+			"line":      line,
+			"character": char,
 		},
 	}
 
@@ -50,8 +51,8 @@ func (s *Server) handleGetPreciseDefinition(ctx context.Context, request mcp.Cal
 // handleFindReferencesPrecise uses the LSP to find all usages of a symbol.
 func (s *Server) handleFindReferencesPrecise(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path := request.GetString("path", "")
-	line := request.GetFloat("line", 0)
-	char := request.GetFloat("character", 0)
+	line := util.ClampInt(int(request.GetFloat("line", 0)), 0, 1_000_000)
+	char := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
 
 	if path == "" {
 		return mcp.NewToolResultError("path is required"), nil
@@ -67,8 +68,8 @@ func (s *Server) handleFindReferencesPrecise(ctx context.Context, request mcp.Ca
 			"uri": fmt.Sprintf("file://%s", path),
 		},
 		"position": map[string]interface{}{
-			"line":      int(line),
-			"character": int(char),
+			"line":      line,
+			"character": char,
 		},
 		"context": map[string]interface{}{
 			"includeDeclaration": true,
@@ -96,8 +97,8 @@ func (s *Server) handleFindReferencesPrecise(ctx context.Context, request mcp.Ca
 // handleGetTypeHierarchy uses the LSP to map out type structures.
 func (s *Server) handleGetTypeHierarchy(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path := request.GetString("path", "")
-	line := request.GetFloat("line", 0)
-	char := request.GetFloat("character", 0)
+	line := util.ClampInt(int(request.GetFloat("line", 0)), 0, 1_000_000)
+	char := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
 
 	if path == "" {
 		return mcp.NewToolResultError("path is required"), nil
@@ -113,8 +114,8 @@ func (s *Server) handleGetTypeHierarchy(ctx context.Context, request mcp.CallToo
 			"uri": fmt.Sprintf("file://%s", path),
 		},
 		"position": map[string]interface{}{
-			"line":      int(line),
-			"character": int(char),
+			"line":      line,
+			"character": char,
 		},
 	}
 
@@ -132,8 +133,8 @@ func (s *Server) handleGetTypeHierarchy(ctx context.Context, request mcp.CallToo
 func (s *Server) handleLspQuery(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	action := request.GetString("action", "")
 	path := request.GetString("path", "")
-	line := int(request.GetFloat("line", 0))
-	character := int(request.GetFloat("character", 0))
+	line := util.ClampInt(int(request.GetFloat("line", 0)), 0, 1_000_000)
+	character := util.ClampInt(int(request.GetFloat("character", 0)), 0, 10_000)
 
 	switch action {
 	case "definition":
