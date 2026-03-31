@@ -172,9 +172,9 @@ func (fw *FileWatcher) processPending(ctx context.Context, pending map[string]fs
 								msg := fmt.Sprintf("⚠️ %s at %s:%d: %s", issue.Source, filepath.Base(issue.Path), issue.Line, issue.Message)
 								fw.logger.Info("Proactive Analysis found issue", "issue", msg)
 								if fw.notifyFunc != nil {
-									level := mcp.LoggingLevelInfo
+									level := mcp.LoggingLevel("info")
 									if issue.Severity == "Error" || issue.Severity == "Warning" {
-										level = mcp.LoggingLevelWarning
+										level = mcp.LoggingLevel("warning")
 									}
 									fw.notifyFunc(level, msg, "proactive-analysis")
 								}
@@ -235,7 +235,7 @@ func (fw *FileWatcher) CheckArchitecturalCompliance(ctx context.Context, relPath
 						relPath, rule.Metadata["path"], dep)
 					fw.logger.Warn("Architectural violation detected", "msg", msg)
 					if fw.notifyFunc != nil {
-						fw.notifyFunc(mcp.LoggingLevelWarning, msg, "architectural-guardrail")
+						fw.notifyFunc(mcp.LoggingLevel("warning"), msg, "architectural-guardrail")
 					}
 				}
 			}
