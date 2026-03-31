@@ -52,6 +52,7 @@ func TestLoadConfig(t *testing.T) {
 		t.Setenv("API_PORT", "9090")
 		t.Setenv("DISABLE_FILE_WATCHER", "true")
 		t.Setenv("HF_TOKEN", "test-hf-token")
+		t.Setenv("RERANKER_MODEL_NAME", "custom-reranker")
 
 		cfg := LoadConfig(customDataDir, customModelsDir, customDbPath)
 
@@ -69,6 +70,9 @@ func TestLoadConfig(t *testing.T) {
 		}
 		if cfg.ModelName != "custom-model" {
 			t.Errorf("expected ModelName custom-model, got %s", cfg.ModelName)
+		}
+		if cfg.RerankerModelName != "custom-reranker" {
+			t.Errorf("expected RerankerModelName custom-reranker, got %s", cfg.RerankerModelName)
 		}
 		if cfg.EmbedderPoolSize != 5 {
 			t.Errorf("expected EmbedderPoolSize 5, got %d", cfg.EmbedderPoolSize)
@@ -96,6 +100,15 @@ func TestLoadConfig(t *testing.T) {
 		cfg = LoadConfig("", "", "")
 		if cfg.EmbedderPoolSize != 1 {
 			t.Errorf("expected default pool size 1 for non-positive input, got %d", cfg.EmbedderPoolSize)
+		}
+	})
+
+	t.Run("Disable reranker with none sentinel", func(t *testing.T) {
+		t.Setenv("DATA_DIR", filepath.Join(tempDir, "data_reranker_none"))
+		t.Setenv("RERANKER_MODEL_NAME", "none")
+		cfg := LoadConfig("", "", "")
+		if cfg.RerankerModelName != "" {
+			t.Errorf("expected empty RerankerModelName for none sentinel, got %q", cfg.RerankerModelName)
 		}
 	})
 }

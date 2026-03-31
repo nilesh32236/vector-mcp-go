@@ -93,6 +93,8 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 	rerankerModelName := os.Getenv("RERANKER_MODEL_NAME")
 	if rerankerModelName == "" {
 		rerankerModelName = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+	} else if rerankerModelName == "none" {
+		rerankerModelName = ""
 	}
 
 	disableWatcher := os.Getenv("DISABLE_FILE_WATCHER") == "true"

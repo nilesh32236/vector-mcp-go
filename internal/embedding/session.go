@@ -137,16 +137,24 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 		return nil, err
 	}
 
+	inputNodeNames := []string{"input_ids", "attention_mask", "token_type_ids"}
 	inputs := []onnxruntime_go.Value{inputIdsTensor, attentionMaskTensor, tokenTypeIdsTensor}
 	outputs := []onnxruntime_go.Value{outputTensor}
 
+	// BGE-M3 and some other models don't have token_type_ids
+	if mc.Filename == "bge-m3-q4.onnx" {
+		inputNodeNames = []string{"input_ids", "attention_mask"}
+		inputs = []onnxruntime_go.Value{inputIdsTensor, attentionMaskTensor}
+	}
+
 	session, err := onnxruntime_go.NewAdvancedSession(modelPath,
-		[]string{"input_ids", "attention_mask", "token_type_ids"},
+		inputNodeNames,
 		outputNodeNames,
 		inputs, outputs, nil)
 	if err != nil {
 		inputIdsTensor.Destroy()
 		attentionMaskTensor.Destroy()
+		tokenTypeIdsTensor.Destroy()
 		outputTensor.Destroy()
 		return nil, fmt.Errorf("failed to create ONNX session: %w", err)
 	}

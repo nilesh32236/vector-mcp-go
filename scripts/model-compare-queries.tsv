@@ -1,0 +1,7 @@
+# query	expected_path
+hybrid search reciprocal rank fusion	internal/db/store.go
+load default config model name	internal/config/config.go
+download model tokenizer	internal/embedding/downloader.go
+trigger project index handler	internal/mcp/handlers_index.go
+search api top k clamp	internal/api/handlers_tools.go
+benchmark lexical search target symbol	internal/db/store_bench_test.go
