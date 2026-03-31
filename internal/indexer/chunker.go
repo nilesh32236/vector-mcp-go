@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/css"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/html"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/php"
 	"github.com/smacker/go-tree-sitter/python"
@@ -100,7 +102,7 @@ func CreateChunks(text string, filePath string) []Chunk {
 
 func isTreeSitterSupported(ext string) bool {
 	switch ext {
-	case ".go", ".js", ".jsx", ".ts", ".tsx", ".php", ".py", ".rs":
+	case ".go", ".js", ".jsx", ".ts", ".tsx", ".php", ".py", ".rs", ".html", ".css":
 		return true
 	}
 	return false
@@ -125,6 +127,10 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 		lang = python.GetLanguage()
 	case ".rs":
 		lang = rust.GetLanguage()
+	case ".html":
+		lang = html.GetLanguage()
+	case ".css":
+		lang = css.GetLanguage()
 	default:
 		return fastChunk(content)
 	}
@@ -181,6 +187,19 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 			`(function_item name: (identifier) @name) @entity`,
 			`(impl_item type: (type_identifier) @name) @entity`,
 			`(trait_item name: (type_identifier) @name) @entity`,
+		}
+	case ".html":
+		queries = []string{
+			`(element (start_tag (tag_name) @name)) @entity`,
+			`(element (self_closing_tag (tag_name) @name)) @entity`,
+			`(element (start_tag (tag_name) @name (attribute (attribute_name) @attr_name (quoted_attribute_value) @attr_val))) @entity`,
+		}
+	case ".css":
+		queries = []string{
+			`(rule_set (selectors (class_selector (class_name) @name))) @entity`,
+			`(rule_set (selectors (id_selector (id_name) @name))) @entity`,
+			`(rule_set (selectors (tag_name) @name)) @entity`,
+			`(at_rule name: (at_keyword) @name) @entity`,
 		}
 	}
 
@@ -639,6 +658,22 @@ func parseRelationships(text string, ext string) []string {
 				for _, p := range parts {
 					relations = append(relations, strings.TrimSpace(strings.Split(p, " as ")[0]))
 				}
+			}
+		}
+	} else if ext == ".html" {
+		srcRegex := regexp.MustCompile(`(?:src|href)\s*=\s*['"]([^'"]+)['"]`)
+		matches := srcRegex.FindAllStringSubmatch(text, -1)
+		for _, m := range matches {
+			if len(m) > 1 {
+				relations = append(relations, m[1])
+			}
+		}
+	} else if ext == ".css" {
+		importRegex := regexp.MustCompile(`@import\s+(?:url\()?['"]([^'"]+)['"]\)?`)
+		matches := importRegex.FindAllStringSubmatch(text, -1)
+		for _, m := range matches {
+			if len(m) > 1 {
+				relations = append(relations, m[1])
 			}
 		}
 	}

@@ -23,6 +23,12 @@ var Models = map[string]ModelConfig{
 		Filename:     "bge-m3-q4.onnx",
 		Dimension:    1024,
 	},
+	"nomic-ai/nomic-embed-text-v1.5": {
+		OnnxURL:      "https://huggingface.co/Xenova/nomic-embed-text-v1.5/resolve/main/onnx/model_quantized.onnx",
+		TokenizerURL: "https://huggingface.co/Xenova/nomic-embed-text-v1.5/resolve/main/tokenizer.json",
+		Filename:     "nomic-embed-text-v1.5-q4.onnx",
+		Dimension:    768,
+	},
 	"BAAI/bge-small-en-v1.5": {
 		OnnxURL:      "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_quantized.onnx",
 		TokenizerURL: "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/tokenizer.json",
@@ -47,7 +53,7 @@ var Models = map[string]ModelConfig{
 func GetModelConfig(modelName string) (ModelConfig, error) {
 	mc, ok := Models[modelName]
 	if !ok {
-		return ModelConfig{}, fmt.Errorf("unsupported model %q, choose from: Xenova/bge-m3, BAAI/bge-small-en-v1.5, BAAI/bge-base-en-v1.5", modelName)
+		return ModelConfig{}, fmt.Errorf("unsupported model %q, choose from: nomic-ai/nomic-embed-text-v1.5, Xenova/bge-m3, BAAI/bge-small-en-v1.5", modelName)
 	}
 	return mc, nil
 }
