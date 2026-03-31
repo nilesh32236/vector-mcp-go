@@ -197,7 +197,11 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 	topK := util.ClampInt(int(request.GetFloat("topK", 10)), 1, 100)
 	category := request.GetString("category", "") // code, document, or empty
 	pathFilter := request.GetString("path_filter", "")
-	maxTokens := util.ClampInt(int(request.GetFloat("max_tokens", float64(indexer.MaxContextTokens))), 1, indexer.MaxContextTokens)
+	maxTokensFloat := request.GetFloat("max_tokens", float64(indexer.MaxContextTokens))
+	if maxTokensFloat <= 0 {
+		maxTokensFloat = float64(indexer.MaxContextTokens)
+	}
+	maxTokens := util.ClampInt(int(maxTokensFloat), 1, indexer.MaxContextTokens)
 
 	pids := request.GetStringSlice("cross_reference_projects", nil)
 	if len(pids) == 0 {
@@ -315,6 +319,9 @@ func (s *Server) handleSearchWorkspace(ctx context.Context, request mcp.CallTool
 	limitFloat := request.GetFloat("limit", 10)
 	pathFilter := request.GetString("path", "")
 
+	if limitFloat <= 0 {
+		limitFloat = 10
+	}
 	limit := util.ClampInt(int(limitFloat), 1, 100)
 
 	switch action {

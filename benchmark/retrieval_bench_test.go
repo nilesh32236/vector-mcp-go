@@ -77,6 +77,15 @@ func loadKPIThresholds(path string) (retrievalKPIThresholds, error) {
 	if err := json.Unmarshal(b, &thresholds); err != nil {
 		return retrievalKPIThresholds{}, err
 	}
+	if !isPositiveFinite(thresholds.MinRecall) {
+		return retrievalKPIThresholds{}, fmt.Errorf("invalid min_recall: %v (must be finite and > 0)", thresholds.MinRecall)
+	}
+	if !isPositiveFinite(thresholds.MinMRR) {
+		return retrievalKPIThresholds{}, fmt.Errorf("invalid min_mrr: %v (must be finite and > 0)", thresholds.MinMRR)
+	}
+	if !isPositiveFinite(thresholds.MinNDCG) {
+		return retrievalKPIThresholds{}, fmt.Errorf("invalid min_ndcg: %v (must be finite and > 0)", thresholds.MinNDCG)
+	}
 	return thresholds, nil
 }
 
@@ -126,23 +135,22 @@ func TestRetrievalKPIsOnPolyglotFixture(t *testing.T) {
 		}
 
 		relPath := config.GetRelativePath(f, fixtureRoot)
-		recs := make([]db.Record, 0, len(chunks))
-		for i, c := range chunks {
-			vec, embErr := emb.Embed(ctx, c.Content)
-			if embErr != nil {
-				t.Fatalf("embed failed: %v", embErr)
-			}
-			recs = append(recs, db.Record{
-				ID:        fmt.Sprintf("%s-%d", relPath, i),
-				Content:   c.Content,
-				Embedding: vec,
-				Metadata: map[string]string{
-					"path":       relPath,
-					"project_id": projectID,
-					"category":   "code",
-				},
-			})
+		fileContent := content
+		fileEmbedding, embErr := emb.Embed(ctx, fileContent)
+		if embErr != nil {
+			t.Fatalf("embed failed for file %s: %v", relPath, embErr)
 		}
+
+		recs := []db.Record{{
+			ID:        fmt.Sprintf("%s-0", relPath),
+			Content:   fileContent,
+			Embedding: fileEmbedding,
+			Metadata: map[string]string{
+				"path":       relPath,
+				"project_id": projectID,
+				"category":   "code",
+			},
+		}}
 		if insErr := store.Insert(ctx, recs); insErr != nil {
 			t.Fatalf("insert failed: %v", insErr)
 		}
@@ -182,8 +190,9 @@ func TestRetrievalKPIsOnPolyglotFixture(t *testing.T) {
 			t.Fatalf("search failed for query %q: %v", q.query, searchErr)
 		}
 
-		rankedPaths := extractPaths(res)
-		if containsPath(rankedPaths[:min(k, len(rankedPaths))], q.expectedPath) {
+		rankedPaths := dedupePaths(extractPaths(res))
+		topKPaths := rankedPaths[:min(k, len(rankedPaths))]
+		if containsPath(topKPaths, q.expectedPath) {
 			hits++
 		}
 		reciprocalRanks = append(reciprocalRanks, reciprocalRank(rankedPaths, q.expectedPath))
@@ -214,6 +223,11 @@ func TestRetrievalKPIsOnPolyglotFixture(t *testing.T) {
 	}
 }
 
+// isPositiveFinite reports whether v is finite and strictly positive.
+func isPositiveFinite(v float64) bool {
+	return v > 0 && !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
 // collectFixtureFiles returns all files under the fixture root.
 func collectFixtureFiles(root string) ([]string, error) {
 	files := []string{}
@@ -239,10 +253,24 @@ func extractPaths(records []db.Record) []string {
 	return paths
 }
 
+// dedupePaths removes duplicate paths while preserving ranked order.
+func dedupePaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	deduped := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if _, exists := seen[p]; exists {
+			continue
+		}
+		seen[p] = struct{}{}
+		deduped = append(deduped, p)
+	}
+	return deduped
+}
+
 // containsPath checks whether expected appears in the ranked path list.
 func containsPath(paths []string, expected string) bool {
 	for _, p := range paths {
-		if strings.Contains(p, expected) {
+		if p == expected {
 			return true
 		}
 	}
@@ -252,7 +280,7 @@ func containsPath(paths []string, expected string) bool {
 // reciprocalRank computes reciprocal rank for a single relevant expected path.
 func reciprocalRank(paths []string, expected string) float64 {
 	for i, p := range paths {
-		if strings.Contains(p, expected) {
+		if p == expected {
 			return 1.0 / float64(i+1)
 		}
 	}
@@ -268,7 +296,7 @@ func ndcgAtK(paths []string, expected string, k int) float64 {
 	dcg := 0.0
 	for i := 0; i < limit; i++ {
 		rel := 0.0
-		if strings.Contains(paths[i], expected) {
+		if paths[i] == expected {
 			rel = 1.0
 		}
 		dcg += rel / math.Log2(float64(i+2))
