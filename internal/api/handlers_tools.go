@@ -33,6 +33,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Preserve historical default behavior when top_k is omitted in JSON (zero value).
+	if req.TopK == 0 {
+		req.TopK = 5
+	}
 	req.TopK = util.ClampInt(req.TopK, 1, 100)
 
 	emb, err := s.embedder.Embed(r.Context(), req.Query)
