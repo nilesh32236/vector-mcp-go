@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -24,6 +25,7 @@ type Config struct {
 	EnableLiveIndexing bool
 	EmbedderPoolSize   int
 	ApiPort            string
+	AllowedOrigins     []string
 	Logger             *slog.Logger
 }
 
@@ -111,6 +113,20 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 	if apiPort == "" {
 		apiPort = "47821"
 	}
+
+	allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS")
+	var allowedOrigins []string
+	if allowedOriginsStr == "" {
+		allowedOrigins = []string{"*"}
+	} else {
+		for _, o := range strings.Split(allowedOriginsStr, ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				allowedOrigins = append(allowedOrigins, o)
+			}
+		}
+	}
+
 	return &Config{
 		ProjectRoot:        projectRoot,
 		DataDir:            dataDir,
@@ -125,6 +141,7 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		EnableLiveIndexing: enableLiveIndexing,
 		EmbedderPoolSize:   embedderPoolSize,
 		ApiPort:            apiPort,
+		AllowedOrigins:     allowedOrigins,
 		Logger:             logger,
 	}
 }
