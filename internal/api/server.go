@@ -53,7 +53,23 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 			log.Printf("MCP request: %s %s", r.Method, r.URL.String())
 
 			// CORS headers are essential for browser-based clients
-			w.Header().Set("Access-Control-Allow-Origin", "*")
+			origin := r.Header.Get("Origin")
+			allowedOrigin := ""
+			for _, o := range cfg.AllowedOrigins {
+				if o == "*" || o == origin {
+					allowedOrigin = o
+					break
+				}
+			}
+
+			if allowedOrigin != "" {
+				if allowedOrigin == "*" && origin != "" {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+				} else {
+					w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+				}
+			}
+			w.Header().Add("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Authorization, MCP-Protocol-Version")
 			w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
@@ -87,7 +103,23 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 	addr := fmt.Sprintf(":%s", cfg.ApiPort)
 
 	corsMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		allowedOrigin := ""
+		for _, o := range cfg.AllowedOrigins {
+			if o == "*" || o == origin {
+				allowedOrigin = o
+				break
+			}
+		}
+
+		if allowedOrigin != "" {
+			if allowedOrigin == "*" && origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			} else {
+				w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			}
+		}
+		w.Header().Add("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, X-Requested-With, Accept, Origin")
 		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
