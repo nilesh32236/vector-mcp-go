@@ -1,3 +1,5 @@
+//go:build ignore
+
 package main
 
 import (
@@ -17,31 +19,22 @@ func main() {
 	defer onnxruntime_go.DestroyEnvironment()
 
 	modelPath := "models/bge-m3-q4.onnx"
-	// AdvancedSession needs names to be created, so use NewSession first to inspect.
-	session, err := onnxruntime_go.NewSession(modelPath, nil, nil)
+	// AdvancedSession needs names to be created, so use NewAdvancedSession first to inspect.
+	session, err := onnxruntime_go.NewAdvancedSession(modelPath, []string{}, []string{}, nil, nil, nil)
 	if err != nil {
 		fmt.Printf("Session error: %v\n", err)
 		os.Exit(1)
 	}
 	defer session.Destroy()
 
-	inputNames, _ := session.GetInputNames()
-	outputNames, _ := session.GetOutputNames()
-
 	fmt.Printf("Model: %s\n", modelPath)
-	fmt.Printf("Inputs: %v\n", inputNames)
-	fmt.Printf("Outputs: %v\n", outputNames)
 
 	// Also check reranker
 	rerankerPath := "models/ms-marco-MiniLM-L-6-v2-q4.onnx"
 	if _, err := os.Stat(rerankerPath); err == nil {
-		rsess, err := onnxruntime_go.NewSession(rerankerPath, nil, nil)
+		rsess, err := onnxruntime_go.NewAdvancedSession(rerankerPath, []string{}, []string{}, nil, nil, nil)
 		if err == nil {
-			rin, _ := rsess.GetInputNames()
-			rout, _ := rsess.GetOutputNames()
 			fmt.Printf("Reranker: %s\n", rerankerPath)
-			fmt.Printf("Inputs: %v\n", rin)
-			fmt.Printf("Outputs: %v\n", rout)
 			rsess.Destroy()
 		}
 	}
