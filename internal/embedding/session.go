@@ -3,6 +3,7 @@ package embedding
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"unicode/utf8"
@@ -22,6 +23,7 @@ type SessionData struct {
 	tokenTypeIdsTensor  *onnxruntime_go.Tensor[int64]
 	outputTensor        *onnxruntime_go.Tensor[float32]
 	dimension           int
+	modelName           string
 }
 
 type Embedder struct {
@@ -167,6 +169,7 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 		tokenTypeIdsTensor:  tokenTypeIdsTensor,
 		outputTensor:        outputTensor,
 		dimension:           dim,
+		modelName:           mc.Filename,
 	}, nil
 }
 
@@ -230,10 +233,30 @@ func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
 
 	fullOutput := s.outputTensor.GetData()
 	embedding := make([]float32, s.dimension)
+
+	// Xenova ports of BGE models usually support CLS pooling (token 0)
+	// Some models like BGE-M3 might benefit from Mean Pooling.
+	// We'll stick with CLS but add normalization which is CRITICAL for Cosine Similarity.
 	copy(embedding, fullOutput[:s.dimension])
+
+	normalize(embedding)
 
 	return embedding, nil
 }
+
+func normalize(v []float32) {
+	var sum float32
+	for _, x := range v {
+		sum += x * x
+	}
+	norm := float32(math.Sqrt(float64(sum)))
+	if norm > 1e-9 {
+		for i := range v {
+			v[i] /= norm
+		}
+	}
+}
+
 
 func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	results := make([][]float32, len(texts))

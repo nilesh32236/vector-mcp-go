@@ -20,9 +20,10 @@ func (s *Server) handleApplyCodePatch(ctx context.Context, request mcp.CallToolR
 		return mcp.NewToolResultError("path and search string are required"), nil
 	}
 
-	absPath := path
-	if !filepath.IsAbs(path) {
-		absPath = filepath.Join(s.cfg.ProjectRoot, path)
+	// Validate path for security
+	absPath, err := s.pathValidator.ValidatePath(path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
 	}
 
 	content, err := os.ReadFile(absPath)
@@ -52,12 +53,18 @@ func (s *Server) handleRunLinterAndFix(ctx context.Context, request mcp.CallTool
 		return mcp.NewToolResultError("path and tool are required"), nil
 	}
 
+	// Validate path for security
+	absPath, err := s.pathValidator.ValidatePath(path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
+	}
+
 	// For now, we only support 'go fmt' as a built-in.
 	// We can expand this to execute arbitrary commands if needed, but safety first.
 	if tool == "go fmt" {
 		// Run go fmt on the path
 		// We'll use os/exec here or similar in a more robust implementation
-		return mcp.NewToolResultText("Go fmt executed (mock implementation for now)"), nil
+		return mcp.NewToolResultText(fmt.Sprintf("Go fmt executed on %s (mock implementation for now)", absPath)), nil
 	}
 
 	return mcp.NewToolResultError(fmt.Sprintf("tool '%s' not supported yet", tool)), nil
@@ -72,9 +79,10 @@ func (s *Server) handleCreateFile(ctx context.Context, request mcp.CallToolReque
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
-	absPath := path
-	if !filepath.IsAbs(path) {
-		absPath = filepath.Join(s.cfg.ProjectRoot, path)
+	// Validate path for security
+	absPath, err := s.pathValidator.ValidatePath(path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
 	}
 
 	// Ensure directory exists

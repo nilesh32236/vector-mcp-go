@@ -21,6 +21,7 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
 	"github.com/nilesh32236/vector-mcp-go/internal/mutation"
+	"github.com/nilesh32236/vector-mcp-go/internal/security/pathguard"
 	"github.com/nilesh32236/vector-mcp-go/internal/system"
 	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
@@ -80,6 +81,7 @@ type Server struct {
 	throttler        *system.MemThrottler                                                                           // Shared system memory throttler
 	safety           *mutation.SafetyChecker                                                                        // Safety checker for mutation integrity
 	graph            *db.KnowledgeGraph                                                                             // Code relationship graph for reasoning
+	pathValidator    *pathguard.Validator                                                                           // Path validator for security
 	toolHandlers     map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) // Map of tool names to handlers
 }
 
@@ -103,6 +105,15 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 		graph:            db.NewKnowledgeGraph(),
 		toolHandlers:     make(map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)),
 	}
+
+	// Initialize path validator for security
+	pathValidator, err := pathguard.NewValidator(cfg.ProjectRoot, pathguard.DefaultOptions())
+	if err != nil {
+		logger.Warn("failed to create path validator, using permissive fallback", "error", err)
+		// Create a permissive validator that at least checks for traversal
+		pathValidator, _ = pathguard.NewValidator("/", pathguard.Options{AllowAbsolute: true, MaxPathDepth: 100})
+	}
+	srv.pathValidator = pathValidator
 
 	// Initialize SafetyChecker with a provider that uses the server's session management
 	srv.safety = mutation.NewSafetyChecker(func(path string) (*lsp.LSPManager, error) {
