@@ -16,6 +16,8 @@ import (
 	"github.com/philippgille/chromem-go"
 )
 
+var identifierRegex = regexp.MustCompile(`[a-z][A-Z]|[a-z]_[a-z]|[:.()\[\]{}]`)
+
 type Store struct {
 	db          *chromem.DB
 	collection  *chromem.Collection
@@ -257,7 +259,7 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 	vectorWeight := 1.0
 
 	// Heuristic: If query contains code-like identifiers, boost lexical matches
-	hasIdentifier := regexp.MustCompile(`[a-z][A-Z]|[a-z]_[a-z]|[:.()\[\]{}]`).MatchString(query)
+	hasIdentifier := identifierRegex.MatchString(query)
 	if hasIdentifier {
 		lexicalWeight = 1.5 // 50% boost for lexical when symbols are involved
 	}
