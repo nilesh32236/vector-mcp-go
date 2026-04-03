@@ -17,9 +17,13 @@ func TestLoadConfig(t *testing.T) {
 		t.Setenv("LOG_PATH", "")
 		t.Setenv("PROJECT_ROOT", "")
 		t.Setenv("MODEL_NAME", "")
+		t.Setenv("RERANKER_MODEL_NAME", "")
 		t.Setenv("EMBEDDER_POOL_SIZE", "")
 		t.Setenv("API_PORT", "")
 		t.Setenv("DISABLE_FILE_WATCHER", "")
+		t.Setenv("LOG_LEVEL", "")
+		t.Setenv("LOG_FORMAT", "")
+		t.Setenv("MATRYOSHKA_DIM", "")
 		t.Setenv("HF_TOKEN", "")
 
 		cfg := LoadConfig("", "", "")
@@ -39,6 +43,15 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.EmbedderPoolSize != 1 {
 			t.Errorf("expected EmbedderPoolSize 1, got %d", cfg.EmbedderPoolSize)
 		}
+		if cfg.LogLevel != "info" {
+			t.Errorf("expected LogLevel info, got %s", cfg.LogLevel)
+		}
+		if cfg.LogFormat != "json" {
+			t.Errorf("expected LogFormat json, got %s", cfg.LogFormat)
+		}
+		if cfg.MatryoshkaDim != 0 {
+			t.Errorf("expected MatryoshkaDim 0, got %d", cfg.MatryoshkaDim)
+		}
 	})
 
 	t.Run("Overrides and EnvVars", func(t *testing.T) {
@@ -53,6 +66,9 @@ func TestLoadConfig(t *testing.T) {
 		t.Setenv("DISABLE_FILE_WATCHER", "true")
 		t.Setenv("HF_TOKEN", "test-hf-token")
 		t.Setenv("RERANKER_MODEL_NAME", "custom-reranker")
+		t.Setenv("LOG_LEVEL", "debug")
+		t.Setenv("LOG_FORMAT", "text")
+		t.Setenv("MATRYOSHKA_DIM", "256")
 
 		cfg := LoadConfig(customDataDir, customModelsDir, customDbPath)
 
@@ -86,6 +102,15 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.HFToken != "test-hf-token" {
 			t.Errorf("expected HFToken test-hf-token, got %s", cfg.HFToken)
 		}
+		if cfg.LogLevel != "debug" {
+			t.Errorf("expected LogLevel debug, got %s", cfg.LogLevel)
+		}
+		if cfg.LogFormat != "text" {
+			t.Errorf("expected LogFormat text, got %s", cfg.LogFormat)
+		}
+		if cfg.MatryoshkaDim != 256 {
+			t.Errorf("expected MatryoshkaDim 256, got %d", cfg.MatryoshkaDim)
+		}
 	})
 
 	t.Run("Invalid pool size", func(t *testing.T) {
@@ -109,6 +134,15 @@ func TestLoadConfig(t *testing.T) {
 		cfg := LoadConfig("", "", "")
 		if cfg.RerankerModelName != "" {
 			t.Errorf("expected empty RerankerModelName for none sentinel, got %q", cfg.RerankerModelName)
+		}
+	})
+
+	t.Run("Invalid matryoshka dim falls back to disabled", func(t *testing.T) {
+		t.Setenv("DATA_DIR", filepath.Join(tempDir, "data_matryoshka_invalid"))
+		t.Setenv("MATRYOSHKA_DIM", "-64")
+		cfg := LoadConfig("", "", "")
+		if cfg.MatryoshkaDim != 0 {
+			t.Errorf("expected MatryoshkaDim 0 for invalid input, got %d", cfg.MatryoshkaDim)
 		}
 	})
 }

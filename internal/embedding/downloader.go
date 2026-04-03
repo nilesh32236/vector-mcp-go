@@ -9,11 +9,33 @@ import (
 )
 
 type ModelConfig struct {
-	OnnxURL      string
-	TokenizerURL string
-	Filename     string
-	Dimension    int
-	IsReranker   bool
+	OnnxURL       string
+	TokenizerURL  string
+	Filename      string
+	Dimension     int
+	IsReranker    bool
+	MatryoshkaDim int // optional: truncate embeddings to this dim (MRL models only)
+}
+
+// EffectiveDimension returns the vector width emitted by the embedder after any
+// optional Matryoshka truncation is applied.
+func (mc ModelConfig) EffectiveDimension() int {
+	if mc.IsReranker {
+		return mc.Dimension
+	}
+	if mc.MatryoshkaDim > 0 && mc.MatryoshkaDim < mc.Dimension {
+		return mc.MatryoshkaDim
+	}
+	return mc.Dimension
+}
+
+// WithMatryoshkaDimension applies a runtime truncation target when valid.
+func (mc ModelConfig) WithMatryoshkaDimension(dim int) ModelConfig {
+	if mc.IsReranker || dim <= 0 || dim >= mc.Dimension {
+		return mc
+	}
+	mc.MatryoshkaDim = dim
+	return mc
 }
 
 // Models contains all embedding and reranker model presets supported by the runtime downloader.

@@ -169,6 +169,26 @@ func TestHandleLive(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpoint(t *testing.T) {
+	cfg := &config.Config{ApiPort: "8080"}
+	server := NewServer(cfg, nil, nil, nil)
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	server.srv.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/plain; version=0.0.4; charset=utf-8" {
+		t.Fatalf("unexpected content type: %s", got)
+	}
+	if body := rec.Body.String(); body == "" {
+		t.Fatal("expected metrics response body")
+	}
+}
+
 func TestHandleSearch_Errors(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -178,7 +198,7 @@ func TestHandleSearch_Errors(t *testing.T) {
 		expectedStatus int
 	}{
 		{
-			name: "search with invalid JSON",
+			name:           "search with invalid JSON",
 			requestBody:    "invalid json",
 			storeGetter:    nil,
 			embedder:       nil,

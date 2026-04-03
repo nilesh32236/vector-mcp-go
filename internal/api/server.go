@@ -17,6 +17,8 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 	"github.com/nilesh32236/vector-mcp-go/internal/mcp"
+	"github.com/nilesh32236/vector-mcp-go/internal/observability/metrics"
+	"github.com/nilesh32236/vector-mcp-go/internal/observability/tracing"
 	"github.com/nilesh32236/vector-mcp-go/internal/security/ratelimit"
 )
 
@@ -36,7 +38,7 @@ type Server struct {
 // NewServer initializes and returns a new API Server.
 // It sets up routing for chat sessions, semantic search, and MCP tool proxies.
 func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Embedder, mcpServer *mcp.Server) *Server {
-
+	metrics.InitializeDefaultMetrics()
 	mux := http.NewServeMux()
 
 	server := &Server{
@@ -51,6 +53,7 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 	mux.HandleFunc("GET /api/health", server.handleHealth)
 	mux.HandleFunc("GET /api/ready", server.handleReady)
 	mux.HandleFunc("GET /api/live", server.handleLive)
+	mux.Handle("GET /metrics", metrics.DefaultCollector.Handler())
 
 	// MCP HTTP transport (Streamable-HTTP specification)
 	if mcpServer != nil && mcpServer.MCPServer != nil {
@@ -93,29 +96,52 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 
 	addr := fmt.Sprintf(":%s", cfg.ApiPort)
 
-	corsMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	rateLimitedMux := server.rateLimiter.Handler(mux)
+
+	observedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		timer := metrics.NewTimer(metrics.RequestDuration)
+		ctx, span := tracing.StartSpan(r.Context(), "api.server", fmt.Sprintf("http %s %s", r.Method, r.URL.Path))
+		defer span.End()
+
+		recorder := &statusRecorder{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK,
+		}
+
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, X-Requested-With, Accept, Origin")
 		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
 
 		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
+			recorder.WriteHeader(http.StatusNoContent)
+			timer.ObserveDuration()
 			return
 		}
 
-		mux.ServeHTTP(w, r)
+		rateLimitedMux.ServeHTTP(recorder, r.WithContext(ctx))
+		timer.ObserveDuration()
+		if recorder.statusCode >= http.StatusBadRequest && metrics.ErrorsTotal != nil {
+			metrics.ErrorsTotal.Inc()
+		}
 	})
-
-	// Wrap with rate limiting middleware
-	rateLimitedHandler := server.rateLimiter.Handler(corsMux)
 
 	server.srv = &http.Server{
 		Addr:    addr,
-		Handler: rateLimitedHandler,
+		Handler: observedMux,
 	}
 
 	return server
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
 }
 
 // Start launches the HTTP API server on the configured port.
@@ -152,10 +178,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if s.storeGetter != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		_, err := s.storeGetter(ctx)
+		store, err := s.storeGetter(ctx)
 		if err != nil {
 			dbStatus = "unhealthy"
 			allHealthy = false
+		} else if store != nil && metrics.DBRecordsTotal != nil {
+			metrics.DBRecordsTotal.Set(float64(store.Count()))
 		}
 	}
 	checks["database"] = map[string]interface{}{

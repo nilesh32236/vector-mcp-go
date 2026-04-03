@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"unicode/utf8"
 
+	"github.com/nilesh32236/vector-mcp-go/internal/observability/tracing"
 	"github.com/sugarme/tokenizer"
 	"github.com/sugarme/tokenizer/pretrained"
 	"github.com/yalue/onnxruntime_go"
@@ -24,6 +25,7 @@ type SessionData struct {
 	outputTensor        *onnxruntime_go.Tensor[float32]
 	dimension           int
 	modelName           string
+	matryoshkaDim       int // 0 = disabled; >0 = truncate to this many dims (MRL)
 }
 
 type Embedder struct {
@@ -170,10 +172,13 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 		outputTensor:        outputTensor,
 		dimension:           dim,
 		modelName:           mc.Filename,
+		matryoshkaDim:       mc.MatryoshkaDim,
 	}, nil
 }
 
 func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err error) {
+	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.embed")
+	defer span.End()
 	return e.embSess.embedSingle(text)
 }
 
@@ -239,6 +244,14 @@ func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
 	// We'll stick with CLS but add normalization which is CRITICAL for Cosine Similarity.
 	copy(embedding, fullOutput[:s.dimension])
 
+	// Matryoshka truncation: nomic-embed-text-v1.5 supports MRL — truncating to a
+	// smaller dimension (e.g. 256 of 768) retains most quality at lower memory cost.
+	// The model signals this via a "matryoshka_dim" field in ModelConfig (set via
+	// MATRYOSHKA_DIM env var). We truncate then re-normalise.
+	if s.matryoshkaDim > 0 && s.matryoshkaDim < s.dimension {
+		embedding = embedding[:s.matryoshkaDim]
+	}
+
 	normalize(embedding)
 
 	return embedding, nil
@@ -257,8 +270,10 @@ func normalize(v []float32) {
 	}
 }
 
-
 func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.embed_batch")
+	defer span.End()
+
 	results := make([][]float32, len(texts))
 	for i, text := range texts {
 		emb, err := e.Embed(ctx, text)
@@ -298,6 +313,9 @@ func (s *SessionData) Close() {
 }
 
 func (e *Embedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
+	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.rerank_batch")
+	defer span.End()
+
 	if e.rerankSess == nil {
 		return nil, fmt.Errorf("reranker model not loaded")
 	}

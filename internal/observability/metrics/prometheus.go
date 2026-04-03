@@ -114,18 +114,18 @@ func (c *Collector) NewHistogramWithBuckets(name, help string, labels map[string
 
 // DefaultBuckets are the default histogram buckets for timing (in seconds).
 var DefaultBuckets = []float64{
-	0.001,  // 1ms
-	0.005,  // 5ms
-	0.01,   // 10ms
-	0.025,  // 25ms
-	0.05,   // 50ms
-	0.1,    // 100ms
-	0.25,   // 250ms
-	0.5,    // 500ms
-	1.0,    // 1s
-	2.5,    // 2.5s
-	5.0,    // 5s
-	10.0,   // 10s
+	0.001, // 1ms
+	0.005, // 5ms
+	0.01,  // 10ms
+	0.025, // 25ms
+	0.05,  // 50ms
+	0.1,   // 100ms
+	0.25,  // 250ms
+	0.5,   // 500ms
+	1.0,   // 1s
+	2.5,   // 2.5s
+	5.0,   // 5s
+	10.0,  // 10s
 }
 
 // Counter methods
@@ -359,6 +359,8 @@ func (c *Collector) Handler() http.Handler {
 // DefaultCollector is the default global collector.
 var DefaultCollector = NewCollector()
 
+var initializeDefaultMetricsOnce sync.Once
+
 // Global metric instances
 var (
 	// SearchDuration tracks search operation durations
@@ -379,52 +381,54 @@ var (
 
 // InitializeDefaultMetrics initializes the default metrics.
 func InitializeDefaultMetrics() {
-	SearchDuration = DefaultCollector.NewHistogram(
-		"vector_mcp_search_duration_seconds",
-		"Duration of search operations in seconds",
-		nil,
-	)
+	initializeDefaultMetricsOnce.Do(func() {
+		SearchDuration = DefaultCollector.NewHistogram(
+			"vector_mcp_search_duration_seconds",
+			"Duration of search operations in seconds",
+			nil,
+		)
 
-	IndexFiles = DefaultCollector.NewCounter(
-		"vector_mcp_index_files_total",
-		"Total number of indexed files",
-		nil,
-	)
+		IndexFiles = DefaultCollector.NewCounter(
+			"vector_mcp_index_files_total",
+			"Total number of indexed files",
+			nil,
+		)
 
-	IndexBytes = DefaultCollector.NewCounter(
-		"vector_mcp_index_bytes_total",
-		"Total bytes indexed",
-		nil,
-	)
+		IndexBytes = DefaultCollector.NewCounter(
+			"vector_mcp_index_bytes_total",
+			"Total bytes indexed",
+			nil,
+		)
 
-	EmbeddingPoolAvailable = DefaultCollector.NewGauge(
-		"vector_mcp_embedding_pool_available",
-		"Number of available embedders in the pool",
-		nil,
-	)
+		EmbeddingPoolAvailable = DefaultCollector.NewGauge(
+			"vector_mcp_embedding_pool_available",
+			"Number of available embedders in the pool",
+			nil,
+		)
 
-	DBRecordsTotal = DefaultCollector.NewGauge(
-		"vector_mcp_db_records_total",
-		"Total number of records in the database",
-		nil,
-	)
+		DBRecordsTotal = DefaultCollector.NewGauge(
+			"vector_mcp_db_records_total",
+			"Total number of records in the database",
+			nil,
+		)
 
-	RequestDuration = DefaultCollector.NewHistogram(
-		"vector_mcp_request_duration_seconds",
-		"Duration of HTTP requests in seconds",
-		nil,
-	)
+		RequestDuration = DefaultCollector.NewHistogram(
+			"vector_mcp_request_duration_seconds",
+			"Duration of HTTP requests in seconds",
+			nil,
+		)
 
-	ErrorsTotal = DefaultCollector.NewCounter(
-		"vector_mcp_errors_total",
-		"Total number of errors",
-		nil,
-	)
+		ErrorsTotal = DefaultCollector.NewCounter(
+			"vector_mcp_errors_total",
+			"Total number of errors",
+			nil,
+		)
+	})
 }
 
 // Timer helps track operation durations.
 type Timer struct {
-	start    time.Time
+	start     time.Time
 	histogram *Histogram
 }
 
@@ -450,6 +454,8 @@ func (t *Timer) Duration() time.Duration {
 
 // expvar integration for compatibility with existing expvar-based metrics
 func init() {
+	InitializeDefaultMetrics()
+
 	// Register a custom expvar that exports Prometheus metrics
 	expvar.Publish("prometheus", expvar.Func(func() interface{} {
 		return DefaultCollector.Export()
