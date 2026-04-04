@@ -118,6 +118,15 @@ func (s *Service) Embed(req EmbedRequest, resp *EmbedResponse) error {
 	return nil
 }
 
+func (s *Service) EmbedQuery(req EmbedRequest, resp *EmbedResponse) error {
+	emb, err := s.Embedder.EmbedQuery(context.Background(), req.Text)
+	if err != nil {
+		return err
+	}
+	resp.Embedding = emb
+	return nil
+}
+
 func (s *Service) EmbedBatch(req EmbedBatchRequest, resp *EmbedBatchResponse) error {
 	embs, err := s.Embedder.EmbedBatch(context.Background(), req.Texts)
 	if err != nil {
@@ -458,6 +467,32 @@ func (re *RemoteEmbedder) Embed(ctx context.Context, text string) ([]float32, er
 	done := make(chan error, 1)
 	go func() {
 		done <- client.Call("VectorDaemon.Embed", EmbedRequest{Text: text}, &resp)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+		return resp.Embedding, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(30 * time.Second):
+		return nil, fmt.Errorf("embedding RPC timeout")
+	}
+}
+
+func (re *RemoteEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	client, err := rpc.Dial("unix", re.socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to master daemon: %w", err)
+	}
+	defer client.Close()
+
+	var resp EmbedResponse
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Call("VectorDaemon.EmbedQuery", EmbedRequest{Text: text}, &resp)
 	}()
 
 	select {

@@ -26,6 +26,7 @@ type SessionData struct {
 	dimension           int
 	modelName           string
 	matryoshkaDim       int // 0 = disabled; >0 = truncate to this many dims (MRL)
+	adapter             ModelAdapter
 }
 
 type Embedder struct {
@@ -173,16 +174,23 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 		dimension:           dim,
 		modelName:           mc.Filename,
 		matryoshkaDim:       mc.MatryoshkaDim,
+		adapter:             GetAdapter(mc.Filename),
 	}, nil
 }
 
 func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err error) {
 	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.embed")
 	defer span.End()
-	return e.embSess.embedSingle(text)
+	return e.embSess.embedSingle(text, false)
 }
 
-func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
+func (e *Embedder) EmbedQuery(ctx context.Context, text string) (emb []float32, err error) {
+	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.embed_query")
+	defer span.End()
+	return e.embSess.embedSingle(text, true)
+}
+
+func (s *SessionData) embedSingle(text string, isQuery bool) (emb []float32, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("tokenizer panic: %v", r)
@@ -194,6 +202,10 @@ func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
 	}
 	if len(text) == 0 {
 		return nil, fmt.Errorf("empty input text")
+	}
+
+	if s.adapter != nil {
+		text = s.adapter.Preprocess(text, isQuery)
 	}
 
 	runes := []rune(text)
