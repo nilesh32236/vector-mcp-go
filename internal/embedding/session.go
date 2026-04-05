@@ -3,12 +3,10 @@ package embedding
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"unicode/utf8"
 
-	"github.com/nilesh32236/vector-mcp-go/internal/observability/tracing"
 	"github.com/sugarme/tokenizer"
 	"github.com/sugarme/tokenizer/pretrained"
 	"github.com/yalue/onnxruntime_go"
@@ -24,9 +22,6 @@ type SessionData struct {
 	tokenTypeIdsTensor  *onnxruntime_go.Tensor[int64]
 	outputTensor        *onnxruntime_go.Tensor[float32]
 	dimension           int
-	modelName           string
-	matryoshkaDim       int // 0 = disabled; >0 = truncate to this many dims (MRL)
-	adapter             ModelAdapter
 }
 
 type Embedder struct {
@@ -172,25 +167,14 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 		tokenTypeIdsTensor:  tokenTypeIdsTensor,
 		outputTensor:        outputTensor,
 		dimension:           dim,
-		modelName:           mc.Filename,
-		matryoshkaDim:       mc.MatryoshkaDim,
-		adapter:             GetAdapter(mc.Filename),
 	}, nil
 }
 
 func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err error) {
-	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.embed")
-	defer span.End()
-	return e.embSess.embedSingle(text, false)
+	return e.embSess.embedSingle(text)
 }
 
-func (e *Embedder) EmbedQuery(ctx context.Context, text string) (emb []float32, err error) {
-	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.embed_query")
-	defer span.End()
-	return e.embSess.embedSingle(text, true)
-}
-
-func (s *SessionData) embedSingle(text string, isQuery bool) (emb []float32, err error) {
+func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("tokenizer panic: %v", r)
@@ -202,10 +186,6 @@ func (s *SessionData) embedSingle(text string, isQuery bool) (emb []float32, err
 	}
 	if len(text) == 0 {
 		return nil, fmt.Errorf("empty input text")
-	}
-
-	if s.adapter != nil {
-		text = s.adapter.Preprocess(text, isQuery)
 	}
 
 	runes := []rune(text)
@@ -250,42 +230,12 @@ func (s *SessionData) embedSingle(text string, isQuery bool) (emb []float32, err
 
 	fullOutput := s.outputTensor.GetData()
 	embedding := make([]float32, s.dimension)
-
-	// Xenova ports of BGE models usually support CLS pooling (token 0)
-	// Some models like BGE-M3 might benefit from Mean Pooling.
-	// We'll stick with CLS but add normalization which is CRITICAL for Cosine Similarity.
 	copy(embedding, fullOutput[:s.dimension])
-
-	// Matryoshka truncation: nomic-embed-text-v1.5 supports MRL — truncating to a
-	// smaller dimension (e.g. 256 of 768) retains most quality at lower memory cost.
-	// The model signals this via a "matryoshka_dim" field in ModelConfig (set via
-	// MATRYOSHKA_DIM env var). We truncate then re-normalise.
-	if s.matryoshkaDim > 0 && s.matryoshkaDim < s.dimension {
-		embedding = embedding[:s.matryoshkaDim]
-	}
-
-	normalize(embedding)
 
 	return embedding, nil
 }
 
-func normalize(v []float32) {
-	var sum float32
-	for _, x := range v {
-		sum += x * x
-	}
-	norm := float32(math.Sqrt(float64(sum)))
-	if norm > 1e-9 {
-		for i := range v {
-			v[i] /= norm
-		}
-	}
-}
-
 func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.embed_batch")
-	defer span.End()
-
 	results := make([][]float32, len(texts))
 	for i, text := range texts {
 		emb, err := e.Embed(ctx, text)
@@ -325,9 +275,6 @@ func (s *SessionData) Close() {
 }
 
 func (e *Embedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
-	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.rerank_batch")
-	defer span.End()
-
 	if e.rerankSess == nil {
 		return nil, fmt.Errorf("reranker model not loaded")
 	}
