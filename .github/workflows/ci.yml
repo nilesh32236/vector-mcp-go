@@ -26,11 +26,22 @@ jobs:
     - name: Verify Dependencies
       run: go mod verify
 
+    - name: Download LanceDB Library
+      run: |
+        LANCEDB_VERSION="v0.1.2"
+        URL="https://github.com/lancedb/lancedb-go/releases/download/${LANCEDB_VERSION}/lancedb-go-native-binaries.tar.gz"
+        wget -qO lancedb.tar.gz "$URL"
+        mkdir -p lancedb_tmp
+        tar -xzf lancedb.tar.gz -C lancedb_tmp
+        mkdir -p lib/linux_amd64
+        mv lancedb_tmp/lib/linux_amd64/liblancedb_go.a lib/linux_amd64/
+        rm -rf lancedb_tmp lancedb.tar.gz
+
     - name: Build
-      run: go build -v ./...
+      run: CGO_LDFLAGS="${{ github.workspace }}/lib/linux_amd64/liblancedb_go.a -lm" go build -v ./...
 
     - name: Test
-      run: go test -v ./...
+      run: CGO_LDFLAGS="${{ github.workspace }}/lib/linux_amd64/liblancedb_go.a -lm" go test -v ./...
 
     - name: Vet
-      run: go vet ./...
+      run: CGO_LDFLAGS="${{ github.workspace }}/lib/linux_amd64/liblancedb_go.a -lm" go vet ./...
