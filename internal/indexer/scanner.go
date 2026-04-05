@@ -52,16 +52,7 @@ func EstimateTokens(text string) int {
 type Embedder interface {
 	RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error)
 	Embed(ctx context.Context, text string) ([]float32, error)
-	EmbedQuery(ctx context.Context, text string) ([]float32, error)
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
-}
-
-// Progress represents the real-time state of an indexing operation.
-type Progress struct {
-	Total      int
-	Current    int
-	File       string
-	Percentage float64
 }
 
 // IndexerOptions groups parameters needed for indexing operations.
@@ -71,7 +62,6 @@ type IndexerOptions struct {
 	Embedder    Embedder
 	ProgressMap *sync.Map
 	Logger      *slog.Logger
-	ProgressCh  chan<- Progress // Optional channel for streaming updates
 }
 
 // IndexFullCodebase performs a comprehensive index of the project directory.
@@ -191,19 +181,6 @@ func IndexFullCodebase(ctx context.Context, opts IndexerOptions) (IndexSummary, 
 			opts.ProgressMap.Store(opts.Config.ProjectRoot, status)
 		}
 		opts.Store.SetStatus(ctx, opts.Config.ProjectRoot, status)
-
-		if opts.ProgressCh != nil {
-			select {
-			case opts.ProgressCh <- Progress{
-				Total:      totalToIndex,
-				Current:    processed,
-				File:       r.RelPath,
-				Percentage: progress,
-			}:
-			default:
-				// Don't block if the channel is full or nobody is listening
-			}
-		}
 	}
 
 	if len(batch) > 0 {

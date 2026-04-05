@@ -208,7 +208,7 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 		pids = []string{s.cfg.ProjectRoot}
 	}
 
-	emb, err := s.embedder.EmbedQuery(ctx, query)
+	emb, err := s.embedder.Embed(ctx, query)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
 	}

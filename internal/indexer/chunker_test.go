@@ -311,41 +311,10 @@ type Service interface {
 }
 
 func BenchmarkParseRelationships(b *testing.B) {
-	benchmarks := []struct {
-		name string
-		text string
-		ext  string
-	}{
-		{
-			name: "TypeScript",
-			text: `import { X, Y } from 'module1';
+	text := `import { X, Y } from 'module1';
 import 'module2';
-require('module3');`,
-			ext: ".ts",
-		},
-		{
-			name: "Go",
-			text: `import "fmt"
-import (
-	"strings"
-	alias "github.com/pkg/errors"
-)`,
-			ext: ".go",
-		},
-		{
-			name: "PHP",
-			text: `require_once 'vendor/autoload.php';
-use App\Models\User;
-use Some\Namespace\ClassA, Some\Namespace\ClassB as B;`,
-			ext: ".php",
-		},
-	}
-
-	for _, bm := range benchmarks {
-		b.Run(bm.name, func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				parseRelationships(bm.text, bm.ext)
-			}
-		})
+require('module3');`
+	for i := 0; i < b.N; i++ {
+		parseRelationships(text, ".ts")
 	}
 }

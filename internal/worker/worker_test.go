@@ -18,10 +18,6 @@ func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 	return make([]float32, 1024), nil
 }
 
-func (m *mockEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
-	return make([]float32, 1024), nil
-}
-
 func (m *mockEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	results := make([][]float32, len(texts))
 	for i, text := range texts {
