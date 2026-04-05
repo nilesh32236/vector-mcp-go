@@ -13,6 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nilesh32236/vector-mcp-go/internal/db/lexical"
+	"github.com/nilesh32236/vector-mcp-go/internal/observability/metrics"
+	"github.com/nilesh32236/vector-mcp-go/internal/observability/tracing"
 	"github.com/philippgille/chromem-go"
 )
 
@@ -22,6 +25,7 @@ type Store struct {
 	Dimension   int
 	parsedCache map[string][]string
 	cacheMu     sync.RWMutex
+	bm25        *lexical.Index // BM25 inverted index for O(log n) lexical search
 }
 
 type Record struct {
@@ -46,7 +50,7 @@ func Connect(ctx context.Context, dbPath string, collectionName string, dimensio
 		}
 	}
 
-	s := &Store{db: db, collection: col, Dimension: dimension, parsedCache: make(map[string][]string)}
+	s := &Store{db: db, collection: col, Dimension: dimension, parsedCache: make(map[string][]string), bm25: lexical.NewIndex()}
 
 	// Probe for dimension mismatch if the collection already has data.
 	if col.Count() > 0 {
@@ -60,10 +64,88 @@ func Connect(ctx context.Context, dbPath string, collectionName string, dimensio
 		}
 	}
 
+	if err := s.rebuildLexicalIndex(ctx); err != nil {
+		return nil, fmt.Errorf("failed to bootstrap lexical index: %w", err)
+	}
+
 	return s, nil
 }
 
+func (s *Store) rebuildLexicalIndex(ctx context.Context) error {
+	count := s.collection.Count()
+	if count == 0 {
+		return nil
+	}
+
+	dummyEmb := make([]float32, s.Dimension)
+	results, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, nil, nil)
+	if err != nil {
+		return err
+	}
+
+	index := lexical.NewIndex()
+	for _, doc := range results {
+		index.Add(doc.ID, s.lexicalDocumentText(doc.Content, doc.Metadata))
+	}
+	s.bm25 = index
+	return nil
+}
+
+func (s *Store) deleteByFilter(ctx context.Context, filter map[string]string) error {
+	count := s.collection.Count()
+	if count == 0 {
+		return nil
+	}
+
+	dummyEmb := make([]float32, s.Dimension)
+	results, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, filter, nil)
+	if err != nil {
+		return err
+	}
+
+	for _, doc := range results {
+		s.bm25.Remove(doc.ID)
+	}
+
+	return s.collection.Delete(ctx, filter, nil)
+}
+
+func (s *Store) lexicalDocumentText(content string, metadata map[string]string) string {
+	var builder strings.Builder
+	appendField := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if builder.Len() > 0 {
+			builder.WriteByte(' ')
+		}
+		builder.WriteString(value)
+	}
+
+	appendField(content)
+	appendField(metadata["name"])
+	appendField(metadata["path"])
+
+	for _, key := range []string{"symbols", "calls"} {
+		if raw := metadata[key]; raw != "" {
+			if parsed := s.parseStringArray(raw); len(parsed) > 0 {
+				for _, value := range parsed {
+					appendField(value)
+				}
+				continue
+			}
+			appendField(raw)
+		}
+	}
+
+	return builder.String()
+}
+
 func (s *Store) Insert(ctx context.Context, records []Record) error {
+	ctx, span := tracing.StartSpan(ctx, "db.store", "db.insert")
+	defer span.End()
+
 	var docs []chromem.Document
 	for _, r := range records {
 		docs = append(docs, chromem.Document{
@@ -72,32 +154,66 @@ func (s *Store) Insert(ctx context.Context, records []Record) error {
 			Embedding: r.Embedding,
 			Metadata:  r.Metadata,
 		})
+		s.bm25.Add(r.ID, s.lexicalDocumentText(r.Content, r.Metadata))
 	}
 
 	return s.collection.AddDocuments(ctx, docs, runtime.NumCPU())
 }
 
 func (s *Store) Search(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, error) {
+	if topK <= 0 {
+		return nil, nil
+	}
+
 	records, _, err := s.SearchWithScore(ctx, queryEmbedding, topK, projectIDs, category)
 	return records, err
 }
 
 func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string, category string) ([]Record, error) {
+	ctx, span := tracing.StartSpan(ctx, "db.store", "db.lexical_search")
+	defer span.End()
+
+	if topK <= 0 {
+		return nil, nil
+	}
+
 	count := s.collection.Count()
 	if count == 0 {
 		return nil, nil
 	}
 
-	// Fetch all records for filtering
-	// Using QueryEmbedding with dummy embedding to get all records
-	dummyEmb := make([]float32, s.Dimension)
-	var allResults []chromem.Result
+	fetchK := topK
+	if topK <= count/3 {
+		fetchK = topK * 3
+	} else {
+		fetchK = count
+	}
 
+	// Fast BM25 path: fetch extras up front so project/category filtering does not
+	// starve the final result set.
+	bm25Results := s.bm25.Search(query, fetchK)
+	if len(bm25Results) == 0 {
+		return nil, nil
+	}
+
+	// Build a set of matching IDs for fast lookup
+	idSet := make(map[string]float64, len(bm25Results))
+	for _, r := range bm25Results {
+		idSet[r.DocID] = r.Score
+	}
+
+	// Fetch the actual records from chromem by ID via a dummy embedding query
+	// We use a targeted fetch: query with a filter that matches our IDs.
+	// Since chromem doesn't support IN queries, we fetch all and filter by ID.
+	dummyEmb := make([]float32, s.Dimension)
+	var where map[string]string
+	if category != "" {
+		where = map[string]string{"category": category}
+	}
+
+	// For project filtering, iterate per project
+	var allResults []chromem.Result
 	if len(projectIDs) == 0 {
-		var where map[string]string
-		if category != "" {
-			where = map[string]string{"category": category}
-		}
 		res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, where, nil)
 		if err != nil {
 			return nil, err
@@ -105,12 +221,11 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 		allResults = res
 	} else {
 		for _, pid := range projectIDs {
-			where := make(map[string]string)
-			where["project_id"] = pid
+			w := map[string]string{"project_id": pid}
 			if category != "" {
-				where["category"] = category
+				w["category"] = category
 			}
-			res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, where, nil)
+			res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, w, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -118,115 +233,61 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 		}
 	}
 
-	var matches []Record
-	queryLower := strings.ToLower(query)
-
-	// Optimization: Parallelize the filtering loop for large datasets
-	numCPU := runtime.NumCPU()
-	if len(allResults) < 100 {
-		numCPU = 1 // Don't overhead for small sets
+	type scored struct {
+		rec   Record
+		score float64
 	}
-
-	resultChan := make(chan Record, len(allResults))
-	var wg sync.WaitGroup
-	chunkSize := (len(allResults) + numCPU - 1) / numCPU
-
-	for i := 0; i < numCPU; i++ {
-		start := i * chunkSize
-		if start >= len(allResults) {
-			break
+	var matches []scored
+	for _, doc := range allResults {
+		if score, ok := idSet[doc.ID]; ok {
+			matches = append(matches, scored{
+				rec: Record{
+					ID:       doc.ID,
+					Content:  doc.Content,
+					Metadata: doc.Metadata,
+				},
+				score: score,
+			})
 		}
-		end := start + chunkSize
-		if end > len(allResults) {
-			end = len(allResults)
-		}
-
-		wg.Add(1)
-		go func(docs []chromem.Result) {
-			defer wg.Done()
-			for _, doc := range docs {
-				isMatch := false
-
-				// 1. Check Symbols metadata (JSON array)
-				if symsJSON, ok := doc.Metadata["symbols"]; ok {
-					if strings.Contains(strings.ToLower(symsJSON), queryLower) {
-						if syms := s.parseStringArray(symsJSON); syms != nil {
-							for _, sym := range syms {
-								if strings.EqualFold(sym, query) || strings.Contains(strings.ToLower(sym), queryLower) {
-									isMatch = true
-									break
-								}
-							}
-						}
-					}
-				}
-
-				// 2. Check Name metadata
-				if !isMatch {
-					if name, ok := doc.Metadata["name"]; ok {
-						if strings.EqualFold(name, query) || strings.Contains(strings.ToLower(name), queryLower) {
-							isMatch = true
-						}
-					}
-				}
-
-				// 3. Check actual content
-				if !isMatch {
-					if strings.Contains(strings.ToLower(doc.Content), queryLower) {
-						isMatch = true
-					}
-				}
-
-				// 4. Check Calls metadata (JSON array)
-				if !isMatch {
-					if callsJSON, ok := doc.Metadata["calls"]; ok {
-						if strings.Contains(strings.ToLower(callsJSON), queryLower) {
-							if calls := s.parseStringArray(callsJSON); calls != nil {
-								for _, call := range calls {
-									if strings.EqualFold(call, query) {
-										isMatch = true
-										break
-									}
-								}
-							}
-						}
-					}
-				}
-
-				if isMatch {
-					resultChan <- Record{
-						ID:       doc.ID,
-						Content:  doc.Content,
-						Metadata: doc.Metadata,
-					}
-				}
-			}
-		}(allResults[start:end])
 	}
 
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	for r := range resultChan {
-		matches = append(matches, r)
-	}
+	// Sort by BM25 score descending
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].score > matches[j].score
+	})
 
 	if len(matches) > topK {
 		matches = matches[:topK]
 	}
 
-	return matches, nil
+	records := make([]Record, len(matches))
+	for i, m := range matches {
+		records[i] = m.rec
+	}
+	return records, nil
 }
 
 func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, error) {
+	ctx, span := tracing.StartSpan(ctx, "db.store", "db.hybrid_search")
+	defer span.End()
+
+	if topK <= 0 {
+		return nil, nil
+	}
+
+	searchTimer := metrics.NewTimer(metrics.SearchDuration)
+	defer searchTimer.ObserveDuration()
+
 	var (
 		vectorResults  []Record
 		lexicalResults []Record
 		vectorErr      error
 		lexicalErr     error
 	)
+	expandedTopK := topK
+	if topK <= int(^uint(0)>>1)/2 {
+		expandedTopK = topK * 2
+	}
 
 	// 1. & 2. Concurrent Vector and Lexical Search (Fetch more for better RRF)
 	var wg sync.WaitGroup
@@ -234,12 +295,12 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 
 	go func() {
 		defer wg.Done()
-		vectorResults, vectorErr = s.Search(ctx, queryEmbedding, topK*2, projectIDs, category)
+		vectorResults, vectorErr = s.Search(ctx, queryEmbedding, expandedTopK, projectIDs, category)
 	}()
 
 	go func() {
 		defer wg.Done()
-		lexicalResults, lexicalErr = s.LexicalSearch(ctx, query, topK*2, projectIDs, category)
+		lexicalResults, lexicalErr = s.LexicalSearch(ctx, query, expandedTopK, projectIDs, category)
 	}()
 
 	wg.Wait()
@@ -257,7 +318,7 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 	vectorWeight := 1.0
 
 	// Heuristic: If query contains code-like identifiers, boost lexical matches
-	hasIdentifier := regexp.MustCompile(`[a-z][A-Z]|[a-z]_[a-z]|[:.()\[\]{}]`).MatchString(query)
+	hasIdentifier := hasCodeLikeIdentifiers(query)
 	if hasIdentifier {
 		lexicalWeight = 1.5 // 50% boost for lexical when symbols are involved
 	}
@@ -336,6 +397,13 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 }
 
 func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, []float32, error) {
+	ctx, span := tracing.StartSpan(ctx, "db.store", "db.vector_search")
+	defer span.End()
+
+	if topK <= 0 {
+		return nil, nil, nil
+	}
+
 	count := s.collection.Count()
 	if count == 0 {
 		return nil, nil, nil
@@ -409,19 +477,23 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 }
 
 func (s *Store) DeleteByPath(ctx context.Context, path string, projectID string) error {
-	filter := map[string]string{"path": path, "project_id": projectID}
-	return s.collection.Delete(ctx, filter, nil)
+	ctx, span := tracing.StartSpan(ctx, "db.store", "db.delete_by_path")
+	defer span.End()
+
+	return s.deleteByFilter(ctx, map[string]string{"path": path, "project_id": projectID})
 }
 
 // DeleteByPrefix deletes all records where the metadata 'path' starts with the given prefix.
 // This is critical for handling directory removals/renames correctly.
 func (s *Store) DeleteByPrefix(ctx context.Context, prefix string, projectID string) error {
+	ctx, span := tracing.StartSpan(ctx, "db.store", "db.delete_by_prefix")
+	defer span.End()
+
 	count := s.collection.Count()
 	if count == 0 {
 		return nil
 	}
 
-	// Fetch all IDs for this project to check paths
 	dummyEmb := make([]float32, s.Dimension)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, count, map[string]string{"project_id": projectID}, nil)
 	if err != nil {
@@ -430,17 +502,21 @@ func (s *Store) DeleteByPrefix(ctx context.Context, prefix string, projectID str
 
 	for _, doc := range res {
 		path := doc.Metadata["path"]
-		// Check if it's the exact file OR a file within the directory (prefix + /)
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
-			s.collection.Delete(ctx, map[string]string{"path": path, "project_id": projectID}, nil)
+			s.bm25.Remove(doc.ID)
+			if err := s.collection.Delete(ctx, map[string]string{"path": path, "project_id": projectID}, nil); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
 func (s *Store) ClearProject(ctx context.Context, projectID string) error {
-	filter := map[string]string{"project_id": projectID}
-	return s.collection.Delete(ctx, filter, nil)
+	ctx, span := tracing.StartSpan(ctx, "db.store", "db.clear_project")
+	defer span.End()
+
+	return s.deleteByFilter(ctx, map[string]string{"project_id": projectID})
 }
 
 func (s *Store) GetPathHashMapping(ctx context.Context, projectID string) (map[string]string, error) {
@@ -584,9 +660,14 @@ func (s *Store) GetByPrefix(ctx context.Context, prefix string, projectID string
 }
 
 func (s *Store) SetStatus(ctx context.Context, projectID string, status string) error {
+	ctx, span := tracing.StartSpan(ctx, "db.store", "db.set_status")
+	defer span.End()
+
 	id := fmt.Sprintf("status:%s", projectID)
 	// Delete old status first
-	s.collection.Delete(ctx, map[string]string{"type": "project_status", "project_id": projectID}, nil)
+	if err := s.deleteByFilter(ctx, map[string]string{"type": "project_status", "project_id": projectID}); err != nil {
+		return err
+	}
 
 	dummyEmb := make([]float32, s.Dimension)
 	return s.Insert(ctx, []Record{{
@@ -628,6 +709,12 @@ func (s *Store) GetAllStatuses(ctx context.Context) (map[string]string, error) {
 		}
 	}
 	return statuses, nil
+}
+
+var identifierRegexp = regexp.MustCompile(`[a-z][A-Z]|[a-z]_[a-z]|[:.()\[\]{}]`)
+
+func hasCodeLikeIdentifiers(query string) bool {
+	return identifierRegexp.MatchString(query)
 }
 
 // parseStringArray parses a JSON string array and caches the result

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -16,15 +17,19 @@ type Config struct {
 	DbPath             string
 	ModelsDir          string
 	LogPath            string
+	LogLevel           string
+	LogFormat          string
 	ModelName          string
 	RerankerModelName  string
 	HFToken            string
 	Dimension          int
+	MatryoshkaDim      int
 	DisableWatcher     bool
 	EnableLiveIndexing bool
 	EmbedderPoolSize   int
 	ApiPort            string
 	Logger             *slog.Logger
+	AllowedOrigins     []string
 }
 
 func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Config {
@@ -64,6 +69,17 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		logPath = filepath.Join(dataDir, "server.log")
 	}
 
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+
+	logFormat := os.Getenv("LOG_FORMAT")
+	if logFormat == "" {
+		logFormat = "json"
+	}
+	logFormat = strings.ToLower(logFormat)
+
 	// Ensure directories exist
 	os.MkdirAll(dbPath, 0755)
 	os.MkdirAll(modelsDir, 0755)
@@ -76,7 +92,17 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 	} else {
 		writer = os.Stderr
 	}
-	handler := slog.NewJSONHandler(writer, nil)
+	handlerOptions := &slog.HandlerOptions{
+		Level: parseLogLevel(logLevel),
+	}
+
+	var handler slog.Handler
+	if logFormat == "text" {
+		handler = slog.NewTextHandler(writer, handlerOptions)
+	} else {
+		logFormat = "json"
+		handler = slog.NewJSONHandler(writer, handlerOptions)
+	}
 	logger := slog.New(handler)
 
 	projectRoot := os.Getenv("PROJECT_ROOT")
@@ -93,6 +119,8 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 	rerankerModelName := os.Getenv("RERANKER_MODEL_NAME")
 	if rerankerModelName == "" {
 		rerankerModelName = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+	} else if rerankerModelName == "none" {
+		rerankerModelName = ""
 	}
 
 	disableWatcher := os.Getenv("DISABLE_FILE_WATCHER") == "true"
@@ -109,21 +137,45 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 	if apiPort == "" {
 		apiPort = "47821"
 	}
+
+	matryoshkaDim := 0
+	if v := os.Getenv("MATRYOSHKA_DIM"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			matryoshkaDim = max(n, 0)
+		}
+	}
+
+	allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS")
+	var allowedOrigins []string
+	if allowedOriginsStr != "" {
+		parts := strings.Split(allowedOriginsStr, ",")
+		for _, p := range parts {
+			trimmed := strings.TrimSpace(p)
+			if trimmed != "" {
+				allowedOrigins = append(allowedOrigins, trimmed)
+			}
+		}
+	}
+
 	return &Config{
 		ProjectRoot:        projectRoot,
 		DataDir:            dataDir,
 		DbPath:             dbPath,
 		ModelsDir:          modelsDir,
 		LogPath:            logPath,
+		LogLevel:           logLevel,
+		LogFormat:          logFormat,
 		ModelName:          modelName,
 		RerankerModelName:  rerankerModelName,
 		HFToken:            os.Getenv("HF_TOKEN"),
 		Dimension:          1024,
+		MatryoshkaDim:      matryoshkaDim,
 		DisableWatcher:     disableWatcher,
 		EnableLiveIndexing: enableLiveIndexing,
 		EmbedderPoolSize:   embedderPoolSize,
 		ApiPort:            apiPort,
 		Logger:             logger,
+		AllowedOrigins:     allowedOrigins,
 	}
 }
 
@@ -133,4 +185,17 @@ func GetRelativePath(path string, root string) string {
 		return path
 	}
 	return rel
+}
+
+func parseLogLevel(level string) slog.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }

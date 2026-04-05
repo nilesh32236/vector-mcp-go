@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -97,6 +98,9 @@ func (a *App) Init(socketPath string) error {
 		a.isMaster = true
 		a.logger.Info("Starting as MASTER instance", "socket", socketPath, "version", Version)
 	} else {
+		if !strings.Contains(err.Error(), "master already running") {
+			return fmt.Errorf("failed to initialize master daemon: %w", err)
+		}
 		a.isMaster = false
 		a.logger.Info("Starting as SLAVE instance (master already running)", "socket", socketPath, "version", Version)
 		a.daemonClient = daemon.NewClient(socketPath)

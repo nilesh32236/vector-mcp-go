@@ -19,6 +19,16 @@ import (
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
 
+var (
+	tsImportRegex       = regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
+	tsNamedImportRegex  = regexp.MustCompile(`import\s*{([^}]+)}`)
+	goSingleImportRegex = regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
+	goBlockRegex        = regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
+	goInnerImportRegex  = regexp.MustCompile(`["']([^"']+)["']`)
+	phpReqRegex         = regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
+	phpUseRegex         = regexp.MustCompile(`use\s+([^;]+);`)
+)
+
 type Chunk struct {
 	Content            string
 	ContextualString   string
@@ -39,6 +49,8 @@ type entityMatch struct {
 	end   int
 	chunk Chunk
 }
+
+
 
 func CreateChunks(text string, filePath string) []Chunk {
 	ext := filepath.Ext(filePath)
@@ -307,9 +319,6 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 								case "rule_set":
 									if selector := findFirstNodeContentByType(p, []byte(content), "selectors"); selector != "" {
 										parentSymbol = selector
-									}
-									if parentSymbol != "" {
-										break
 									}
 								case "media_statement":
 									parentSymbol = "@media"
@@ -648,16 +657,14 @@ func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 func parseRelationships(text string, ext string) []string {
 	var relations []string
 	if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
-		importRegex := regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
-		matches := importRegex.FindAllStringSubmatch(text, -1)
+		matches := tsImportRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {
 				relations = append(relations, m[1])
 			}
 		}
 
-		namedImportRegex := regexp.MustCompile(`import\s*{([^}]+)}`)
-		namedMatches := namedImportRegex.FindAllStringSubmatch(text, -1)
+		namedMatches := tsNamedImportRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range namedMatches {
 			if len(m) > 1 {
 				names := strings.Split(m[1], ",")
@@ -667,21 +674,18 @@ func parseRelationships(text string, ext string) []string {
 			}
 		}
 	} else if ext == ".go" {
-		singleImportRegex := regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
-		matches := singleImportRegex.FindAllStringSubmatch(text, -1)
+		matches := goSingleImportRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {
 				relations = append(relations, m[1])
 			}
 		}
 
-		blockRegex := regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
-		blocks := blockRegex.FindAllStringSubmatch(text, -1)
+		blocks := goBlockRegex.FindAllStringSubmatch(text, -1)
 		for _, b := range blocks {
 			if len(b) > 1 {
 				inner := b[1]
-				innerRegex := regexp.MustCompile(`["']([^"']+)["']`)
-				innerMatches := innerRegex.FindAllStringSubmatch(inner, -1)
+				innerMatches := goInnerImportRegex.FindAllStringSubmatch(inner, -1)
 				for _, im := range innerMatches {
 					if len(im) > 1 {
 						relations = append(relations, im[1])
@@ -690,16 +694,14 @@ func parseRelationships(text string, ext string) []string {
 			}
 		}
 	} else if ext == ".php" {
-		reqRegex := regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
-		matches := reqRegex.FindAllStringSubmatch(text, -1)
+		matches := phpReqRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {
 				relations = append(relations, m[1])
 			}
 		}
 
-		useRegex := regexp.MustCompile(`use\s+([^;]+);`)
-		useMatches := useRegex.FindAllStringSubmatch(text, -1)
+		useMatches := phpUseRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range useMatches {
 			if len(m) > 1 {
 				parts := strings.Split(m[1], ",")
