@@ -21,6 +21,9 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
 	"github.com/nilesh32236/vector-mcp-go/internal/mutation"
+	"github.com/nilesh32236/vector-mcp-go/internal/observability/metrics"
+	"github.com/nilesh32236/vector-mcp-go/internal/observability/tracing"
+	"github.com/nilesh32236/vector-mcp-go/internal/security/pathguard"
 	"github.com/nilesh32236/vector-mcp-go/internal/system"
 	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
@@ -80,12 +83,14 @@ type Server struct {
 	throttler        *system.MemThrottler                                                                           // Shared system memory throttler
 	safety           *mutation.SafetyChecker                                                                        // Safety checker for mutation integrity
 	graph            *db.KnowledgeGraph                                                                             // Code relationship graph for reasoning
+	pathValidator    *pathguard.Validator                                                                           // Path validator for security
 	toolHandlers     map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) // Map of tool names to handlers
 }
 
 // NewServer initializes and returns a new Server instance.
 // It sets up the internal MCP server and registers all supported tools, resources, and prompts.
 func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx context.Context) (*db.Store, error), embedder indexer.Embedder, queue chan string, daemonClient *daemon.Client, progress *sync.Map, resetChan chan string, resolver *indexer.WorkspaceResolver, throttler *system.MemThrottler) *Server {
+	metrics.InitializeDefaultMetrics()
 	s := server.NewMCPServer("vector-mcp-go", "1.0.0", server.WithLogging())
 	srv := &Server{
 		cfg:              cfg,
@@ -103,6 +108,15 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 		graph:            db.NewKnowledgeGraph(),
 		toolHandlers:     make(map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)),
 	}
+
+	// Initialize path validator for security
+	pathValidator, err := pathguard.NewValidator(cfg.ProjectRoot, pathguard.DefaultOptions())
+	if err != nil {
+		logger.Warn("failed to create path validator, using permissive fallback", "error", err)
+		// Create a permissive validator that at least checks for traversal
+		pathValidator, _ = pathguard.NewValidator("/", pathguard.Options{AllowAbsolute: true, MaxPathDepth: 100})
+	}
+	srv.pathValidator = pathValidator
 
 	// Initialize SafetyChecker with a provider that uses the server's session management
 	srv.safety = mutation.NewSafetyChecker(func(path string) (*lsp.LSPManager, error) {
@@ -324,8 +338,9 @@ func (s *Server) registerPrompts() {
 func (s *Server) registerTools() {
 	// Helper to add tool and track handler
 	addTool := func(tool mcp.Tool, handler func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)) {
-		s.MCPServer.AddTool(tool, handler)
-		s.toolHandlers[tool.Name] = handler
+		wrapped := s.wrapToolHandler(tool.Name, handler)
+		s.MCPServer.AddTool(tool, wrapped)
+		s.toolHandlers[tool.Name] = wrapped
 	}
 
 	// search_workspace is the unified discovery tool for semantic, lexical, and graph-driven lookups.
@@ -404,6 +419,26 @@ func (s *Server) registerTools() {
 		mcp.WithDescription("Traces the usage of a specific field or symbol across the project."),
 		mcp.WithString("field_name", mcp.Description("The name of the field or symbol to trace")),
 	), s.handleTraceDataFlow)
+}
+
+func (s *Server) wrapToolHandler(name string, handler func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		spanName := "mcp.tool." + name
+		if args, ok := request.Params.Arguments.(map[string]any); ok {
+			if action, ok := args["action"].(string); ok && action != "" {
+				spanName += "." + action
+			}
+		}
+
+		ctx, span := tracing.StartSpan(ctx, "mcp.server", spanName)
+		defer span.End()
+
+		result, err := handler(ctx, request)
+		if err != nil && metrics.ErrorsTotal != nil {
+			metrics.ErrorsTotal.Inc()
+		}
+		return result, err
+	}
 }
 
 // SendNotification sends a logging message notification to all connected clients.

@@ -9,11 +9,33 @@ import (
 )
 
 type ModelConfig struct {
-	OnnxURL      string
-	TokenizerURL string
-	Filename     string
-	Dimension    int
-	IsReranker   bool
+	OnnxURL       string
+	TokenizerURL  string
+	Filename      string
+	Dimension     int
+	IsReranker    bool
+	MatryoshkaDim int // optional: truncate embeddings to this dim (MRL models only)
+}
+
+// EffectiveDimension returns the vector width emitted by the embedder after any
+// optional Matryoshka truncation is applied.
+func (mc ModelConfig) EffectiveDimension() int {
+	if mc.IsReranker {
+		return mc.Dimension
+	}
+	if mc.MatryoshkaDim > 0 && mc.MatryoshkaDim < mc.Dimension {
+		return mc.MatryoshkaDim
+	}
+	return mc.Dimension
+}
+
+// WithMatryoshkaDimension applies a runtime truncation target when valid.
+func (mc ModelConfig) WithMatryoshkaDimension(dim int) ModelConfig {
+	if mc.IsReranker || dim <= 0 || dim >= mc.Dimension {
+		return mc
+	}
+	mc.MatryoshkaDim = dim
+	return mc
 }
 
 // Models contains all embedding and reranker model presets supported by the runtime downloader.
@@ -50,13 +72,46 @@ var Models = map[string]ModelConfig{
 		Dimension:    1,
 		IsReranker:   true,
 	},
+	"Xenova/bge-reranker-v2-m3": {
+		OnnxURL:      "https://huggingface.co/onnx-community/bge-reranker-v2-m3-ONNX/resolve/main/onnx/model_quantized.onnx",
+		TokenizerURL: "https://huggingface.co/onnx-community/bge-reranker-v2-m3-ONNX/resolve/main/tokenizer.json",
+		Filename:     "bge_reranker_v2_m3/model_quantized.onnx",
+		Dimension:    1,
+		IsReranker:   true,
+	},
+	"Xenova/bge-reranker-v2-gemma": {
+		OnnxURL:      "https://huggingface.co/onnx-community/bge-reranker-v2-gemma-ONNX/resolve/main/onnx/model_quantized.onnx",
+		TokenizerURL: "https://huggingface.co/onnx-community/bge-reranker-v2-gemma-ONNX/resolve/main/tokenizer.json",
+		Filename:     "bge_reranker_v2_gemma/model_quantized.onnx",
+		Dimension:    1,
+		IsReranker:   true,
+	},
+	"Xenova/jina-reranker-v2-base-multilingual": {
+		OnnxURL:      "https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual/resolve/main/onnx/model_int8.onnx",
+		TokenizerURL: "https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual/resolve/main/tokenizer.json",
+		Filename:     "jina_reranker_v2/model_int8.onnx",
+		Dimension:    1,
+		IsReranker:   true,
+	},
+	"Xenova/jina-embeddings-v2-base-code": {
+		OnnxURL:      "https://huggingface.co/Xenova/jina-embeddings-v2-base-code/resolve/main/onnx/model_quantized.onnx",
+		TokenizerURL: "https://huggingface.co/Xenova/jina-embeddings-v2-base-code/resolve/main/tokenizer.json",
+		Filename:     "jina_code_v2/model_quantized.onnx",
+		Dimension:    768,
+	},
+	"IBM/granite-embedding-english-r2": {
+		OnnxURL:      "https://huggingface.co/onnx-community/granite-embedding-english-r2-ONNX/resolve/main/onnx/model_quantized.onnx",
+		TokenizerURL: "https://huggingface.co/onnx-community/granite-embedding-english-r2-ONNX/resolve/main/tokenizer.json",
+		Filename:     "IBM_granite_r2/model_quantized.onnx",
+		Dimension:    768,
+	},
 }
 
 // GetModelConfig resolves a named model preset.
 func GetModelConfig(modelName string) (ModelConfig, error) {
 	mc, ok := Models[modelName]
 	if !ok {
-		return ModelConfig{}, fmt.Errorf("unsupported model %q, choose from: Xenova/bge-m3, BAAI/bge-small-en-v1.5, BAAI/bge-base-en-v1.5, cross-encoder/ms-marco-MiniLM-L-6-v2, Xenova/bge-reranker-base", modelName)
+		return ModelConfig{}, fmt.Errorf("unsupported model %q, choose from: Xenova/bge-m3, BAAI/bge-small-en-v1.5, BAAI/bge-base-en-v1.5, cross-encoder/ms-marco-MiniLM-L-6-v2, Xenova/bge-reranker-base, IBM/granite-embedding-english-r2, Xenova/jina-embeddings-v2-base-code, Xenova/bge-reranker-v2-m3", modelName)
 	}
 	return mc, nil
 }
@@ -69,7 +124,8 @@ func EnsureModel(modelsDir, modelName string) (ModelConfig, error) {
 	}
 
 	modelPath := filepath.Join(modelsDir, mc.Filename)
-	tokenizerPath := filepath.Join(modelsDir, mc.Filename+".tokenizer.json")
+	// For models in subdirectories, place tokenizer in the same subdir
+	tokenizerPath := filepath.Join(filepath.Dir(modelPath), "tokenizer.json")
 
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "Downloading %s model...\n", modelName)
