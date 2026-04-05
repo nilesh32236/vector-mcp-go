@@ -631,6 +631,17 @@ func extractCallsGeneric(node *sitter.Node, content string) []string {
 	return calls
 }
 
+// Pre-compiled regular expressions for relationship parsing to improve performance
+var (
+	tsImportRegex       = regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
+	tsNamedImportRegex  = regexp.MustCompile(`import\s*{([^}]+)}`)
+	goSingleImportRegex = regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
+	goBlockRegex        = regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
+	goInnerRegex        = regexp.MustCompile(`["']([^"']+)["']`)
+	phpReqRegex         = regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
+	phpUseRegex         = regexp.MustCompile(`use\s+([^;]+);`)
+)
+
 func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 	score := float32(1.0)
 
@@ -645,15 +656,7 @@ func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 	return score
 }
 
-var (
-	tsImportRegex       = regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
-	tsNamedImportRegex  = regexp.MustCompile(`import\s*{([^}]+)}`)
-	goSingleImportRegex = regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
-	goBlockRegex        = regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
-	goInnerRegex        = regexp.MustCompile(`["']([^"']+)["']`)
-	phpReqRegex         = regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
-	phpUseRegex         = regexp.MustCompile(`use\s+([^;]+);`)
-)
+
 
 func parseRelationships(text string, ext string) []string {
 	var relations []string

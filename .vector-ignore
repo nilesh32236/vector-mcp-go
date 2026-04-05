@@ -1,0 +1,18 @@
+# Ignore large/metadata dirs
+.git/
+models/
+results-test/
+.gocache/
+tmp/
+lib/
+bin/
+node_modules/
+dist/
+build/
+.vector-db/
+.data/
+
+# Ignore benchmark fixtures
+benchmark/fixtures/
+
+# Allow everything else (which is mostly internal/ and main files)
