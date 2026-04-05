@@ -50,6 +50,8 @@ type entityMatch struct {
 	chunk Chunk
 }
 
+
+
 func CreateChunks(text string, filePath string) []Chunk {
 	ext := filepath.Ext(filePath)
 	relationships := parseRelationships(text, ext)
@@ -317,9 +319,6 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 								case "rule_set":
 									if selector := findFirstNodeContentByType(p, []byte(content), "selectors"); selector != "" {
 										parentSymbol = selector
-									}
-									if parentSymbol != "" {
-										break
 									}
 								case "media_statement":
 									parentSymbol = "@media"
