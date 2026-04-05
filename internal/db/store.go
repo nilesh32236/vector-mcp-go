@@ -18,6 +18,8 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/observability/tracing"
 )
 
+var identifierRegex = regexp.MustCompile(`[a-z][A-Z]|[a-z]_[a-z]|[:.()\[\]{}]`)
+
 type Store struct {
 	db          contracts.IConnection
 	table       contracts.ITable
@@ -418,6 +420,7 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 	}
 
 	k := 60.0
+
 	scores := make(map[string]float64)
 	recordMap := make(map[string]Record)
 
