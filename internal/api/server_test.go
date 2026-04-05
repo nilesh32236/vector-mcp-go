@@ -318,20 +318,78 @@ func TestHandleCallTool(t *testing.T) {
 }
 
 func TestCORSHeaders(t *testing.T) {
-	cfg := &config.Config{ApiPort: "8080"}
-	server := NewServer(cfg, nil, nil, nil)
-
-	req := httptest.NewRequest("OPTIONS", "/api/health", nil)
-	rec := httptest.NewRecorder()
-
-	server.srv.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("Expected status %d for OPTIONS, got %d", http.StatusNoContent, rec.Code)
+	tests := []struct {
+		name           string
+		allowedOrigins []string
+		requestOrigin  string
+		expectedCORS   string
+		expectVary     bool
+	}{
+		{
+			name:           "exact origin match",
+			allowedOrigins: []string{"http://localhost:3000"},
+			requestOrigin:  "http://localhost:3000",
+			expectedCORS:   "http://localhost:3000",
+			expectVary:     true,
+		},
+		{
+			name:           "wildcard origin match",
+			allowedOrigins: []string{"*"},
+			requestOrigin:  "https://evil.com",
+			expectedCORS:   "https://evil.com",
+			expectVary:     true,
+		},
+		{
+			name:           "no match",
+			allowedOrigins: []string{"http://localhost:3000"},
+			requestOrigin:  "https://evil.com",
+			expectedCORS:   "",
+			expectVary:     true,
+		},
+		{
+			name:           "empty allowed origins",
+			allowedOrigins: []string{},
+			requestOrigin:  "http://localhost:3000",
+			expectedCORS:   "",
+			expectVary:     true,
+		},
+		{
+			name:           "no origin header in request",
+			allowedOrigins: []string{"*"},
+			requestOrigin:  "",
+			expectedCORS:   "",
+			expectVary:     false,
+		},
 	}
 
-	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Error("CORS Allow-Origin header not set")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				ApiPort:        "8080",
+				AllowedOrigins: tt.allowedOrigins,
+			}
+			server := NewServer(cfg, nil, nil, nil)
+
+			req := httptest.NewRequest("OPTIONS", "/api/health", nil)
+			if tt.requestOrigin != "" {
+				req.Header.Set("Origin", tt.requestOrigin)
+			}
+			rec := httptest.NewRecorder()
+
+			server.setCORSHeaders(rec, req)
+
+			corsHeader := rec.Header().Get("Access-Control-Allow-Origin")
+			if corsHeader != tt.expectedCORS {
+				t.Errorf("Expected Access-Control-Allow-Origin %q, got %q", tt.expectedCORS, corsHeader)
+			}
+
+			varyHeader := rec.Header().Get("Vary")
+			if tt.expectVary && varyHeader != "Origin" {
+				t.Errorf("Expected Vary: Origin, got %q", varyHeader)
+			} else if !tt.expectVary && varyHeader != "" {
+				t.Errorf("Expected no Vary header, got %q", varyHeader)
+			}
+		})
 	}
 }
 

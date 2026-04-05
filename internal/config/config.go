@@ -29,6 +29,7 @@ type Config struct {
 	EmbedderPoolSize   int
 	ApiPort            string
 	Logger             *slog.Logger
+	AllowedOrigins     []string
 }
 
 func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Config {
@@ -144,6 +145,18 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		}
 	}
 
+	allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS")
+	var allowedOrigins []string
+	if allowedOriginsStr != "" {
+		parts := strings.Split(allowedOriginsStr, ",")
+		for _, p := range parts {
+			trimmed := strings.TrimSpace(p)
+			if trimmed != "" {
+				allowedOrigins = append(allowedOrigins, trimmed)
+			}
+		}
+	}
+
 	return &Config{
 		ProjectRoot:        projectRoot,
 		DataDir:            dataDir,
@@ -162,6 +175,7 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		EmbedderPoolSize:   embedderPoolSize,
 		ApiPort:            apiPort,
 		Logger:             logger,
+		AllowedOrigins:     allowedOrigins,
 	}
 }
 
