@@ -20,7 +20,7 @@ const serviceName = "vector-mcp-go"
 
 // Provider wraps the OTel TracerProvider and exposes a Shutdown hook.
 type Provider struct {
-	tp trace.TracerProvider
+	tp       trace.TracerProvider
 	shutdown func(context.Context) error
 }
 

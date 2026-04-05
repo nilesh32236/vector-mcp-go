@@ -350,7 +350,7 @@ func TestIsAllowedExtension(t *testing.T) {
 		{"component.ts", allowed, true},
 		{"Component.tsx", allowed, false},
 		{"README.md", allowed, false},
-		{"any.txt", nil, true}, // nil means all allowed
+		{"any.txt", nil, true},     // nil means all allowed
 		{"MAIN.GO", allowed, true}, // case insensitive
 	}
 

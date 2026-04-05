@@ -12,40 +12,40 @@ import (
 type ContentType string
 
 const (
-	ContentTypeCode     ContentType = "code"
-	ContentTypeDoc      ContentType = "documentation"
-	ContentTypeConfig   ContentType = "config"
-	ContentTypeGeneral  ContentType = "general"
-	ContentTypeQuery    ContentType = "query"
+	ContentTypeCode    ContentType = "code"
+	ContentTypeDoc     ContentType = "documentation"
+	ContentTypeConfig  ContentType = "config"
+	ContentTypeGeneral ContentType = "general"
+	ContentTypeQuery   ContentType = "query"
 )
 
 // ModelRouterConfig configures the model routing behavior.
 type ModelRouterConfig struct {
-	DefaultEmbeddingModel  string // Primary embedding model
-	CodeEmbeddingModel     string // Model for code content
-	DocEmbeddingModel      string // Model for documentation
-	RerankerModel          string // Reranker model
-	EnableLanguageRouting  bool   // Route by programming language
-	EnableAdaptiveRouting  bool   // Adapt based on query patterns
+	DefaultEmbeddingModel string // Primary embedding model
+	CodeEmbeddingModel    string // Model for code content
+	DocEmbeddingModel     string // Model for documentation
+	RerankerModel         string // Reranker model
+	EnableLanguageRouting bool   // Route by programming language
+	EnableAdaptiveRouting bool   // Adapt based on query patterns
 }
 
 // DefaultRouterConfig returns sensible defaults.
 func DefaultRouterConfig() ModelRouterConfig {
 	return ModelRouterConfig{
-		DefaultEmbeddingModel:  "Xenova/bge-m3",
-		CodeEmbeddingModel:     "Xenova/jina-embeddings-v2-base-code",
-		DocEmbeddingModel:      "Xenova/bge-m3",
-		RerankerModel:          "Xenova/bge-reranker-v2-m3",
-		EnableLanguageRouting:  true,
-		EnableAdaptiveRouting:  true,
+		DefaultEmbeddingModel: "Xenova/bge-m3",
+		CodeEmbeddingModel:    "Xenova/jina-embeddings-v2-base-code",
+		DocEmbeddingModel:     "Xenova/bge-m3",
+		RerankerModel:         "Xenova/bge-reranker-v2-m3",
+		EnableLanguageRouting: true,
+		EnableAdaptiveRouting: true,
 	}
 }
 
 // ModelRouter intelligently selects models based on content type.
 type ModelRouter struct {
-	config     ModelRouterConfig
-	modelsDir  string
-	poolSize   int
+	config    ModelRouterConfig
+	modelsDir string
+	poolSize  int
 
 	mu         sync.RWMutex
 	pools      map[string]*EmbedderPool // model name -> pool

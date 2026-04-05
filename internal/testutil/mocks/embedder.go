@@ -21,7 +21,7 @@ type MockEmbedder struct {
 // NewMockEmbedder creates a new MockEmbedder with the specified dimension.
 func NewMockEmbedder(dimension int) *MockEmbedder {
 	return &MockEmbedder{
-		dimension: dimension,
+		dimension:  dimension,
 		embeddings: make(map[string][]float32),
 	}
 }
@@ -122,7 +122,7 @@ func (m *MockEmbedder) RerankBatch(ctx context.Context, query string, texts []st
 // generateEmbedding creates a deterministic mock embedding.
 func (m *MockEmbedder) generateEmbedding(text string) []float32 {
 	embedding := make([]float32, m.dimension)
-	
+
 	// Simple deterministic generation based on text
 	// Use character values to create variation
 	for i := 0; i < m.dimension; i++ {

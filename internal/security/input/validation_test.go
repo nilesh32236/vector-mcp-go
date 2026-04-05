@@ -291,7 +291,7 @@ func TestTruncateRuneSafe(t *testing.T) {
 		{"hello", 3, "hel"},
 		{"hello world", 5, "hello"},
 		{"héllo wörld", 5, "héllo"}, // UTF-8 safe
-		{"日本語テスト", 3, "日本語"}, // Japanese
+		{"日本語テスト", 3, "日本語"},        // Japanese
 	}
 
 	for _, tt := range tests {

@@ -10,46 +10,46 @@ import (
 type RerankStrategy string
 
 const (
-	RerankStrategyNone      RerankStrategy = "none"      // No reranking
-	RerankStrategyAll       RerankStrategy = "all"       // Rerank all results
-	RerankStrategyTopK      RerankStrategy = "topk"      // Only rerank top K results
-	RerankStrategyAdaptive  RerankStrategy = "adaptive"  // Adaptive based on score gaps
-	RerankStrategyCohere    RerankStrategy = "cohere"    // Cohere-style reranking
+	RerankStrategyNone     RerankStrategy = "none"     // No reranking
+	RerankStrategyAll      RerankStrategy = "all"      // Rerank all results
+	RerankStrategyTopK     RerankStrategy = "topk"     // Only rerank top K results
+	RerankStrategyAdaptive RerankStrategy = "adaptive" // Adaptive based on score gaps
+	RerankStrategyCohere   RerankStrategy = "cohere"   // Cohere-style reranking
 )
 
 // RerankConfig configures the reranking behavior.
 type RerankConfig struct {
-	Strategy         RerankStrategy
-	TopK             int     // For topk strategy
-	ScoreThreshold   float32 // Minimum score to consider
-	MaxBatchSize     int     // Max items to rerank at once
-	FallbackToCross  bool    // Fall back to cross-encoder on error
+	Strategy        RerankStrategy
+	TopK            int     // For topk strategy
+	ScoreThreshold  float32 // Minimum score to consider
+	MaxBatchSize    int     // Max items to rerank at once
+	FallbackToCross bool    // Fall back to cross-encoder on error
 }
 
 // DefaultRerankConfig returns sensible defaults.
 func DefaultRerankConfig() RerankConfig {
 	return RerankConfig{
 		Strategy:        RerankStrategyTopK,
-		TopK:           20,
-		ScoreThreshold: 0.3,
-		MaxBatchSize:   32,
+		TopK:            20,
+		ScoreThreshold:  0.3,
+		MaxBatchSize:    32,
 		FallbackToCross: true,
 	}
 }
 
 // RerankResult represents a single reranked item.
 type RerankResult struct {
-	Index       int     // Original index
-	Score       float32 // Reranker score
-	Content     string
-	Metadata    map[string]string
+	Index    int     // Original index
+	Score    float32 // Reranker score
+	Content  string
+	Metadata map[string]string
 }
 
 // AdvancedReranker provides sophisticated reranking capabilities.
 type AdvancedReranker struct {
-	router   *ModelRouter
-	config   RerankConfig
-	mu       sync.RWMutex
+	router *ModelRouter
+	config RerankConfig
+	mu     sync.RWMutex
 
 	// Metrics
 	rerankCalls    int64
@@ -224,8 +224,8 @@ func tokenize(text string) []string {
 
 // HybridReranker combines multiple reranking signals.
 type HybridReranker struct {
-	reranker   *AdvancedReranker
-	weights    RerankWeights
+	reranker *AdvancedReranker
+	weights  RerankWeights
 }
 
 // RerankWeights defines weights for different signals.
@@ -295,6 +295,6 @@ func (r *AdvancedReranker) GetStats() map[string]interface{} {
 		"rerank_calls":     r.rerankCalls,
 		"total_latency_ms": r.totalLatencyMs,
 		"strategy":         string(r.config.Strategy),
-		"top_k":           r.config.TopK,
+		"top_k":            r.config.TopK,
 	}
 }

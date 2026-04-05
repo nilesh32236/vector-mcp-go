@@ -127,10 +127,10 @@ func TestHistogram_Buckets(t *testing.T) {
 	hist := c.NewHistogramWithBuckets("test_histogram", "Test", nil, buckets)
 
 	// Values should go into appropriate buckets
-	hist.Observe(0.05)  // bucket[0]
-	hist.Observe(0.3)   // bucket[1]
-	hist.Observe(0.7)   // bucket[2]
-	hist.Observe(2.0)   // +Inf bucket
+	hist.Observe(0.05) // bucket[0]
+	hist.Observe(0.3)  // bucket[1]
+	hist.Observe(0.7)  // bucket[2]
+	hist.Observe(2.0)  // +Inf bucket
 
 	_, count := hist.Value()
 	if count != 4 {

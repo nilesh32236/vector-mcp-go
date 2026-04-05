@@ -9,19 +9,19 @@ import (
 type ModelType string
 
 const (
-	ModelTypeGeneral ModelType = "general"    // General-purpose embeddings
-	ModelTypeCode    ModelType = "code"       // Code-specific embeddings
-	ModelTypeDomain  ModelType = "domain"     // Domain-specific (e.g., legal, medical)
-	ModelTypeRerank  ModelType = "reranker"   // Reranking models
+	ModelTypeGeneral ModelType = "general"  // General-purpose embeddings
+	ModelTypeCode    ModelType = "code"     // Code-specific embeddings
+	ModelTypeDomain  ModelType = "domain"   // Domain-specific (e.g., legal, medical)
+	ModelTypeRerank  ModelType = "reranker" // Reranking models
 )
 
 // ModelCapability describes what a model can do.
 type ModelCapability struct {
-	Type            ModelType
-	SupportedLangs  []string // Programming languages (for code models)
-	MaxSeqLength    int
-	RecommendedFor  []string // Use case recommendations
-	AverageLatencyMs int     // Approximate latency on CPU
+	Type             ModelType
+	SupportedLangs   []string // Programming languages (for code models)
+	MaxSeqLength     int
+	RecommendedFor   []string // Use case recommendations
+	AverageLatencyMs int      // Approximate latency on CPU
 }
 
 // MultiModelConfig extends ModelConfig with additional metadata.
@@ -43,9 +43,9 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 			Dimension:    1024,
 		},
 		Capability: ModelCapability{
-			Type:            ModelTypeGeneral,
-			MaxSeqLength:    8192,
-			RecommendedFor:  []string{"semantic-search", "retrieval", "general"},
+			Type:             ModelTypeGeneral,
+			MaxSeqLength:     8192,
+			RecommendedFor:   []string{"semantic-search", "retrieval", "general"},
 			AverageLatencyMs: 50,
 		},
 		Aliases: []string{"bge-m3", "BAAI/bge-m3"},
@@ -58,9 +58,9 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 			Dimension:    384,
 		},
 		Capability: ModelCapability{
-			Type:            ModelTypeGeneral,
-			MaxSeqLength:    512,
-			RecommendedFor:  []string{"fast-search", "low-latency"},
+			Type:             ModelTypeGeneral,
+			MaxSeqLength:     512,
+			RecommendedFor:   []string{"fast-search", "low-latency"},
 			AverageLatencyMs: 15,
 		},
 		Aliases: []string{"bge-small", "BAAI/bge-small"},
@@ -73,9 +73,9 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 			Dimension:    768,
 		},
 		Capability: ModelCapability{
-			Type:            ModelTypeGeneral,
-			MaxSeqLength:    512,
-			RecommendedFor:  []string{"balanced", "semantic-search"},
+			Type:             ModelTypeGeneral,
+			MaxSeqLength:     512,
+			RecommendedFor:   []string{"balanced", "semantic-search"},
 			AverageLatencyMs: 30,
 		},
 		Aliases: []string{"bge-base", "BAAI/bge-base"},
@@ -95,8 +95,8 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 				"go", "python", "javascript", "typescript", "java",
 				"c", "cpp", "rust", "ruby", "php", "swift", "kotlin",
 			},
-			MaxSeqLength:    8192,
-			RecommendedFor:  []string{"code-search", "code-comprehension", "snippet-retrieval"},
+			MaxSeqLength:     8192,
+			RecommendedFor:   []string{"code-search", "code-comprehension", "snippet-retrieval"},
 			AverageLatencyMs: 40,
 		},
 		Aliases: []string{"jina-code", "jina-embeddings-v2-base-code"},
@@ -114,8 +114,8 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 				"go", "python", "javascript", "typescript", "java",
 				"c", "cpp", "csharp", "ruby", "php",
 			},
-			MaxSeqLength:    512,
-			RecommendedFor:  []string{"code-search", "code-similarity"},
+			MaxSeqLength:     512,
+			RecommendedFor:   []string{"code-search", "code-similarity"},
 			AverageLatencyMs: 25,
 		},
 		Aliases: []string{"codebert", "CodeBERT"},
@@ -133,8 +133,8 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 				"go", "python", "javascript", "typescript", "java",
 				"c", "cpp", "csharp", "rust", "ruby", "php", "scala",
 			},
-			MaxSeqLength:    1024,
-			RecommendedFor:  []string{"code-completion", "code-search", "large-codebase"},
+			MaxSeqLength:     1024,
+			RecommendedFor:   []string{"code-completion", "code-search", "large-codebase"},
 			AverageLatencyMs: 35,
 		},
 		Aliases: []string{"starencoder", "StarCoder-Embed"},
@@ -152,8 +152,8 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 				"go", "python", "javascript", "typescript", "java",
 				"c", "cpp", "rust", "ruby",
 			},
-			MaxSeqLength:    512,
-			RecommendedFor:  []string{"enterprise-code", "code-search"},
+			MaxSeqLength:     512,
+			RecommendedFor:   []string{"enterprise-code", "code-search"},
 			AverageLatencyMs: 28,
 		},
 		Aliases: []string{"granite-embedding", "granite-r2"},
@@ -169,9 +169,9 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 			IsReranker:   true,
 		},
 		Capability: ModelCapability{
-			Type:            ModelTypeRerank,
-			MaxSeqLength:    512,
-			RecommendedFor:  []string{"general-reranking", "fast-rerank"},
+			Type:             ModelTypeRerank,
+			MaxSeqLength:     512,
+			RecommendedFor:   []string{"general-reranking", "fast-rerank"},
 			AverageLatencyMs: 10,
 		},
 		Aliases: []string{"ms-marco", "MiniLM-rerank"},
@@ -185,9 +185,9 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 			IsReranker:   true,
 		},
 		Capability: ModelCapability{
-			Type:            ModelTypeRerank,
-			MaxSeqLength:    512,
-			RecommendedFor:  []string{"semantic-reranking", "high-accuracy"},
+			Type:             ModelTypeRerank,
+			MaxSeqLength:     512,
+			RecommendedFor:   []string{"semantic-reranking", "high-accuracy"},
 			AverageLatencyMs: 12,
 		},
 		Aliases: []string{"bge-reranker"},
@@ -201,9 +201,9 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 			IsReranker:   true,
 		},
 		Capability: ModelCapability{
-			Type:            ModelTypeRerank,
-			MaxSeqLength:    8192,
-			RecommendedFor:  []string{"multilingual-reranking", "long-context"},
+			Type:             ModelTypeRerank,
+			MaxSeqLength:     8192,
+			RecommendedFor:   []string{"multilingual-reranking", "long-context"},
 			AverageLatencyMs: 25,
 		},
 		Aliases: []string{"bge-reranker-v2", "bge-reranker-m3"},
@@ -217,9 +217,9 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 			IsReranker:   true,
 		},
 		Capability: ModelCapability{
-			Type:            ModelTypeRerank,
-			MaxSeqLength:    8192,
-			RecommendedFor:  []string{"high-accuracy", "complex-queries"},
+			Type:             ModelTypeRerank,
+			MaxSeqLength:     8192,
+			RecommendedFor:   []string{"high-accuracy", "complex-queries"},
 			AverageLatencyMs: 45,
 		},
 		Aliases: []string{"bge-reranker-gemma"},
@@ -233,9 +233,9 @@ var MultiModelRegistry = map[string]MultiModelConfig{
 			IsReranker:   true,
 		},
 		Capability: ModelCapability{
-			Type:            ModelTypeRerank,
-			MaxSeqLength:    1024,
-			RecommendedFor:  []string{"multilingual", "code-reranking", "fast-rerank"},
+			Type:             ModelTypeRerank,
+			MaxSeqLength:     1024,
+			RecommendedFor:   []string{"multilingual", "code-reranking", "fast-rerank"},
 			AverageLatencyMs: 15,
 		},
 		Aliases: []string{"jina-reranker", "jina-reranker-v2"},
@@ -327,13 +327,13 @@ func RecommendModelForUseCase(useCase string) string {
 
 	// Map use cases to recommended models
 	useCaseMap := map[string]string{
-		"code-search":      "Xenova/jina-embeddings-v2-base-code",
-		"semantic-search":  "Xenova/bge-m3",
-		"fast-search":      "BAAI/bge-small-en-v1.5",
-		"code-completion":  "bigcode/starencoder",
-		"enterprise-code":  "IBM/granite-embedding-english-r2",
-		"rerank":           "Xenova/bge-reranker-v2-m3",
-		"code-rerank":      "Xenova/jina-reranker-v2-base-multilingual",
+		"code-search":     "Xenova/jina-embeddings-v2-base-code",
+		"semantic-search": "Xenova/bge-m3",
+		"fast-search":     "BAAI/bge-small-en-v1.5",
+		"code-completion": "bigcode/starencoder",
+		"enterprise-code": "IBM/granite-embedding-english-r2",
+		"rerank":          "Xenova/bge-reranker-v2-m3",
+		"code-rerank":     "Xenova/jina-reranker-v2-base-multilingual",
 	}
 
 	if model, ok := useCaseMap[useCase]; ok {

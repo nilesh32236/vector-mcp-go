@@ -314,10 +314,10 @@ type Stats struct {
 
 // StatsCache wraps a cache to track hit/miss statistics.
 type StatsCache struct {
-	cache    Cache
-	hits     int64
-	misses   int64
-	mu       sync.Mutex
+	cache  Cache
+	hits   int64
+	misses int64
+	mu     sync.Mutex
 }
 
 // NewStatsCache creates a cache wrapper that tracks statistics.

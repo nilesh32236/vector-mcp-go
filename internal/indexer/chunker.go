@@ -50,8 +50,6 @@ type entityMatch struct {
 	chunk Chunk
 }
 
-
-
 func CreateChunks(text string, filePath string) []Chunk {
 	ext := filepath.Ext(filePath)
 	relationships := parseRelationships(text, ext)

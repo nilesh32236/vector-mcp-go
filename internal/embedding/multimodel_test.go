@@ -90,8 +90,8 @@ func TestListModelsByType(t *testing.T) {
 
 func TestRecommendModelForLanguage(t *testing.T) {
 	tests := []struct {
-		lang         string
-		expectCode   bool
+		lang       string
+		expectCode bool
 	}{
 		{"go", true},
 		{"python", true},

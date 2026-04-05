@@ -11,11 +11,11 @@ import (
 
 // TokenBucket implements a thread-safe token bucket rate limiter.
 type TokenBucket struct {
-	rate       float64       // Tokens added per second
-	burst      int           // Maximum tokens (bucket size)
-	tokens     float64       // Current token count
-	lastUpdate time.Time     // Last time tokens were updated
-	mu         sync.Mutex    // Protects concurrent access
+	rate       float64    // Tokens added per second
+	burst      int        // Maximum tokens (bucket size)
+	tokens     float64    // Current token count
+	lastUpdate time.Time  // Last time tokens were updated
+	mu         sync.Mutex // Protects concurrent access
 }
 
 // NewTokenBucket creates a new token bucket rate limiter.
@@ -181,8 +181,8 @@ func WithLimitedHandler(handler http.HandlerFunc) MiddlewareOption {
 func NewMiddleware(opts ...MiddlewareOption) *Middleware {
 	m := &Middleware{
 		buckets: make(map[string]*TokenBucket),
-		rate:    10,  // Default: 10 requests per second
-		burst:   20,  // Default: allow burst of 20
+		rate:    10, // Default: 10 requests per second
+		burst:   20, // Default: allow burst of 20
 		keyFunc: DefaultKeyFunc,
 		onLimited: func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Retry-After", "1")
