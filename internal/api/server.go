@@ -63,7 +63,7 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 			log.Printf("MCP request: %s %s", r.Method, r.URL.String())
 
 			// CORS headers are essential for browser-based clients
-			w.Header().Set("Access-Control-Allow-Origin", "*")
+			server.setCORSHeaders(w, r)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Authorization, MCP-Protocol-Version")
 			w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
@@ -108,7 +108,7 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 			statusCode:     http.StatusOK,
 		}
 
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		server.setCORSHeaders(w, r)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, X-Requested-With, Accept, Origin")
 		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
@@ -142,6 +142,27 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(statusCode int) {
 	r.statusCode = statusCode
 	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (s *Server) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return
+	}
+
+	w.Header().Add("Vary", "Origin")
+
+	if len(s.cfg.AllowedOrigins) == 0 {
+		// Secure by default: do not echo back the origin if nothing is configured
+		return
+	}
+
+	for _, allowedOrigin := range s.cfg.AllowedOrigins {
+		if allowedOrigin == "*" || allowedOrigin == origin {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			return
+		}
+	}
 }
 
 // Start launches the HTTP API server on the configured port.
