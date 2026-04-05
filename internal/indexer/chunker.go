@@ -631,6 +631,17 @@ func extractCallsGeneric(node *sitter.Node, content string) []string {
 	return calls
 }
 
+// Pre-compiled regular expressions for relationship parsing to improve performance
+var (
+	tsImportRegex       = regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
+	tsNamedImportRegex  = regexp.MustCompile(`import\s*{([^}]+)}`)
+	goSingleImportRegex = regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
+	goBlockRegex        = regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
+	goInnerRegex        = regexp.MustCompile(`["']([^"']+)["']`)
+	phpReqRegex         = regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
+	phpUseRegex         = regexp.MustCompile(`use\s+([^;]+);`)
+)
+
 func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 	score := float32(1.0)
 
@@ -645,27 +656,19 @@ func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 	return score
 }
 
-var (
-	jsImportRegex      = regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
-	jsNamedImportRegex = regexp.MustCompile(`import\s*{([^}]+)}`)
-	goSingleImportRegex = regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
-	goBlockRegex       = regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
-	goInnerRegex       = regexp.MustCompile(`["']([^"']+)["']`)
-	phpReqRegex        = regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
-	phpUseRegex        = regexp.MustCompile(`use\s+([^;]+);`)
-)
+
 
 func parseRelationships(text string, ext string) []string {
 	var relations []string
 	if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
-		matches := jsImportRegex.FindAllStringSubmatch(text, -1)
+		matches := tsImportRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {
 				relations = append(relations, m[1])
 			}
 		}
 
-		namedMatches := jsNamedImportRegex.FindAllStringSubmatch(text, -1)
+		namedMatches := tsNamedImportRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range namedMatches {
 			if len(m) > 1 {
 				names := strings.Split(m[1], ",")

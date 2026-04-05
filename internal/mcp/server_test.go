@@ -22,6 +22,10 @@ type mockEmbedder struct {
 }
 
 func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	return m.EmbedQuery(ctx, text)
+}
+
+func (m *mockEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	d := m.dim
 	if d == 0 {
 		d = 1024
