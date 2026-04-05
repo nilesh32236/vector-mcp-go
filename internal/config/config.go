@@ -141,7 +141,10 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 	allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS")
 	var allowedOrigins []string
 	if allowedOriginsStr == "" {
-		allowedOrigins = []string{"*"}
+		allowedOrigins = []string{"http://localhost:" + apiPort, "http://127.0.0.1:" + apiPort}
+		if logger != nil {
+			logger.Warn("ALLOWED_ORIGINS is not set. Defaulting to loopback only.", "origins", allowedOrigins)
+		}
 	} else {
 		for _, o := range strings.Split(allowedOriginsStr, ",") {
 			o = strings.TrimSpace(o)
