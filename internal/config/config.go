@@ -28,6 +28,7 @@ type Config struct {
 	EnableLiveIndexing bool
 	EmbedderPoolSize   int
 	ApiPort            string
+	AllowedOrigins     []string
 	Logger             *slog.Logger
 }
 
@@ -137,6 +138,22 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		apiPort = "47821"
 	}
 
+	allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS")
+	var allowedOrigins []string
+	if allowedOriginsStr == "" {
+		allowedOrigins = []string{"http://localhost:" + apiPort, "http://127.0.0.1:" + apiPort}
+		if logger != nil {
+			logger.Warn("ALLOWED_ORIGINS is not set. Defaulting to loopback only.", "origins", allowedOrigins)
+		}
+	} else {
+		for _, o := range strings.Split(allowedOriginsStr, ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				allowedOrigins = append(allowedOrigins, o)
+			}
+		}
+	}
+
 	matryoshkaDim := 0
 	if v := os.Getenv("MATRYOSHKA_DIM"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -161,6 +178,7 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		EnableLiveIndexing: enableLiveIndexing,
 		EmbedderPoolSize:   embedderPoolSize,
 		ApiPort:            apiPort,
+		AllowedOrigins:     allowedOrigins,
 		Logger:             logger,
 	}
 }
