@@ -656,6 +656,8 @@ func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 	return score
 }
 
+
+
 func parseRelationships(text string, ext string) []string {
 	var relations []string
 	if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
