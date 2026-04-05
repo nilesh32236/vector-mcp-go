@@ -40,6 +40,21 @@ type entityMatch struct {
 	chunk Chunk
 }
 
+var (
+	// JS/TS import regexes
+	jsImportRegex      = regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
+	jsNamedImportRegex = regexp.MustCompile(`import\s*{([^}]+)}`)
+
+	// Go import regexes
+	goSingleImportRegex = regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
+	goBlockRegex        = regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
+	goInnerRegex        = regexp.MustCompile(`["']([^"']+)["']`)
+
+	// PHP require/use regexes
+	phpReqRegex = regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
+	phpUseRegex = regexp.MustCompile(`use\s+([^;]+);`)
+)
+
 func CreateChunks(text string, filePath string) []Chunk {
 	ext := filepath.Ext(filePath)
 	relationships := parseRelationships(text, ext)
@@ -648,16 +663,14 @@ func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 func parseRelationships(text string, ext string) []string {
 	var relations []string
 	if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
-		importRegex := regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
-		matches := importRegex.FindAllStringSubmatch(text, -1)
+		matches := jsImportRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {
 				relations = append(relations, m[1])
 			}
 		}
 
-		namedImportRegex := regexp.MustCompile(`import\s*{([^}]+)}`)
-		namedMatches := namedImportRegex.FindAllStringSubmatch(text, -1)
+		namedMatches := jsNamedImportRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range namedMatches {
 			if len(m) > 1 {
 				names := strings.Split(m[1], ",")
@@ -667,21 +680,18 @@ func parseRelationships(text string, ext string) []string {
 			}
 		}
 	} else if ext == ".go" {
-		singleImportRegex := regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
-		matches := singleImportRegex.FindAllStringSubmatch(text, -1)
+		matches := goSingleImportRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {
 				relations = append(relations, m[1])
 			}
 		}
 
-		blockRegex := regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
-		blocks := blockRegex.FindAllStringSubmatch(text, -1)
+		blocks := goBlockRegex.FindAllStringSubmatch(text, -1)
 		for _, b := range blocks {
 			if len(b) > 1 {
 				inner := b[1]
-				innerRegex := regexp.MustCompile(`["']([^"']+)["']`)
-				innerMatches := innerRegex.FindAllStringSubmatch(inner, -1)
+				innerMatches := goInnerRegex.FindAllStringSubmatch(inner, -1)
 				for _, im := range innerMatches {
 					if len(im) > 1 {
 						relations = append(relations, im[1])
@@ -690,16 +700,14 @@ func parseRelationships(text string, ext string) []string {
 			}
 		}
 	} else if ext == ".php" {
-		reqRegex := regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
-		matches := reqRegex.FindAllStringSubmatch(text, -1)
+		matches := phpReqRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {
 				relations = append(relations, m[1])
 			}
 		}
 
-		useRegex := regexp.MustCompile(`use\s+([^;]+);`)
-		useMatches := useRegex.FindAllStringSubmatch(text, -1)
+		useMatches := phpUseRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range useMatches {
 			if len(m) > 1 {
 				parts := strings.Split(m[1], ",")
