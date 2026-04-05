@@ -19,6 +19,16 @@ import (
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
 
+var (
+	tsImportRegex       = regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
+	tsNamedImportRegex  = regexp.MustCompile(`import\s*{([^}]+)}`)
+	goSingleImportRegex = regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
+	goBlockRegex        = regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
+	goInnerImportRegex  = regexp.MustCompile(`["']([^"']+)["']`)
+	phpReqRegex         = regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
+	phpUseRegex         = regexp.MustCompile(`use\s+([^;]+);`)
+)
+
 type Chunk struct {
 	Content            string
 	ContextualString   string
@@ -631,17 +641,6 @@ func extractCallsGeneric(node *sitter.Node, content string) []string {
 	return calls
 }
 
-// Pre-compiled regular expressions for relationship parsing to improve performance
-var (
-	tsImportRegex       = regexp.MustCompile(`(?:import|from|require)\s*\(?\s*['"]([^'"]+)['"]`)
-	tsNamedImportRegex  = regexp.MustCompile(`import\s*{([^}]+)}`)
-	goSingleImportRegex = regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
-	goBlockRegex        = regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
-	goInnerRegex        = regexp.MustCompile(`["']([^"']+)["']`)
-	phpReqRegex         = regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
-	phpUseRegex         = regexp.MustCompile(`use\s+([^;]+);`)
-)
-
 func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 	score := float32(1.0)
 
@@ -655,8 +654,6 @@ func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 	score += float32(len(calls)) * 0.1
 	return score
 }
-
-
 
 func parseRelationships(text string, ext string) []string {
 	var relations []string
@@ -689,7 +686,7 @@ func parseRelationships(text string, ext string) []string {
 		for _, b := range blocks {
 			if len(b) > 1 {
 				inner := b[1]
-				innerMatches := goInnerRegex.FindAllStringSubmatch(inner, -1)
+				innerMatches := goInnerImportRegex.FindAllStringSubmatch(inner, -1)
 				for _, im := range innerMatches {
 					if len(im) > 1 {
 						relations = append(relations, im[1])

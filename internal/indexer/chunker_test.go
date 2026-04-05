@@ -309,3 +309,12 @@ type Service interface {
 		t.Error("Did not find chunk for interface Service")
 	}
 }
+
+func BenchmarkParseRelationships(b *testing.B) {
+	text := `import { X, Y } from 'module1';
+import 'module2';
+require('module3');`
+	for i := 0; i < b.N; i++ {
+		parseRelationships(text, ".ts")
+	}
+}

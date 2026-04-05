@@ -61,11 +61,6 @@ func (m *MockEmbedder) GetCallCounts() (embedCalls, batchCalls, rerankCalls int)
 
 // Embed generates a mock embedding for the given text.
 func (m *MockEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	return m.EmbedQuery(ctx, text) // Default to EmbedQuery for mock consistency
-}
-
-// EmbedQuery generates a mock embedding for the given query text.
-func (m *MockEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	m.mu.Lock()
 	m.embedCalls++
 	m.mu.Unlock()
