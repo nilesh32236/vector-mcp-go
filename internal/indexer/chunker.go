@@ -641,6 +641,8 @@ func extractCallsGeneric(node *sitter.Node, content string) []string {
 	return calls
 }
 
+
+
 func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 	score := float32(1.0)
 
@@ -654,6 +656,8 @@ func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 	score += float32(len(calls)) * 0.1
 	return score
 }
+
+
 
 func parseRelationships(text string, ext string) []string {
 	var relations []string

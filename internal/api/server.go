@@ -63,7 +63,7 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 			log.Printf("MCP request: %s %s", r.Method, r.URL.String())
 
 			// CORS headers are essential for browser-based clients
-			w.Header().Set("Access-Control-Allow-Origin", "*")
+			setCORSHeaders(w, r, cfg.AllowedOrigins)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Authorization, MCP-Protocol-Version")
 			w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
@@ -108,7 +108,7 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 			statusCode:     http.StatusOK,
 		}
 
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		setCORSHeaders(w, r, cfg.AllowedOrigins)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, X-Requested-With, Accept, Origin")
 		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
@@ -268,4 +268,31 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "alive",
 	})
+}
+
+// setCORSHeaders sets the appropriate Access-Control-Allow-Origin and unconditionally sets Vary: Origin.
+func setCORSHeaders(w http.ResponseWriter, r *http.Request, allowedOrigins []string) {
+	w.Header().Add("Vary", "Origin")
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return
+	}
+
+	allowedOrigin := ""
+	for _, o := range allowedOrigins {
+		if o == "*" || o == origin {
+			allowedOrigin = o
+			if o == origin {
+				break
+			}
+		}
+	}
+
+	if allowedOrigin != "" {
+		if allowedOrigin != "*" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
+	}
 }
