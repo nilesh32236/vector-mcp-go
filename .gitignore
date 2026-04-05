@@ -15,9 +15,6 @@ Thumbs.db
 .vscode/
 .idea/
 
-.gocache/
-
-results-test/
 models/
 .data/
 data/

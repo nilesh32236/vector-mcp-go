@@ -22,7 +22,6 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/embedding"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 	"github.com/nilesh32236/vector-mcp-go/internal/mcp"
-	"github.com/nilesh32236/vector-mcp-go/internal/observability/tracing"
 	"github.com/nilesh32236/vector-mcp-go/internal/onnx"
 	"github.com/nilesh32236/vector-mcp-go/internal/system"
 	"github.com/nilesh32236/vector-mcp-go/internal/watcher"
@@ -52,7 +51,6 @@ type App struct {
 	apiServer    *api.Server
 	analyzer     analysis.Analyzer
 	throttler    *system.MemThrottler
-	traceProv    *tracing.Provider
 	ctx          context.Context
 	cancel       context.CancelFunc
 }
@@ -93,13 +91,8 @@ func (a *App) getStore(ctx context.Context, forceRefresh bool) (*db.Store, error
 }
 
 func (a *App) Init(socketPath string) error {
-	traceProvider, err := tracing.Init(a.ctx)
-	if err != nil {
-		return fmt.Errorf("failed to initialize tracing: %w", err)
-	}
-	a.traceProv = traceProvider
-
 	// 1. Master/Slave Detection
+	var err error
 	a.masterServer, err = daemon.StartMasterServer(socketPath, nil, a.indexQueue, nil, a.progressMap)
 	if err == nil {
 		a.isMaster = true
@@ -125,15 +118,7 @@ func (a *App) Init(socketPath string) error {
 		if err != nil {
 			return fmt.Errorf("failed to ensure models: %w", err)
 		}
-		mc = mc.WithMatryoshkaDimension(a.cfg.MatryoshkaDim)
-		a.cfg.Dimension = mc.EffectiveDimension()
-		if mc.MatryoshkaDim > 0 {
-			a.logger.Info("Matryoshka truncation enabled",
-				"model", a.cfg.ModelName,
-				"source_dimension", mc.Dimension,
-				"effective_dimension", mc.EffectiveDimension(),
-			)
-		}
+		a.cfg.Dimension = mc.Dimension
 
 		var rerankerMc *embedding.ModelConfig
 		if a.cfg.RerankerModelName != "" {
@@ -282,27 +267,11 @@ func (a *App) Start(indexFlag, daemonFlag bool) error {
 func (a *App) Stop() {
 	a.logger.Info("Shutting down...")
 	a.cancel()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-
-	if a.apiServer != nil {
-		if err := a.apiServer.Shutdown(shutdownCtx); err != nil {
-			a.logger.Warn("Failed to shut down API server", "error", err)
-		}
-	}
-	if a.embedPool != nil {
-		a.embedPool.Close()
-	}
 	if a.isMaster && a.masterServer != nil {
 		a.masterServer.Close()
 	}
 	if a.throttler != nil {
 		a.throttler.Stop()
-	}
-	if a.traceProv != nil {
-		if err := a.traceProv.Shutdown(shutdownCtx); err != nil {
-			a.logger.Warn("Failed to shut down tracer provider", "error", err)
-		}
 	}
 	// Give time for background tasks to clean up
 	time.Sleep(200 * time.Millisecond)
