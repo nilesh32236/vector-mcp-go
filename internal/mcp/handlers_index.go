@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
-	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 )
 
@@ -33,64 +31,6 @@ func (s *Server) handleTriggerProjectIndex(ctx context.Context, request mcp.Call
 			return mcp.NewToolResultError(fmt.Sprintf("failed to delegate indexing to master daemon: %v", err)), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Indexing task successfully delegated to the master daemon for %s.", absPath)), nil
-	}
-
-	// For MCP clients that support progress notifications
-	if request.Params.Meta.ProgressToken != "" {
-		go func() {
-			store, err := s.getStore(ctx)
-			if err != nil {
-				s.logger.Error("Failed to get store for tool progress", "error", err)
-				return
-			}
-
-			localStore, ok := store.(*db.Store)
-			if !ok {
-				s.logger.Error("Tool progress requires a local store")
-				return
-			}
-
-			progressCh := make(chan indexer.Progress, 10)
-			opts := indexer.IndexerOptions{
-				Config: &config.Config{
-					ProjectRoot: absPath,
-					DbPath:      s.cfg.DbPath,
-					ModelsDir:   s.cfg.ModelsDir,
-					Logger:      s.logger,
-				},
-				Store:      localStore,
-				Embedder:   s.embedder,
-				Logger:     s.logger,
-				ProgressCh: progressCh,
-			}
-
-			// Background goroutine to forward progress to MCP
-			go func() {
-				// Capture client session from context if possible
-				session := server.ClientSessionFromContext(ctx)
-				sessionID := ""
-				if session != nil {
-					sessionID = session.SessionID()
-				}
-
-				for p := range progressCh {
-					params := map[string]any{
-						"progressToken": request.Params.Meta.ProgressToken,
-						"progress":      float64(p.Current),
-						"total":         float64(p.Total),
-					}
-					if sessionID != "" {
-						_ = s.MCPServer.SendNotificationToSpecificClient(sessionID, "notifications/progress", params)
-					} else {
-						s.MCPServer.SendNotificationToAllClients("notifications/progress", params)
-					}
-				}
-			}()
-
-			_, _ = indexer.IndexFullCodebase(ctx, opts)
-			close(progressCh)
-		}()
-		return mcp.NewToolResultText(fmt.Sprintf("Full project indexing started with progress tracking for %s.", absPath)), nil
 	}
 
 	s.indexQueue <- absPath

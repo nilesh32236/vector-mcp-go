@@ -24,11 +24,6 @@ type deterministicEmbedder struct {
 
 // Embed returns a deterministic embedding for stable benchmark assertions.
 func (m *deterministicEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	return m.EmbedQuery(ctx, text)
-}
-
-// EmbedQuery returns a deterministic embedding for stable benchmark assertions.
-func (m *deterministicEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	if m.dim <= 0 {
 		m.dim = 384
 	}
@@ -42,10 +37,6 @@ func (m *deterministicEmbedder) EmbedQuery(ctx context.Context, text string) ([]
 		emb[i] = v
 	}
 	return emb, nil
-}
-
-func (m *deterministicEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
-	return make([]float32, len(texts)), nil
 }
 
 // EmbedBatch embeds a list of inputs using the same deterministic mapping as Embed.

@@ -6,9 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
-	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
@@ -255,8 +253,7 @@ func (s *Server) handleTriggerIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Path   string `json:"path"`
-		Stream bool   `json:"stream"`
+		Path string `json:"path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -264,63 +261,6 @@ func (s *Server) handleTriggerIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Path == "" {
 		req.Path = s.cfg.ProjectRoot
-	}
-
-	if req.Stream {
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		store, err := s.storeGetter(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		progressCh := make(chan indexer.Progress, 10)
-		opts := indexer.IndexerOptions{
-			Config: &config.Config{
-				ProjectRoot: req.Path,
-				DbPath:      s.cfg.DbPath,
-				ModelsDir:   s.cfg.ModelsDir,
-				Logger:      s.cfg.Logger,
-			},
-			Store:      store,
-			Embedder:   s.embedder,
-			Logger:     s.cfg.Logger,
-			ProgressCh: progressCh,
-		}
-
-		done := make(chan struct{})
-		go func() {
-			_, _ = indexer.IndexFullCodebase(r.Context(), opts)
-			close(done)
-		}()
-
-		for {
-			select {
-			case p, ok := <-progressCh:
-				if !ok {
-					progressCh = nil
-					continue
-				}
-				data, _ := json.Marshal(p)
-				fmt.Fprintf(w, "data: %s\n\n", string(data))
-				flusher.Flush()
-			case <-done:
-				fmt.Fprintf(w, "data: {\"status\":\"completed\"}\n\n")
-				flusher.Flush()
-				return
-			case <-r.Context().Done():
-				return
-			}
-		}
 	}
 
 	result, err := s.mcpServer.CallTool(r.Context(), "trigger_project_index", map[string]interface{}{

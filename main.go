@@ -360,15 +360,6 @@ func (pe *poolEmbedder) Embed(ctx context.Context, text string) ([]float32, erro
 	return e.Embed(ctx, text)
 }
 
-func (pe *poolEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
-	e, err := pe.pool.Get(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer pe.pool.Put(e)
-	return e.EmbedQuery(ctx, text)
-}
-
 func (pe *poolEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	e, err := pe.pool.Get(ctx)
 	if err != nil {
