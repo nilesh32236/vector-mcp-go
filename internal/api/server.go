@@ -10,12 +10,16 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	mcp_server "github.com/mark3labs/mcp-go/server"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 	"github.com/nilesh32236/vector-mcp-go/internal/mcp"
+	"github.com/nilesh32236/vector-mcp-go/internal/observability/metrics"
+	"github.com/nilesh32236/vector-mcp-go/internal/observability/tracing"
+	"github.com/nilesh32236/vector-mcp-go/internal/security/ratelimit"
 )
 
 // StoreGetter is a function type that retrieves the active vector database store.
@@ -23,17 +27,18 @@ type StoreGetter func(ctx context.Context) (*db.Store, error)
 
 // Server represents the HTTP API server.
 type Server struct {
-	cfg         *config.Config   // System configuration
-	storeGetter StoreGetter      // Logic to retrieve the database store
-	embedder    indexer.Embedder // Local embedding engine
-	srv         *http.Server     // Underlying HTTP server
-	mcpServer   *mcp.Server      // Linked MCP server instance for tool execution
+	cfg         *config.Config        // System configuration
+	storeGetter StoreGetter           // Logic to retrieve the database store
+	embedder    indexer.Embedder      // Local embedding engine
+	srv         *http.Server          // Underlying HTTP server
+	mcpServer   *mcp.Server           // Linked MCP server instance for tool execution
+	rateLimiter *ratelimit.Middleware // Rate limiting middleware
 }
 
 // NewServer initializes and returns a new API Server.
 // It sets up routing for chat sessions, semantic search, and MCP tool proxies.
 func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Embedder, mcpServer *mcp.Server) *Server {
-
+	metrics.InitializeDefaultMetrics()
 	mux := http.NewServeMux()
 
 	server := &Server{
@@ -41,9 +46,14 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 		storeGetter: storeGetter,
 		embedder:    embedder,
 		mcpServer:   mcpServer,
+		// Initialize rate limiter: 30 requests/second per client, burst of 60
+		rateLimiter: ratelimit.PerClientRateLimit(30, 60),
 	}
 
 	mux.HandleFunc("GET /api/health", server.handleHealth)
+	mux.HandleFunc("GET /api/ready", server.handleReady)
+	mux.HandleFunc("GET /api/live", server.handleLive)
+	mux.Handle("GET /metrics", metrics.DefaultCollector.Handler())
 
 	// MCP HTTP transport (Streamable-HTTP specification)
 	if mcpServer != nil && mcpServer.MCPServer != nil {
@@ -53,26 +63,7 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 			log.Printf("MCP request: %s %s", r.Method, r.URL.String())
 
 			// CORS headers are essential for browser-based clients
-			origin := r.Header.Get("Origin")
-			allowedOrigin := ""
-			for _, o := range cfg.AllowedOrigins {
-				if o == "*" || o == origin {
-					allowedOrigin = o
-					if o == origin {
-						break
-					}
-				}
-			}
-
-			if allowedOrigin != "" {
-				if allowedOrigin != "*" {
-					w.Header().Set("Access-Control-Allow-Origin", origin)
-					w.Header().Set("Vary", "Origin")
-				} else {
-					w.Header().Set("Access-Control-Allow-Origin", "*")
-				}
-			}
-
+			server.setCORSHeaders(w, r)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Authorization, MCP-Protocol-Version")
 			w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
@@ -105,45 +96,73 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 
 	addr := fmt.Sprintf(":%s", cfg.ApiPort)
 
-	corsMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		allowedOrigin := ""
-		for _, o := range cfg.AllowedOrigins {
-			if o == "*" || o == origin {
-				allowedOrigin = o
-				if o == origin {
-					break
-				}
-			}
+	rateLimitedMux := server.rateLimiter.Handler(mux)
+
+	observedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		timer := metrics.NewTimer(metrics.RequestDuration)
+		ctx, span := tracing.StartSpan(r.Context(), "api.server", fmt.Sprintf("http %s %s", r.Method, r.URL.Path))
+		defer span.End()
+
+		recorder := &statusRecorder{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK,
 		}
 
-		if allowedOrigin != "" {
-			if allowedOrigin != "*" {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Vary", "Origin")
-			} else {
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-			}
-		}
-
+		server.setCORSHeaders(w, r)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, X-Requested-With, Accept, Origin")
 		w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
 
 		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
+			recorder.WriteHeader(http.StatusNoContent)
+			timer.ObserveDuration()
 			return
 		}
 
-		mux.ServeHTTP(w, r)
+		rateLimitedMux.ServeHTTP(recorder, r.WithContext(ctx))
+		timer.ObserveDuration()
+		if recorder.statusCode >= http.StatusBadRequest && metrics.ErrorsTotal != nil {
+			metrics.ErrorsTotal.Inc()
+		}
 	})
 
 	server.srv = &http.Server{
 		Addr:    addr,
-		Handler: corsMux,
+		Handler: observedMux,
 	}
 
 	return server
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (s *Server) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return
+	}
+
+	w.Header().Add("Vary", "Origin")
+
+	if len(s.cfg.AllowedOrigins) == 0 {
+		// Secure by default: do not echo back the origin if nothing is configured
+		return
+	}
+
+	for _, allowedOrigin := range s.cfg.AllowedOrigins {
+		if allowedOrigin == "*" || allowedOrigin == origin {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			return
+		}
+	}
 }
 
 // Start launches the HTTP API server on the configured port.
@@ -169,8 +188,105 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // handleHealth reports the current status and version of the API server.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
+
+	// Run health checks
+	checks := make(map[string]interface{})
+	allHealthy := true
+
+	// Database check
+	dbStart := time.Now()
+	dbStatus := "ok"
+	if s.storeGetter != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		store, err := s.storeGetter(ctx)
+		if err != nil {
+			dbStatus = "unhealthy"
+			allHealthy = false
+		} else if store != nil && metrics.DBRecordsTotal != nil {
+			metrics.DBRecordsTotal.Set(float64(store.Count()))
+		}
+	}
+	checks["database"] = map[string]interface{}{
+		"status":     dbStatus,
+		"latency_ms": time.Since(dbStart).Milliseconds(),
+	}
+
+	// Embedder check (if available)
+	if s.embedder != nil {
+		checks["embedder"] = map[string]interface{}{
+			"status": "ok",
+		}
+	}
+
+	// Rate limiter stats
+	if s.rateLimiter != nil {
+		stats := s.rateLimiter.GetStats()
+		checks["rate_limiter"] = map[string]interface{}{
+			"status":        "ok",
+			"total_buckets": stats.TotalBuckets,
+		}
+	}
+
+	// Overall status
+	status := "ok"
+	if !allHealthy {
+		status = "degraded"
+	}
+
+	response := map[string]interface{}{
+		"status":  status,
 		"version": "1.1.0",
+		"checks":  checks,
+	}
+
+	if allHealthy {
+		w.WriteHeader(http.StatusOK)
+	} else {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleReady reports whether the server is ready to accept traffic.
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Check if essential components are ready
+	ready := true
+	reasons := []string{}
+
+	// Check database
+	if s.storeGetter != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		_, err := s.storeGetter(ctx)
+		if err != nil {
+			ready = false
+			reasons = append(reasons, "database not ready")
+		}
+	}
+
+	response := map[string]interface{}{
+		"ready": ready,
+	}
+
+	if !ready {
+		response["reasons"] = reasons
+		w.WriteHeader(http.StatusServiceUnavailable)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleLive reports whether the server process is alive.
+func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "alive",
 	})
 }
