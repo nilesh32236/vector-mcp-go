@@ -320,9 +320,6 @@ func treeSitterChunk(content string, filePath string) []Chunk {
 									if selector := findFirstNodeContentByType(p, []byte(content), "selectors"); selector != "" {
 										parentSymbol = selector
 									}
-									if parentSymbol != "" {
-										break
-									}
 								case "media_statement":
 									parentSymbol = "@media"
 								case "keyframes_statement":
