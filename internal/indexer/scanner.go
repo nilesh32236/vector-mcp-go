@@ -355,8 +355,28 @@ func IndexSingleFile(ctx context.Context, path string, opts IndexerOptions) (Ind
 }
 
 var (
-	AllowExts = []string{".ts", ".tsx", ".js", ".jsx", ".prisma", ".json", ".css", ".html", ".md", ".env", ".yml", ".yaml", ".go", ".py", ".rs", ".sh", ".txt", ".pdf"}
+	AllowExts    = []string{".ts", ".tsx", ".js", ".jsx", ".prisma", ".json", ".css", ".html", ".md", ".env", ".yml", ".yaml", ".go", ".py", ".rs", ".sh", ".txt", ".pdf"}
+	allowExtsMap = make(map[string]struct{})
+
+	ignoredDirsMap = map[string]struct{}{
+		"node_modules": {}, ".git": {}, ".next": {}, ".turbo": {}, "dist": {},
+		"build": {}, "generated": {}, "coverage": {}, "out": {}, "vendor": {}, ".vector-db": {}, ".data": {},
+	}
+
+	ignoredExactFiles = []string{
+		"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum",
+	}
+
+	ignoredSuffixes = []string{
+		".map", ".min.js", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf",
+	}
 )
+
+func init() {
+	for _, ext := range AllowExts {
+		allowExtsMap[ext] = struct{}{}
+	}
+}
 
 func ScanFiles(root string) ([]string, error) {
 	var files []string
@@ -406,15 +426,7 @@ func ScanFiles(root string) ([]string, error) {
 		}
 
 		ext := filepath.Ext(path)
-		allowed := false
-		for _, a := range AllowExts {
-			if ext == a {
-				allowed = true
-				break
-			}
-		}
-
-		if allowed {
+		if _, allowed := allowExtsMap[ext]; allowed {
 			files = append(files, path)
 		}
 		return nil
@@ -423,35 +435,22 @@ func ScanFiles(root string) ([]string, error) {
 }
 
 func IsIgnoredDir(name string) bool {
-	ignored := []string{
-		"node_modules", ".git", ".next", ".turbo", "dist",
-		"build", "generated", "coverage", "out", "vendor", ".vector-db", ".data",
-	}
-	for _, d := range ignored {
-		if name == d {
-			return true
-		}
-	}
-	return false
+	_, ignored := ignoredDirsMap[name]
+	return ignored
 }
 
 func IsIgnoredFile(name string) bool {
-	lowerName := strings.ToLower(name)
-	ignoredExact := []string{
-		"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum",
-	}
-	for _, f := range ignoredExact {
-		if lowerName == f {
+	for _, f := range ignoredExactFiles {
+		if strings.EqualFold(name, f) {
 			return true
 		}
 	}
 
-	ignoredSuffixes := []string{
-		".map", ".min.js", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf",
-	}
 	for _, s := range ignoredSuffixes {
-		if len(lowerName) >= len(s) && lowerName[len(lowerName)-len(s):] == s {
-			return true
+		if len(name) >= len(s) {
+			if strings.EqualFold(name[len(name)-len(s):], s) {
+				return true
+			}
 		}
 	}
 
