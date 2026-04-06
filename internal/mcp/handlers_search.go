@@ -61,6 +61,8 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 	var wg sync.WaitGroup
 	numWorkers := 8
 
+	lowerQuery := strings.ToLower(query)
+
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
