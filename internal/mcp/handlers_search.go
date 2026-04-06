@@ -32,10 +32,10 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 
 	var re *regexp.Regexp
 	if isRegex {
-		var err error
-		re, err = regexp.Compile(query)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Invalid regex: %v", err)), nil
+		var regexErr error
+		re, regexErr = regexp.Compile(query)
+		if regexErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Invalid regex: %v", regexErr)), nil
 		}
 	}
 

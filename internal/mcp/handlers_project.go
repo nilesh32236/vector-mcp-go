@@ -24,9 +24,6 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 	root := s.cfg.ProjectRoot
 	if targetPath != "" {
 		var err error
-		if s.pathValidator == nil {
-			return mcp.NewToolResultError("Server Error: pathValidator not initialized"), nil
-		}
 		root, err = s.pathValidator.ValidatePath(targetPath)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Invalid target_path: %v", err)), nil

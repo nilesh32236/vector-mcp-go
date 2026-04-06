@@ -21,9 +21,6 @@ func (s *Server) handleApplyCodePatch(ctx context.Context, request mcp.CallToolR
 	}
 
 	// Validate path for security
-	if s.pathValidator == nil {
-		return mcp.NewToolResultError("Server Error: pathValidator not initialized"), nil
-	}
 	absPath, err := s.pathValidator.ValidatePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
@@ -57,9 +54,6 @@ func (s *Server) handleRunLinterAndFix(ctx context.Context, request mcp.CallTool
 	}
 
 	// Validate path for security
-	if s.pathValidator == nil {
-		return mcp.NewToolResultError("Server Error: pathValidator not initialized"), nil
-	}
 	absPath, err := s.pathValidator.ValidatePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
@@ -86,9 +80,6 @@ func (s *Server) handleCreateFile(ctx context.Context, request mcp.CallToolReque
 	}
 
 	// Validate path for security
-	if s.pathValidator == nil {
-		return mcp.NewToolResultError("Server Error: pathValidator not initialized"), nil
-	}
 	absPath, err := s.pathValidator.ValidatePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
