@@ -15,6 +15,7 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/security/pathguard"
 )
 
 type mockEmbedder struct {
@@ -258,10 +259,12 @@ export class SharedUtils {
 		Dimension:   dim,
 	}
 
+	validator, _ := pathguard.NewValidator(tempDir, pathguard.DefaultOptions())
 	srv := &Server{
 		cfg:              cfg,
 		localStoreGetter: func(ctx context.Context) (*db.Store, error) { return store, nil },
 		embedder:         &mockEmbedder{dim: dim},
+		pathValidator:    validator,
 	}
 	srv.WithRemoteStore(store)
 

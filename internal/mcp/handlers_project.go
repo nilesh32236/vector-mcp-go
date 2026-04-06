@@ -23,11 +23,11 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 
 	root := s.cfg.ProjectRoot
 	if targetPath != "" {
-		if filepath.IsAbs(targetPath) {
-			root = targetPath
-		} else {
-			root = filepath.Join(s.cfg.ProjectRoot, targetPath)
+		absPath, err := s.pathValidator.ValidatePath(targetPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid target_path: %v", err)), nil
 		}
+		root = absPath
 	}
 
 	type Node struct {
