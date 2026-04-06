@@ -142,7 +142,6 @@ func TestRecommendModelForUseCase(t *testing.T) {
 	}
 }
 
-
 func TestDefaultRouterConfig(t *testing.T) {
 	cfg := DefaultRouterConfig()
 
