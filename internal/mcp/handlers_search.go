@@ -58,6 +58,8 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 	var wg sync.WaitGroup
 	numWorkers := 8
 
+	lowerQuery := strings.ToLower(query)
+
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
@@ -79,7 +81,7 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 						if isRegex {
 							matched = re.MatchString(line)
 						} else {
-							matched = strings.Contains(strings.ToLower(line), strings.ToLower(query))
+							matched = strings.Contains(strings.ToLower(line), lowerQuery)
 						}
 
 						if matched {
