@@ -313,9 +313,9 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 // handleCheckDependencyHealth analyzes a directory's package.json against its indexed imports.
 func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	dirPath := request.GetString("directory_path", ".")
-	absPath, err := s.pathValidator.ValidatePath(dirPath)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Invalid directory_path: %v", err)), nil
+	absPath := dirPath
+	if !filepath.IsAbs(dirPath) {
+		absPath = filepath.Join(s.cfg.ProjectRoot, dirPath)
 	}
 
 	// 1. Resolve workspace root for manifest detection
@@ -992,9 +992,9 @@ func (s *Server) handleGetCodeHistory(ctx context.Context, request mcp.CallToolR
 		return mcp.NewToolResultError("file_path is required"), nil
 	}
 
-	absPath, err := s.pathValidator.ValidatePath(filePath)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Invalid file_path: %v", err)), nil
+	absPath := filePath
+	if !filepath.IsAbs(filePath) {
+		absPath = filepath.Join(s.cfg.ProjectRoot, filePath)
 	}
 
 	// Check if git is available and it's a git repo

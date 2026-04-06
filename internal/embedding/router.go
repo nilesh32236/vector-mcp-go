@@ -320,25 +320,29 @@ func DetectLanguageFromPath(path string) string {
 	return ""
 }
 
+// codeIndicators are simple heuristics to detect if content looks like code.
+var codeIndicators = []string{
+	"func ", "function ", "def ", "class ", "public ", "private ",
+	"import ", "package ", "require(", "const ", "let ", "var ",
+	"if (", "for (", "while (", "return ", "=>",
+}
+
 // isCodeContent performs a heuristic check if content looks like code.
 func isCodeContent(content string) bool {
-	// Simple heuristics
-	codeIndicators := []string{
-		"func ", "function ", "def ", "class ", "public ", "private ",
-		"import ", "package ", "require(", "const ", "let ", "var ",
-		"if (", "for (", "while (", "return ", "=>",
-	}
-
-	upper := strings.ToLower(content)
+	lower := strings.ToLower(content)
 	matches := 0
 	for _, indicator := range codeIndicators {
-		if strings.Contains(upper, strings.ToLower(indicator)) {
+		// codeIndicators are already lowercased statically above
+		if strings.Contains(lower, indicator) {
 			matches++
+			if matches >= 2 {
+				return true
+			}
 		}
 	}
 
 	// If multiple code indicators are present, likely code
-	return matches >= 2
+	return false
 }
 
 // GetStats returns statistics about the model router.

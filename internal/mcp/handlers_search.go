@@ -31,12 +31,15 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 	}
 
 	var re *regexp.Regexp
+	var lowerQuery string
 	if isRegex {
-		var regexErr error
-		re, regexErr = regexp.Compile(query)
-		if regexErr != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Invalid regex: %v", regexErr)), nil
+		var err error
+		re, err = regexp.Compile(query)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Invalid regex: %v", err)), nil
 		}
+	} else {
+		lowerQuery = strings.ToLower(query)
 	}
 
 	maxMatches := 100
@@ -79,7 +82,7 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 						if isRegex {
 							matched = re.MatchString(line)
 						} else {
-							matched = strings.Contains(strings.ToLower(line), strings.ToLower(query))
+							matched = strings.Contains(strings.ToLower(line), lowerQuery)
 						}
 
 						if matched {

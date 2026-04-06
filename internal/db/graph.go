@@ -145,8 +145,9 @@ func (g *KnowledgeGraph) SearchByName(name string) []EntityNode {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	var results []EntityNode
+	lowerName := strings.ToLower(name)
 	for _, n := range g.nodes {
-		if strings.Contains(strings.ToLower(n.Name), strings.ToLower(name)) {
+		if strings.Contains(strings.ToLower(n.Name), lowerName) {
 			results = append(results, n)
 		}
 	}
