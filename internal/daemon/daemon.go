@@ -315,7 +315,7 @@ type ProgressResponse struct {
 func (s *Service) GetProgress(_ StatusRequest, resp *ProgressResponse) error {
 	resp.Progress = make(map[string]string)
 	if s.ProgressMap != nil {
-		s.ProgressMap.Range(func(k, v interface{}) bool {
+		s.ProgressMap.Range(func(k, v any) bool {
 			resp.Progress[k.(string)] = v.(string)
 			return true
 		})
@@ -508,7 +508,7 @@ func NewRemoteStore(socketPath string) *RemoteStore {
 	return &RemoteStore{socketPath: socketPath}
 }
 
-func (rs *RemoteStore) call(method string, req interface{}, resp interface{}) error {
+func (rs *RemoteStore) call(method string, req any, resp any) error {
 	client, err := rpc.Dial("unix", rs.socketPath)
 	if err != nil {
 		return fmt.Errorf("failed to connect to master daemon: %w", err)

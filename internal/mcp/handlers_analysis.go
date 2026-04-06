@@ -1203,7 +1203,7 @@ func (s *Server) handleAnalyzeCode(ctx context.Context, request mcp.CallToolRequ
 		// Route to topological mapping/skeleton logic
 		return s.handleGetCodebaseSkeleton(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"target_path": path,
 				},
 			},
@@ -1212,7 +1212,7 @@ func (s *Server) handleAnalyzeCode(ctx context.Context, request mcp.CallToolRequ
 		// Route to dependency check
 		return s.handleCheckDependencyHealth(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"directory_path": path,
 				},
 			},
@@ -1221,7 +1221,7 @@ func (s *Server) handleAnalyzeCode(ctx context.Context, request mcp.CallToolRequ
 		// Route to duplication check
 		return s.handleFindDuplicateCode(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"target_path": path,
 				},
 			},
@@ -1230,7 +1230,7 @@ func (s *Server) handleAnalyzeCode(ctx context.Context, request mcp.CallToolRequ
 		// Route to dead code check
 		return s.handleFindDeadCode(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"target_path": path,
 				},
 			},

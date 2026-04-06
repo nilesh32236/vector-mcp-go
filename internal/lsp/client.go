@@ -117,33 +117,33 @@ func (m *LSPManager) EnsureStarted(ctx context.Context) error {
 }
 
 func (m *LSPManager) initialize(ctx context.Context) error {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"processId": os.Getpid(),
 		"rootUri":   fmt.Sprintf("file://%s", m.rootPath),
-		"capabilities": map[string]interface{}{
-			"textDocument": map[string]interface{}{
-				"definition": map[string]interface{}{
+		"capabilities": map[string]any{
+			"textDocument": map[string]any{
+				"definition": map[string]any{
 					"dynamicRegistration": true,
 				},
-				"references": map[string]interface{}{
+				"references": map[string]any{
 					"dynamicRegistration": true,
 				},
 			},
 		},
 	}
 
-	var result interface{}
+	var result any
 	err := m.callLocked(ctx, "initialize", params, &result)
 	if err != nil {
 		return err
 	}
 
 	// Send initialized notification
-	return m.notifyLocked("initialized", map[string]interface{}{})
+	return m.notifyLocked("initialized", map[string]any{})
 }
 
 // Call sends a request to the LSP and waits for a response.
-func (m *LSPManager) Call(ctx context.Context, method string, params interface{}, result interface{}) error {
+func (m *LSPManager) Call(ctx context.Context, method string, params any, result any) error {
 	if err := m.EnsureStarted(ctx); err != nil {
 		return err
 	}
@@ -153,12 +153,12 @@ func (m *LSPManager) Call(ctx context.Context, method string, params interface{}
 	return m.callLocked(ctx, method, params, result)
 }
 
-func (m *LSPManager) callLocked(ctx context.Context, method string, params interface{}, result interface{}) error {
+func (m *LSPManager) callLocked(ctx context.Context, method string, params any, result any) error {
 	m.idCounter++
 	id := m.idCounter
 	m.lastUsed = time.Now()
 
-	req := map[string]interface{}{
+	req := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      id,
 		"method":  method,
@@ -206,7 +206,7 @@ func (m *LSPManager) callLocked(ctx context.Context, method string, params inter
 }
 
 // Notify sends a notification to the LSP (no response expected).
-func (m *LSPManager) Notify(ctx context.Context, method string, params interface{}) error {
+func (m *LSPManager) Notify(ctx context.Context, method string, params any) error {
 	if err := m.EnsureStarted(ctx); err != nil {
 		return err
 	}
@@ -215,8 +215,8 @@ func (m *LSPManager) Notify(ctx context.Context, method string, params interface
 	return m.notifyLocked(method, params)
 }
 
-func (m *LSPManager) notifyLocked(method string, params interface{}) error {
-	req := map[string]interface{}{
+func (m *LSPManager) notifyLocked(method string, params any) error {
+	req := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,
 		"params":  params,

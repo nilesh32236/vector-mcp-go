@@ -75,7 +75,7 @@ func TestHandleHealth(t *testing.T) {
 				t.Errorf("Expected status %d, got %d", tt.expectedStatus, rec.Code)
 			}
 
-			var response map[string]interface{}
+			var response map[string]any
 			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 				t.Fatalf("Failed to parse response: %v", err)
 			}
@@ -128,7 +128,7 @@ func TestHandleReady(t *testing.T) {
 				t.Errorf("Expected status %d, got %d", tt.expectedStatus, rec.Code)
 			}
 
-			var response map[string]interface{}
+			var response map[string]any
 			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 				t.Fatalf("Failed to parse response: %v", err)
 			}
@@ -192,7 +192,7 @@ func TestMetricsEndpoint(t *testing.T) {
 func TestHandleSearch_Errors(t *testing.T) {
 	tests := []struct {
 		name           string
-		requestBody    interface{}
+		requestBody    any
 		storeGetter    StoreGetter
 		embedder       *mocks.MockEmbedder
 		expectedStatus int
@@ -221,7 +221,7 @@ func TestHandleSearch_Errors(t *testing.T) {
 			cfg := &config.Config{ApiPort: "8080"}
 			server := NewServer(cfg, tt.storeGetter, tt.embedder, nil)
 
-			var body interface{}
+			var body any
 			body = tt.requestBody
 			if str, ok := body.(string); ok {
 				body = str
@@ -301,9 +301,9 @@ func TestHandleCallTool(t *testing.T) {
 		cfg := &config.Config{ApiPort: "8080"}
 		server := NewServer(cfg, nil, nil, nil)
 
-		bodyBytes, _ := json.Marshal(map[string]interface{}{
+		bodyBytes, _ := json.Marshal(map[string]any{
 			"name":      "test_tool",
-			"arguments": map[string]interface{}{},
+			"arguments": map[string]any{},
 		})
 		req := httptest.NewRequest("POST", "/api/tools/call", bytes.NewReader(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")

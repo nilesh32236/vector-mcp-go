@@ -287,11 +287,11 @@ func (h *HybridReranker) Rerank(ctx context.Context, query string, results []Rer
 }
 
 // GetStats returns reranker statistics.
-func (r *AdvancedReranker) GetStats() map[string]interface{} {
+func (r *AdvancedReranker) GetStats() map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	return map[string]interface{}{
+	return map[string]any{
 		"rerank_calls":     r.rerankCalls,
 		"total_latency_ms": r.totalLatencyMs,
 		"strategy":         string(r.config.Strategy),

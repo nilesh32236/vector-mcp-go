@@ -48,7 +48,7 @@ func (s *Server) handleDeleteContext(ctx context.Context, request mcp.CallToolRe
 	projectID := request.GetString("project_id", s.cfg.ProjectRoot)
 
 	dryRun := false
-	if args, ok := request.Params.Arguments.(map[string]interface{}); ok {
+	if args, ok := request.Params.Arguments.(map[string]any); ok {
 		dryRun, _ = args["dry_run"].(bool)
 	}
 
@@ -108,7 +108,7 @@ func (s *Server) handleIndexStatus(ctx context.Context, request mcp.CallToolRequ
 			progressData = p
 		}
 	} else {
-		s.progressMap.Range(func(k, v interface{}) bool {
+		s.progressMap.Range(func(k, v any) bool {
 			progressData[k.(string)] = v.(string)
 			return true
 		})
@@ -135,7 +135,7 @@ func (s *Server) handleGetIndexingDiagnostics(ctx context.Context, _ mcp.CallToo
 	}
 
 	progressData := make(map[string]string)
-	s.progressMap.Range(func(k, v interface{}) bool {
+	s.progressMap.Range(func(k, v any) bool {
 		progressData[k.(string)] = v.(string)
 		return true
 	})

@@ -26,7 +26,7 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 	includePattern := request.GetString("include_pattern", "")
 
 	isRegex := false
-	if args, ok := request.Params.Arguments.(map[string]interface{}); ok {
+	if args, ok := request.Params.Arguments.(map[string]any); ok {
 		isRegex, _ = args["is_regex"].(bool)
 	}
 
@@ -329,7 +329,7 @@ func (s *Server) handleSearchWorkspace(ctx context.Context, request mcp.CallTool
 		// Route to vector search logic
 		return s.handleSearchCodebase(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"query":       query,
 					"topK":        limit,
 					"path_filter": pathFilter,
@@ -340,7 +340,7 @@ func (s *Server) handleSearchWorkspace(ctx context.Context, request mcp.CallTool
 		// Route to exact match/regex logic
 		return s.handleFilesystemGrep(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"query":           query,
 					"is_regex":        true, // Default to true if they use search_workspace
 					"include_pattern": pathFilter,
@@ -351,7 +351,7 @@ func (s *Server) handleSearchWorkspace(ctx context.Context, request mcp.CallTool
 		// Route to graph queries (e.g. interface implementations)
 		return s.handleGetInterfaceImplementations(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"interface_name": query,
 				},
 			},

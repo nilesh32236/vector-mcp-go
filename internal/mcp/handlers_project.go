@@ -140,7 +140,7 @@ func (s *Server) handleWorkspaceManager(ctx context.Context, request mcp.CallToo
 	case "set_project_root":
 		return s.handleSetProjectRoot(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"project_path": path,
 				},
 			},
@@ -148,7 +148,7 @@ func (s *Server) handleWorkspaceManager(ctx context.Context, request mcp.CallToo
 	case "trigger_index":
 		return s.handleTriggerProjectIndex(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"project_path": path,
 				},
 			},

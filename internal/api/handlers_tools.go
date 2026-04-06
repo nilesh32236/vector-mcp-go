@@ -213,8 +213,8 @@ func (s *Server) handleCallTool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name      string                 `json:"name"`
-		Arguments map[string]interface{} `json:"arguments"`
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -263,7 +263,7 @@ func (s *Server) handleTriggerIndex(w http.ResponseWriter, r *http.Request) {
 		req.Path = s.cfg.ProjectRoot
 	}
 
-	result, err := s.mcpServer.CallTool(r.Context(), "trigger_project_index", map[string]interface{}{
+	result, err := s.mcpServer.CallTool(r.Context(), "trigger_project_index", map[string]any{
 		"project_path": req.Path,
 	})
 	if err != nil {
@@ -321,7 +321,7 @@ func (s *Server) handleGetSkeleton(w http.ResponseWriter, r *http.Request) {
 		path = s.cfg.ProjectRoot
 	}
 
-	result, err := s.mcpServer.CallTool(r.Context(), "get_codebase_skeleton", map[string]interface{}{
+	result, err := s.mcpServer.CallTool(r.Context(), "get_codebase_skeleton", map[string]any{
 		"target_path": path,
 	})
 	if err != nil {

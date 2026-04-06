@@ -221,7 +221,7 @@ func (s *Server) registerResources() {
 			count = store.Count()
 		}
 
-		data := map[string]interface{}{
+		data := map[string]any{
 			"project_root": s.cfg.ProjectRoot,
 			"status":       status,
 			"record_count": count,
@@ -464,7 +464,7 @@ func (s *Server) Log(level mcp.LoggingLevel, message string) {
 }
 
 // CallTool invokes a registered tool handler by name with the provided arguments.
-func (s *Server) CallTool(ctx context.Context, name string, args map[string]interface{}) (*mcp.CallToolResult, error) {
+func (s *Server) CallTool(ctx context.Context, name string, args map[string]any) (*mcp.CallToolResult, error) {
 	handler, ok := s.toolHandlers[name]
 	if !ok {
 		return nil, fmt.Errorf("tool not found: %s", name)

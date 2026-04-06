@@ -457,7 +457,7 @@ func init() {
 	InitializeDefaultMetrics()
 
 	// Register a custom expvar that exports Prometheus metrics
-	expvar.Publish("prometheus", expvar.Func(func() interface{} {
+	expvar.Publish("prometheus", expvar.Func(func() any {
 		return DefaultCollector.Export()
 	}))
 }
@@ -466,7 +466,7 @@ func init() {
 func CounterFromExpvar(name, expvarName string) {
 	// This allows bridging expvar metrics to Prometheus format
 	// The expvar package already handles atomic updates
-	expvar.Publish(name, expvar.Func(func() interface{} {
+	expvar.Publish(name, expvar.Func(func() any {
 		v := expvar.Get(expvarName)
 		if v == nil {
 			return 0

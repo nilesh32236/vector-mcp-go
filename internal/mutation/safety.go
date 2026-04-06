@@ -86,8 +86,8 @@ func (c *SafetyChecker) VerifyPatchIntegrity(ctx context.Context, path, search, 
 
 	// 4. Trigger LSP update
 	// We use didOpen with the new content (even if already open, gopls will update)
-	params := map[string]interface{}{
-		"textDocument": map[string]interface{}{
+	params := map[string]any{
+		"textDocument": map[string]any{
 			"uri":        uri,
 			"languageId": "go",
 			"version":    1,

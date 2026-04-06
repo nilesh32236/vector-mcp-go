@@ -144,7 +144,7 @@ func TestSearchCodebaseTool(t *testing.T) {
 	// Test with query
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "search_codebase"
-	req.Params.Arguments = map[string]interface{}{
+	req.Params.Arguments = map[string]any{
 		"query": "hello world",
 	}
 
@@ -267,7 +267,7 @@ export class SharedUtils {
 
 	t.Run("CheckDependencyHealth", func(t *testing.T) {
 		req := mcp.CallToolRequest{}
-		req.Params.Arguments = map[string]interface{}{
+		req.Params.Arguments = map[string]any{
 			"directory_path": filepath.Join(tempDir, "apps/api"),
 		}
 		res, err := srv.handleCheckDependencyHealth(ctx, req)
@@ -282,7 +282,7 @@ export class SharedUtils {
 
 	t.Run("GenerateDocstringPrompt", func(t *testing.T) {
 		req := mcp.CallToolRequest{}
-		req.Params.Arguments = map[string]interface{}{
+		req.Params.Arguments = map[string]any{
 			"file_path":   "apps/api/main.ts",
 			"entity_name": "aliveFn",
 		}
@@ -301,7 +301,7 @@ export class SharedUtils {
 
 	t.Run("AnalyzeArchitecture", func(t *testing.T) {
 		req := mcp.CallToolRequest{}
-		req.Params.Arguments = map[string]interface{}{
+		req.Params.Arguments = map[string]any{
 			"monorepo_prefix": "@herexa/",
 		}
 		res, err := srv.handleAnalyzeArchitecture(ctx, req)
@@ -316,7 +316,7 @@ export class SharedUtils {
 
 	t.Run("FindDeadCode", func(t *testing.T) {
 		req := mcp.CallToolRequest{}
-		req.Params.Arguments = map[string]interface{}{
+		req.Params.Arguments = map[string]any{
 			"exclude_paths": []string{},
 		}
 		res, err := srv.handleFindDeadCode(ctx, req)

@@ -112,7 +112,7 @@ func (s *Server) handleModifyWorkspace(ctx context.Context, request mcp.CallTool
 	case "apply_patch":
 		return s.handleApplyCodePatch(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"path":    path,
 					"search":  search,
 					"replace": replace,
@@ -122,7 +122,7 @@ func (s *Server) handleModifyWorkspace(ctx context.Context, request mcp.CallTool
 	case "create_file":
 		return s.handleCreateFile(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"path":    path,
 					"content": content,
 				},
@@ -131,7 +131,7 @@ func (s *Server) handleModifyWorkspace(ctx context.Context, request mcp.CallTool
 	case "run_linter":
 		return s.handleRunLinterAndFix(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"path": path,
 					"tool": tool,
 				},
@@ -140,7 +140,7 @@ func (s *Server) handleModifyWorkspace(ctx context.Context, request mcp.CallTool
 	case "verify_patch":
 		return s.handleVerifyPatchIntegrity(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"path":    path,
 					"search":  search,
 					"replace": replace,
@@ -150,7 +150,7 @@ func (s *Server) handleModifyWorkspace(ctx context.Context, request mcp.CallTool
 	case "auto_fix":
 		return s.handleAutoFixMutation(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"diagnostic_json": diagnosticJson,
 				},
 			},

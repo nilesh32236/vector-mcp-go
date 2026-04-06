@@ -28,17 +28,17 @@ func (s *Server) handleGetPreciseDefinition(ctx context.Context, path string, li
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
 	}
 
-	params := map[string]interface{}{
-		"textDocument": map[string]interface{}{
+	params := map[string]any{
+		"textDocument": map[string]any{
 			"uri": fmt.Sprintf("file://%s", path),
 		},
-		"position": map[string]interface{}{
+		"position": map[string]any{
 			"line":      line,
 			"character": character,
 		},
 	}
 
-	var result []interface{}
+	var result []any
 	err = lspManager.Call(ctx, "textDocument/definition", params, &result)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LSP call failed: %v", err)), nil
@@ -63,20 +63,20 @@ func (s *Server) handleFindReferencesPrecise(ctx context.Context, path string, l
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
 	}
 
-	params := map[string]interface{}{
-		"textDocument": map[string]interface{}{
+	params := map[string]any{
+		"textDocument": map[string]any{
 			"uri": fmt.Sprintf("file://%s", path),
 		},
-		"position": map[string]interface{}{
+		"position": map[string]any{
 			"line":      line,
 			"character": character,
 		},
-		"context": map[string]interface{}{
+		"context": map[string]any{
 			"includeDeclaration": true,
 		},
 	}
 
-	var result []interface{}
+	var result []any
 	err = lspManager.Call(ctx, "textDocument/references", params, &result)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LSP call failed: %v", err)), nil
@@ -105,17 +105,17 @@ func (s *Server) handleGetTypeHierarchy(ctx context.Context, path string, line, 
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
 	}
 
-	params := map[string]interface{}{
-		"textDocument": map[string]interface{}{
+	params := map[string]any{
+		"textDocument": map[string]any{
 			"uri": fmt.Sprintf("file://%s", path),
 		},
-		"position": map[string]interface{}{
+		"position": map[string]any{
 			"line":      line,
 			"character": character,
 		},
 	}
 
-	var result interface{}
+	var result any
 	// First call textDocument/prepareTypeHierarchy
 	err = lspManager.Call(ctx, "textDocument/prepareTypeHierarchy", params, &result)
 	if err != nil {
@@ -141,7 +141,7 @@ func (s *Server) handleLspQuery(ctx context.Context, request mcp.CallToolRequest
 	case "impact_analysis":
 		return s.handleGetImpactAnalysis(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Arguments: map[string]interface{}{
+				Arguments: map[string]any{
 					"path":      path,
 					"line":      float64(line),
 					"character": float64(character),

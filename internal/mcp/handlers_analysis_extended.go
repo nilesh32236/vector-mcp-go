@@ -26,19 +26,19 @@ func (s *Server) handleGetImpactAnalysis(ctx context.Context, request mcp.CallTo
 	}
 
 	// 1. Get references via LSP
-	params := map[string]interface{}{
+	params := map[string]any{
 		"textDocument": map[string]string{"uri": fmt.Sprintf("file://%s", path)},
 		"position":     map[string]int{"line": line, "character": character},
 		"context":      map[string]bool{"includeDeclaration": false},
 	}
 
-	var res interface{}
+	var res any
 	err = lspManager.Call(ctx, "textDocument/references", params, &res)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LSP references call failed: %v", err)), nil
 	}
 
-	refs, ok := res.([]interface{})
+	refs, ok := res.([]any)
 	if !ok || len(refs) == 0 {
 		return mcp.NewToolResultText("No downstream impact detected. This symbol appears to be unused or internal to this scope."), nil
 	}
@@ -46,7 +46,7 @@ func (s *Server) handleGetImpactAnalysis(ctx context.Context, request mcp.CallTo
 	// 2. Analyze "Blast Radius"
 	uniqueFiles := make(map[string]bool)
 	for _, r := range refs {
-		if m, ok := r.(map[string]interface{}); ok {
+		if m, ok := r.(map[string]any); ok {
 			if uri, ok := m["uri"].(string); ok {
 				uniqueFiles[uri] = true
 			}

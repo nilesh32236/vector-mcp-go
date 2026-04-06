@@ -342,11 +342,11 @@ func isCodeContent(content string) bool {
 }
 
 // GetStats returns statistics about the model router.
-func (r *ModelRouter) GetStats() map[string]interface{} {
+func (r *ModelRouter) GetStats() map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"initialized": r.initialized,
 		"models":      make([]string, 0, len(r.pools)),
 	}

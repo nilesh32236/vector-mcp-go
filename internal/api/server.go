@@ -190,7 +190,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// Run health checks
-	checks := make(map[string]interface{})
+	checks := make(map[string]any)
 	allHealthy := true
 
 	// Database check
@@ -207,14 +207,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			metrics.DBRecordsTotal.Set(float64(store.Count()))
 		}
 	}
-	checks["database"] = map[string]interface{}{
+	checks["database"] = map[string]any{
 		"status":     dbStatus,
 		"latency_ms": time.Since(dbStart).Milliseconds(),
 	}
 
 	// Embedder check (if available)
 	if s.embedder != nil {
-		checks["embedder"] = map[string]interface{}{
+		checks["embedder"] = map[string]any{
 			"status": "ok",
 		}
 	}
@@ -222,7 +222,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Rate limiter stats
 	if s.rateLimiter != nil {
 		stats := s.rateLimiter.GetStats()
-		checks["rate_limiter"] = map[string]interface{}{
+		checks["rate_limiter"] = map[string]any{
 			"status":        "ok",
 			"total_buckets": stats.TotalBuckets,
 		}
@@ -234,7 +234,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		status = "degraded"
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"status":  status,
 		"version": "1.1.0",
 		"checks":  checks,
@@ -268,7 +268,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"ready": ready,
 	}
 
