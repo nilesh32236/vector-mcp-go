@@ -61,8 +61,6 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 	var wg sync.WaitGroup
 	numWorkers := 8
 
-	lowerQuery := strings.ToLower(query)
-
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
@@ -78,22 +76,40 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 					}
 
 					relPath, _ := filepath.Rel(s.cfg.ProjectRoot, path)
-					lines := strings.Split(string(content), "\n")
-					for i, line := range lines {
-						matched := false
-						if isRegex {
-							matched = re.MatchString(line)
-						} else {
-							matched = strings.Contains(strings.ToLower(line), lowerQuery)
+					contentStr := string(content)
+
+					if !isRegex {
+						contentLower := strings.ToLower(contentStr)
+						// Early exit: if the query isn't in the file at all, skip processing lines.
+						// This avoids unnecessary allocations and per-line checks for most files.
+						if !strings.Contains(contentLower, lowerQuery) {
+							continue
 						}
 
-						if matched {
-							select {
-							case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
-							case <-ctx.Done():
-								return
-							default:
-								return // matches limit reach implicitly by channel capacity if we were careful, but we handle it below
+						lines := strings.Split(contentStr, "\n")
+						lowerLines := strings.Split(contentLower, "\n")
+						for i, line := range lines {
+							if strings.Contains(lowerLines[i], lowerQuery) {
+								select {
+								case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
+								case <-ctx.Done():
+									return
+								default:
+									return // matches limit reach implicitly by channel capacity if we were careful, but we handle it below
+								}
+							}
+						}
+					} else {
+						lines := strings.Split(contentStr, "\n")
+						for i, line := range lines {
+							if re.MatchString(line) {
+								select {
+								case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
+								case <-ctx.Done():
+									return
+								default:
+									return // matches limit reach implicitly by channel capacity if we were careful, but we handle it below
+								}
 							}
 						}
 					}
