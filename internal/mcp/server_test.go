@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
+	"github.com/nilesh32236/vector-mcp-go/internal/security/pathguard"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
 )
 
@@ -258,10 +259,12 @@ export class SharedUtils {
 		Dimension:   dim,
 	}
 
+	pathValidator, _ := pathguard.NewValidator(tempDir, pathguard.DefaultOptions())
 	srv := &Server{
 		cfg:              cfg,
 		localStoreGetter: func(ctx context.Context) (*db.Store, error) { return store, nil },
 		embedder:         &mockEmbedder{dim: dim},
+		pathValidator:    pathValidator,
 	}
 	srv.WithRemoteStore(store)
 
