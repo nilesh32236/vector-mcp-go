@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -22,12 +23,13 @@ func (s *Server) handleGetInterfaceImplementations(ctx context.Context, request 
 		return mcp.NewToolResultText(fmt.Sprintf("No implementations found for interface '%s'.", name)), nil
 	}
 
-	res := fmt.Sprintf("Found %d implementations for '%s':\n", len(impls), name)
+	var res strings.Builder
+	res.WriteString(fmt.Sprintf("Found %d implementations for '%s':\n", len(impls), name))
 	for _, node := range impls {
-		res += fmt.Sprintf("- %s (Type: %s, Path: %s)\n", node.Name, node.Type, node.Path)
+		res.WriteString(fmt.Sprintf("- %s (Type: %s, Path: %s)\n", node.Name, node.Type, node.Path))
 	}
 
-	return mcp.NewToolResultText(res), nil
+	return mcp.NewToolResultText(res.String()), nil
 }
 
 func (s *Server) handleTraceDataFlow(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -45,15 +47,16 @@ func (s *Server) handleTraceDataFlow(ctx context.Context, request mcp.CallToolRe
 		return mcp.NewToolResultText(fmt.Sprintf("No entities found using symbol '%s'.", name)), nil
 	}
 
-	res := fmt.Sprintf("Entities using/containing symbol '%s':\n", name)
+	var res strings.Builder
+	res.WriteString(fmt.Sprintf("Entities using/containing symbol '%s':\n", name))
 	for _, node := range nodes {
-		res += fmt.Sprintf("- %s (Type: %s, Path: %s)\n", node.Name, node.Type, node.Path)
+		res.WriteString(fmt.Sprintf("- %s (Type: %s, Path: %s)\n", node.Name, node.Type, node.Path))
 		if node.Docstring != "" {
-			res += fmt.Sprintf("  Doc: %s\n", node.Docstring)
+			res.WriteString(fmt.Sprintf("  Doc: %s\n", node.Docstring))
 		}
 	}
 
-	return mcp.NewToolResultText(res), nil
+	return mcp.NewToolResultText(res.String()), nil
 }
 
 func (s *Server) handleGetImpactRadiusPrecise(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -71,17 +74,18 @@ func (s *Server) handleGetImpactRadiusPrecise(ctx context.Context, request mcp.C
 		return mcp.NewToolResultText(fmt.Sprintf("No entities found matching '%s'.", name)), nil
 	}
 
-	output := fmt.Sprintf("Precise Impact Analysis for '%s':\n", name)
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("Precise Impact Analysis for '%s':\n", name))
 	for _, node := range nodes {
-		output += fmt.Sprintf("\nEntity: %s (%s) in %s\n", node.Name, node.Type, node.Path)
+		output.WriteString(fmt.Sprintf("\nEntity: %s (%s) in %s\n", node.Name, node.Type, node.Path))
 
 		// 1. Structural Dependents (Implementations)
 		if node.Type == "interface" || node.Type == "interface_type" {
 			impls := s.graph.GetImplementations(node.Name)
 			if len(impls) > 0 {
-				output += "  - 🔄 Implemented by:\n"
+				output.WriteString("  - 🔄 Implemented by:\n")
 				for _, impl := range impls {
-					output += fmt.Sprintf("    * %s (%s)\n", impl.Name, impl.Path)
+					output.WriteString(fmt.Sprintf("    * %s (%s)\n", impl.Name, impl.Path))
 				}
 			}
 		}
@@ -90,5 +94,5 @@ func (s *Server) handleGetImpactRadiusPrecise(ctx context.Context, request mcp.C
 		// (Future: follow CallTree edges)
 	}
 
-	return mcp.NewToolResultText(output), nil
+	return mcp.NewToolResultText(output.String()), nil
 }

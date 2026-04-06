@@ -114,16 +114,17 @@ func (s *Server) handleIndexStatus(ctx context.Context, request mcp.CallToolRequ
 		})
 	}
 
-	bgStatus := "\n🚀 Background Indexing Tasks:\n"
+	var bgStatus strings.Builder
+	bgStatus.WriteString("\n🚀 Background Indexing Tasks:\n")
 	if len(progressData) == 0 {
-		bgStatus += "- No active background indexing.\n"
+		bgStatus.WriteString("- No active background indexing.\n")
 	} else {
 		for path, status := range progressData {
-			bgStatus += fmt.Sprintf("- %s: %s\n", path, status)
+			bgStatus.WriteString(fmt.Sprintf("- %s: %s\n", path, status))
 		}
 	}
 
-	return mcp.NewToolResultText(res + bgStatus), nil
+	return mcp.NewToolResultText(res + bgStatus.String()), nil
 }
 
 // handleGetIndexingDiagnostics returns detailed diagnostic information about the indexing process and system health.
