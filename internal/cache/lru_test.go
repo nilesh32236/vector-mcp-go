@@ -149,10 +149,10 @@ func TestLRUCache_TTL(t *testing.T) {
 }
 
 func TestLRUCache_OnEvict(t *testing.T) {
-	evicted := make(map[string]interface{})
+	evicted := make(map[string]any)
 	cache := NewLRUCache(
 		WithMaxSize(2),
-		WithOnEvict(func(key string, value interface{}) {
+		WithOnEvict(func(key string, value any) {
 			evicted[key] = value
 		}),
 	)
