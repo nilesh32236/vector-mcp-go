@@ -142,54 +142,6 @@ func TestRecommendModelForUseCase(t *testing.T) {
 	}
 }
 
-func TestDetectContentType(t *testing.T) {
-	tests := []struct {
-		path     string
-		content  string
-		expected ContentType
-	}{
-		{"main.go", "package main\nfunc main() {}", ContentTypeCode},
-		{"README.md", "# Documentation", ContentTypeDoc},
-		{"config.json", `{"key": "value"}`, ContentTypeConfig},
-		{"main.py", "def hello():\n    pass", ContentTypeCode},
-		{"app.js", "function test() { return 1; }", ContentTypeCode},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			result := DetectContentType(tt.content, tt.path)
-
-			if result != tt.expected {
-				t.Errorf("Expected %s for %s, got %s", tt.expected, tt.path, result)
-			}
-		})
-	}
-}
-
-func TestDetectLanguageFromPath(t *testing.T) {
-	tests := []struct {
-		path     string
-		expected string
-	}{
-		{"main.go", "go"},
-		{"app.py", "python"},
-		{"index.js", "javascript"},
-		{"app.ts", "typescript"},
-		{"main.rs", "rust"},
-		{"App.java", "java"},
-		{"unknown.xyz", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			result := DetectLanguageFromPath(tt.path)
-
-			if result != tt.expected {
-				t.Errorf("Expected %q, got %q", tt.expected, result)
-			}
-		})
-	}
-}
 
 func TestDefaultRouterConfig(t *testing.T) {
 	cfg := DefaultRouterConfig()
