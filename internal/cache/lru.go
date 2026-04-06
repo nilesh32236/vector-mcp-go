@@ -12,8 +12,8 @@ import (
 
 // Cache is a generic cache interface.
 type Cache interface {
-	Get(ctx context.Context, key string) (interface{}, bool)
-	Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error
+	Get(ctx context.Context, key string) (any, bool)
+	Set(ctx context.Context, key string, value any, ttl time.Duration) error
 	Delete(ctx context.Context, key string) error
 	Clear() error
 	Size() int
@@ -27,13 +27,13 @@ type LRUCache struct {
 	evictList  *list.List
 	ttls       map[string]time.Time
 	defaultTTL time.Duration
-	onEvict    func(key string, value interface{})
+	onEvict    func(key string, value any)
 }
 
 // entry represents a cache entry.
 type entry struct {
 	key   string
-	value interface{}
+	value any
 }
 
 // LRUCacheOption configures the LRU cache.
@@ -54,7 +54,7 @@ func WithDefaultTTL(ttl time.Duration) LRUCacheOption {
 }
 
 // WithOnEvict sets a callback for when entries are evicted.
-func WithOnEvict(fn func(key string, value interface{})) LRUCacheOption {
+func WithOnEvict(fn func(key string, value any)) LRUCacheOption {
 	return func(c *LRUCache) {
 		c.onEvict = fn
 	}
@@ -81,7 +81,7 @@ func NewLRUCache(opts ...LRUCacheOption) *LRUCache {
 }
 
 // Get retrieves a value from the cache.
-func (c *LRUCache) Get(ctx context.Context, key string) (interface{}, bool) {
+func (c *LRUCache) Get(ctx context.Context, key string) (any, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -99,7 +99,7 @@ func (c *LRUCache) Get(ctx context.Context, key string) (interface{}, bool) {
 }
 
 // Set stores a value in the cache.
-func (c *LRUCache) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+func (c *LRUCache) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -253,12 +253,12 @@ func NewSearchResultCache(maxSize int, defaultTTL time.Duration) *SearchResultCa
 // CachedResult represents a cached search result.
 type CachedResult struct {
 	QueryHash string
-	Results   interface{}
+	Results   any
 	CreatedAt time.Time
 }
 
 // Get retrieves cached search results.
-func (c *SearchResultCache) Get(ctx context.Context, query string, projectIDs []string) (interface{}, bool) {
+func (c *SearchResultCache) Get(ctx context.Context, query string, projectIDs []string) (any, bool) {
 	key := hashQuery(query, projectIDs)
 	val, found := c.cache.Get(ctx, key)
 	if !found {
@@ -272,7 +272,7 @@ func (c *SearchResultCache) Get(ctx context.Context, query string, projectIDs []
 }
 
 // Set stores search results in the cache.
-func (c *SearchResultCache) Set(ctx context.Context, query string, projectIDs []string, results interface{}) error {
+func (c *SearchResultCache) Set(ctx context.Context, query string, projectIDs []string, results any) error {
 	key := hashQuery(query, projectIDs)
 	cached := &CachedResult{
 		QueryHash: key,
@@ -326,7 +326,7 @@ func NewStatsCache(cache Cache) *StatsCache {
 }
 
 // Get retrieves a value and tracks the hit/miss.
-func (c *StatsCache) Get(ctx context.Context, key string) (interface{}, bool) {
+func (c *StatsCache) Get(ctx context.Context, key string) (any, bool) {
 	val, found := c.cache.Get(ctx, key)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -339,7 +339,7 @@ func (c *StatsCache) Get(ctx context.Context, key string) (interface{}, bool) {
 }
 
 // Set stores a value.
-func (c *StatsCache) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+func (c *StatsCache) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
 	return c.cache.Set(ctx, key, value, ttl)
 }
 

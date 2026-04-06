@@ -1,6 +1,6 @@
 module github.com/nilesh32236/vector-mcp-go
 
-go 1.26.1
+go 1.24
 
 require (
 	github.com/dslipak/pdf v0.0.2
