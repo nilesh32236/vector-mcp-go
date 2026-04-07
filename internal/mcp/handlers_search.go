@@ -94,8 +94,6 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 								case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
 								case <-ctx.Done():
 									return
-								default:
-									return // matches limit reach implicitly by channel capacity if we were careful, but we handle it below
 								}
 							}
 						}
@@ -107,8 +105,6 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 								case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
 								case <-ctx.Done():
 									return
-								default:
-									return // matches limit reach implicitly by channel capacity if we were careful, but we handle it below
 								}
 							}
 						}
