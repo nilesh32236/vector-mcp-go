@@ -61,7 +61,7 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 	var wg sync.WaitGroup
 	numWorkers := 8
 
-	lowerQuery := strings.ToLower(query)
+	lowerQuery = strings.ToLower(query)
 
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
@@ -72,13 +72,24 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 				case <-ctx.Done():
 					return
 				default:
-					content, err := os.ReadFile(path)
+					contentBytes, err := os.ReadFile(path)
 					if err != nil {
 						continue
 					}
 
+					contentStr := string(contentBytes)
+
 					relPath, _ := filepath.Rel(s.cfg.ProjectRoot, path)
-					lines := strings.Split(string(content), "\n")
+
+					if !isRegex {
+						lowerContent := strings.ToLower(contentStr)
+						// Early exit: if the file doesn't contain the query at all, skip it entirely
+						if !strings.Contains(lowerContent, lowerQuery) {
+							continue
+						}
+					}
+
+					lines := strings.Split(contentStr, "\n")
 					for i, line := range lines {
 						matched := false
 						if isRegex {
