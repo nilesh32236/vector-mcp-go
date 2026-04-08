@@ -14,7 +14,7 @@ import (
 )
 
 // handleGetCodebaseSkeleton returns a topological tree map of the codebase.
-func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleGetCodebaseSkeleton(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	targetPath := request.GetString("target_path", "")
 	maxDepth := util.ClampInt(int(request.GetFloat("max_depth", 3)), 0, 20)
 	includePattern := request.GetString("include_pattern", "")
@@ -23,11 +23,11 @@ func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.Call
 
 	root := s.cfg.ProjectRoot
 	if targetPath != "" {
-		if filepath.IsAbs(targetPath) {
-			root = targetPath
-		} else {
-			root = filepath.Join(s.cfg.ProjectRoot, targetPath)
+		validatedPath, err := s.pathValidator.ValidatePath(targetPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Invalid target_path: %v", err)), nil
 		}
+		root = validatedPath
 	}
 
 	type Node struct {
@@ -138,18 +138,40 @@ func (s *Server) handleWorkspaceManager(ctx context.Context, request mcp.CallToo
 
 	switch action {
 	case "set_project_root":
+		if path == "" {
+			return mcp.NewToolResultError("path is required for set_project_root"), nil
+		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve absolute path: %v", err)), nil
+		}
+		validatedPath, err := s.pathValidator.ValidatePath(absPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Invalid path: %v", err)), nil
+		}
 		return s.handleSetProjectRoot(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
 				Arguments: map[string]any{
-					"project_path": path,
+					"project_path": validatedPath,
 				},
 			},
 		})
 	case "trigger_index":
+		if path == "" {
+			return mcp.NewToolResultError("path is required for trigger_index"), nil
+		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve absolute path: %v", err)), nil
+		}
+		validatedPath, err := s.pathValidator.ValidatePath(absPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Invalid path: %v", err)), nil
+		}
 		return s.handleTriggerProjectIndex(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
 				Arguments: map[string]any{
-					"project_path": path,
+					"project_path": validatedPath,
 				},
 			},
 		})

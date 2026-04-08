@@ -10,6 +10,13 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
+const (
+	// MaxTopK is the maximum number of results to return for a search.
+	MaxTopK = 50
+	// MaxTruncateSize is the maximum content size to return in search results.
+	MaxTruncateSize = 1000
+)
+
 // SearchRequest defines the criteria for a semantic and lexical search.
 type SearchRequest struct {
 	Query    string `json:"query"`     // The natural language search term
@@ -37,7 +44,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if req.TopK == 0 {
 		req.TopK = 5
 	}
-	req.TopK = util.ClampInt(req.TopK, 1, 100)
+	req.TopK = util.ClampInt(req.TopK, 1, MaxTopK)
 
 	emb, err := s.embedder.Embed(r.Context(), req.Query)
 	if err != nil {
@@ -63,7 +70,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	var resp []SearchResponse
 	for _, rec := range records {
-		text := util.TruncateRuneSafe(rec.Content, 4000)
+		text := util.TruncateRuneSafe(rec.Content, MaxTruncateSize)
 		if text != rec.Content {
 			text += "\n... [Truncated for length]"
 		}
@@ -80,7 +87,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.cfg.Logger.Error("failed to encode response", "error", err)
+	}
 }
 
 // ContextRequest defines the payload for manually adding context to the database.
@@ -132,10 +141,12 @@ func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
 		"message": "Context added to Global Brain",
-	})
+	}); err != nil {
+		s.cfg.Logger.Error("failed to encode response", "error", err)
+	}
 }
 
 // TodoRequest defines the payload for creating a new TODO item in the vector database.
@@ -187,10 +198,12 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
 		"message": "TODO stored in vector database",
-	})
+	}); err != nil {
+		s.cfg.Logger.Error("failed to encode response", "error", err)
+	}
 }
 
 // handleListTools returns a list of all tools available via the linked MCP server.
@@ -202,7 +215,9 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 
 	tools := s.mcpServer.ListTools()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tools)
+	if err := json.NewEncoder(w).Encode(tools); err != nil {
+		s.cfg.Logger.Error("failed to encode response", "error", err)
+	}
 }
 
 // handleCallTool proxy a tool execution request to the linked MCP server.
@@ -228,10 +243,12 @@ func (s *Server) handleCallTool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		s.cfg.Logger.Error("failed to encode response", "error", err)
+	}
 }
 
-// handleIndexStatus proxy the 'index_status' tool call.
+// handleIndexStatus proxy the \"index_status\" tool call.
 func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
 	if s.mcpServer == nil {
 		http.Error(w, "MCP server not available", http.StatusInternalServerError)
@@ -243,10 +260,12 @@ func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		s.cfg.Logger.Error("failed to encode response", "error", err)
+	}
 }
 
-// handleTriggerIndex proxy the 'trigger_project_index' tool call.
+// handleTriggerIndex proxy the \"trigger_project_index\" tool call.
 func (s *Server) handleTriggerIndex(w http.ResponseWriter, r *http.Request) {
 	if s.mcpServer == nil {
 		http.Error(w, "MCP server not available", http.StatusInternalServerError)
@@ -271,7 +290,9 @@ func (s *Server) handleTriggerIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		s.cfg.Logger.Error("failed to encode response", "error", err)
+	}
 }
 
 // Repo represents an indexed project/repository.
@@ -307,10 +328,12 @@ func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(repos)
+	if err := json.NewEncoder(w).Encode(repos); err != nil {
+		s.cfg.Logger.Error("failed to encode response", "error", err)
+	}
 }
 
-// handleGetSkeleton proxy the 'get_codebase_skeleton' tool call.
+// handleGetSkeleton proxy the \"get_codebase_skeleton\" tool call.
 func (s *Server) handleGetSkeleton(w http.ResponseWriter, r *http.Request) {
 	if s.mcpServer == nil {
 		http.Error(w, "MCP server not available", http.StatusInternalServerError)
@@ -329,5 +352,7 @@ func (s *Server) handleGetSkeleton(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		s.cfg.Logger.Error("failed to encode response", "error", err)
+	}
 }

@@ -9,6 +9,7 @@ import (
 type ModelType string
 
 const (
+	// ModelTypeGeneral is a model used for general-purpose text embeddings.
 	ModelTypeGeneral ModelType = "general"  // General-purpose embeddings
 	ModelTypeCode    ModelType = "code"     // Code-specific embeddings
 	ModelTypeDomain  ModelType = "domain"   // Domain-specific (e.g., legal, medical)

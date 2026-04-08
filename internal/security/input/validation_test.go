@@ -418,7 +418,7 @@ func BenchmarkRegexValidator_Validate(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		v.Validate(pattern)
+		_ = v.Validate(pattern)
 	}
 }
 
@@ -434,7 +434,7 @@ func BenchmarkSanitizeQuery(b *testing.B) {
 	input := "This is a search query with some\x00null\x01control chars"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		SanitizeQuery(input, 1000)
+		_, _ = SanitizeQuery(input, 1000)
 	}
 }
 

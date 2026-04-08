@@ -1,3 +1,4 @@
+// Package worker provides background worker implementation for asynchronous tasks.
 package worker
 
 import (
@@ -15,6 +16,7 @@ import (
 type IndexStatus string
 
 const (
+	// StatusInitializing indicates that the worker is currently being initialized.
 	StatusInitializing IndexStatus = "Initializing..."
 	StatusPanic        IndexStatus = "Failed (Panic)"
 	StatusError        IndexStatus = "Error"
@@ -66,7 +68,7 @@ func (w *IndexWorker) processPath(ctx context.Context, path string) {
 			w.logger.Error("Indexing worker panicked", "path", path, "recover", r)
 			w.progressMap.Store(path, string(StatusPanic))
 			if store, err := w.storeGetter(ctx); err == nil {
-				store.SetStatus(ctx, path, string(StatusPanic))
+				_ = store.SetStatus(ctx, path, string(StatusPanic))
 			}
 		}
 	}()
@@ -79,7 +81,7 @@ func (w *IndexWorker) processPath(ctx context.Context, path string) {
 		w.progressMap.Store(path, fmt.Sprintf("%s: could not get store: %v", StatusError, err))
 		return
 	}
-	store.SetStatus(ctx, path, string(StatusInitializing))
+	_ = store.SetStatus(ctx, path, string(StatusInitializing))
 
 	targetCfg := &config.Config{
 		ProjectRoot: path,
@@ -88,7 +90,7 @@ func (w *IndexWorker) processPath(ctx context.Context, path string) {
 		Logger:      w.cfg.Logger,
 	}
 
-	opts := indexer.IndexerOptions{
+	opts := indexer.Options{
 		Config:      targetCfg,
 		Store:       store,
 		Embedder:    w.embedder,
@@ -100,12 +102,12 @@ func (w *IndexWorker) processPath(ctx context.Context, path string) {
 		w.logger.Error("Background indexing failed", "path", path, "error", err)
 		errMsg := fmt.Sprintf("%s: %v", StatusError, err)
 		w.progressMap.Store(path, errMsg)
-		store.SetStatus(ctx, path, errMsg)
+		_ = store.SetStatus(ctx, path, errMsg)
 		return
 	}
 
 	status := fmt.Sprintf("%s: %d indexed, %d skipped", StatusCompleted, summary.FilesIndexed, summary.FilesSkipped)
 	w.progressMap.Store(path, status)
-	store.SetStatus(ctx, path, status)
+	_ = store.SetStatus(ctx, path, status)
 	w.logger.Info("Background indexing complete", "path", path, "summary", summary)
 }

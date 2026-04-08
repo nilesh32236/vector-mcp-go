@@ -1,5 +1,6 @@
 package daemon
 
+
 import (
 	"context"
 	"sync"
@@ -8,6 +9,8 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/testutil/mocks"
 )
+
+const DefaultTestSocket = "/tmp/test.sock"
 
 func TestService_Embed(t *testing.T) {
 	mockEmbedder := mocks.NewMockEmbedder(384)
@@ -207,7 +210,7 @@ func TestService_GetProgress_NilMap(t *testing.T) {
 }
 
 func TestNewClient(t *testing.T) {
-	socketPath := "/tmp/test.sock"
+	socketPath := DefaultTestSocket
 	client := NewClient(socketPath)
 
 	if client == nil {
@@ -219,7 +222,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestNewRemoteEmbedder(t *testing.T) {
-	socketPath := "/tmp/test.sock"
+	socketPath := DefaultTestSocket
 	re := NewRemoteEmbedder(socketPath)
 
 	if re == nil {
@@ -231,7 +234,7 @@ func TestNewRemoteEmbedder(t *testing.T) {
 }
 
 func TestNewRemoteStore(t *testing.T) {
-	socketPath := "/tmp/test.sock"
+	socketPath := DefaultTestSocket
 	rs := NewRemoteStore(socketPath)
 
 	if rs == nil {
