@@ -74,28 +74,34 @@ func NewValidator(basePath string, opts Options) (*Validator, error) {
 // within the configured base directory. Returns the resolved absolute path
 // or an error if validation fails.
 func (v *Validator) ValidatePath(targetPath string) (string, error) {
-	// Handle empty path
 	if targetPath == "" {
 		return "", ErrInvalidPath
 	}
 
-	// Clean the path to remove any ./ or ../ components
+	fullPath, err := v.resolveToFullPath(targetPath)
+	if err != nil {
+		return "", err
+	}
+
+	return v.checkSecurityConstraints(fullPath)
+}
+
+func (v *Validator) resolveToFullPath(targetPath string) (string, error) {
 	cleanPath := filepath.Clean(targetPath)
 
-	// Build the full path
-	var fullPath string
 	if filepath.IsAbs(cleanPath) {
 		if !v.options.AllowAbsolute {
 			return "", ErrPathTraversal
 		}
-		fullPath = cleanPath
-	} else {
-		fullPath = filepath.Join(v.basePath, cleanPath)
+		return cleanPath, nil
 	}
 
+	return filepath.Join(v.basePath, cleanPath), nil
+}
+
+func (v *Validator) checkSecurityConstraints(fullPath string) (string, error) {
 	// Resolve symlinks if not allowed
 	if !v.options.AllowSymlinks {
-		// Check for symlinks in the path components
 		if err := v.checkSymlinks(fullPath); err != nil {
 			return "", err
 		}
@@ -111,7 +117,6 @@ func (v *Validator) ValidatePath(targetPath string) (string, error) {
 	evaluatedPath, err := filepath.EvalSymlinks(resolvedPath)
 	if err != nil {
 		// Path may not exist yet, which is okay for creation operations
-		// Just use the resolved path
 		evaluatedPath = resolvedPath
 	}
 

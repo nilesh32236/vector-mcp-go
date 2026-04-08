@@ -14,7 +14,7 @@ import (
 )
 
 // handleGetCodebaseSkeleton returns a topological tree map of the codebase.
-func (s *Server) handleGetCodebaseSkeleton(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleGetCodebaseSkeleton(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	targetPath := request.GetString("target_path", "")
 	maxDepth := util.ClampInt(int(request.GetFloat("max_depth", 3)), 0, 20)
 	includePattern := request.GetString("include_pattern", "")

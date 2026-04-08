@@ -1,0 +1,51 @@
+version: 2
+linters-settings:
+  govet:
+    enable:
+      - shadow
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  revive:
+    rules:
+      - name: var-naming
+      - name: package-comments
+      - name: exported
+      - name: indent-error-flow
+      - name: superfluous-else
+      - name: modifies-parameter
+      - name: unreachable-code
+      - name: struct-tag
+  staticcheck:
+    checks: ["all"]
+  gocyclo:
+    min-complexity: 15
+  mnd:
+    checks: [argument, case, condition, operation, return]
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - revive
+    - gocyclo
+    - misspell
+    - whitespace
+    - goconst
+    - mnd
+    - bodyclose
+    - nilerr
+
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0

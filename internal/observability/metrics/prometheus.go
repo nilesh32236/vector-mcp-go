@@ -248,15 +248,15 @@ func formatMetric(typ, name, help string, labels map[string]string, value float6
 
 	// Help
 	if help != "" {
-		sb.WriteString(fmt.Sprintf("# HELP %s %s\n", name, help))
+		fmt.Fprintf(&sb, "# HELP %s %s\n", name, help)
 	}
 
 	// Type
-	sb.WriteString(fmt.Sprintf("# TYPE %s %s\n", name, typ))
+	fmt.Fprintf(&sb, "# TYPE %s %s\n", name, typ)
 
 	// Value with labels
 	labelStr := formatLabels(labels)
-	sb.WriteString(fmt.Sprintf("%s%s %g\n", name, labelStr, value))
+	fmt.Fprintf(&sb, "%s%s %g\n", name, labelStr, value)
 
 	return sb.String()
 }
@@ -269,11 +269,11 @@ func formatHistogram(h *Histogram) string {
 
 	// Help
 	if h.help != "" {
-		sb.WriteString(fmt.Sprintf("# HELP %s %s\n", h.name, h.help))
+		fmt.Fprintf(&sb, "# HELP %s %s\n", h.name, h.help)
 	}
 
 	// Type
-	sb.WriteString(fmt.Sprintf("# TYPE %s histogram\n", h.name))
+	fmt.Fprintf(&sb, "# TYPE %s histogram\n", h.name)
 
 	labelStr := formatLabels(h.labels)
 
@@ -287,22 +287,22 @@ func formatHistogram(h *Histogram) string {
 		} else {
 			bucketLabel = fmt.Sprintf("%s%s", h.name, bucketLabel+"}")
 		}
-		sb.WriteString(fmt.Sprintf("%s %d\n", bucketLabel, cumulative))
+		fmt.Fprintf(&sb, "%s %d\n", bucketLabel, cumulative)
 	}
 
 	// +Inf bucket
 	cumulative += h.counts[len(h.buckets)]
-	infLabel := fmt.Sprintf(`{le="+Inf"}`)
+	infLabel := `{le="+Inf"}`
 	if labelStr != "" {
 		infLabel = fmt.Sprintf("%s%s,%s", h.name, strings.TrimSuffix(labelStr, "}"), strings.TrimPrefix(infLabel, "{")+"}")
 	} else {
 		infLabel = fmt.Sprintf("%s%s", h.name, infLabel)
 	}
-	sb.WriteString(fmt.Sprintf("%s %d\n", infLabel, cumulative))
+	fmt.Fprintf(&sb, "%s %d\n", infLabel, cumulative)
 
 	// Sum and count
-	sb.WriteString(fmt.Sprintf("%s_sum%s %g\n", h.name, labelStr, h.sum))
-	sb.WriteString(fmt.Sprintf("%s_count%s %d\n", h.name, labelStr, h.count))
+	fmt.Fprintf(&sb, "%s_sum%s %g\n", h.name, labelStr, h.sum)
+	fmt.Fprintf(&sb, "%s_count%s %d\n", h.name, labelStr, h.count)
 
 	return sb.String()
 }
@@ -322,37 +322,37 @@ func formatLabels(labels map[string]string) string {
 func (c *Collector) exportGoMetrics(sb *strings.Builder) {
 	// Uptime
 	uptime := time.Since(c.startTime).Seconds()
-	sb.WriteString(fmt.Sprintf("# HELP vector_mcp_uptime_seconds Server uptime in seconds\n"))
-	sb.WriteString(fmt.Sprintf("# TYPE vector_mcp_uptime_seconds gauge\n"))
-	sb.WriteString(fmt.Sprintf("vector_mcp_uptime_seconds %g\n", uptime))
+	fmt.Fprintf(sb, "# HELP vector_mcp_uptime_seconds Server uptime in seconds\n")
+	fmt.Fprintf(sb, "# TYPE vector_mcp_uptime_seconds gauge\n")
+	fmt.Fprintf(sb, "vector_mcp_uptime_seconds %g\n", uptime)
 
 	// Goroutines
-	sb.WriteString(fmt.Sprintf("# HELP vector_mcp_goroutines Number of goroutines\n"))
-	sb.WriteString(fmt.Sprintf("# TYPE vector_mcp_goroutines gauge\n"))
-	sb.WriteString(fmt.Sprintf("vector_mcp_goroutines %d\n", runtime.NumGoroutine()))
+	fmt.Fprintf(sb, "# HELP vector_mcp_goroutines Number of goroutines\n")
+	fmt.Fprintf(sb, "# TYPE vector_mcp_goroutines gauge\n")
+	fmt.Fprintf(sb, "vector_mcp_goroutines %d\n", runtime.NumGoroutine())
 
 	// Memory stats
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	sb.WriteString(fmt.Sprintf("# HELP vector_mcp_memory_alloc_bytes Bytes of allocated heap objects\n"))
-	sb.WriteString(fmt.Sprintf("# TYPE vector_mcp_memory_alloc_bytes gauge\n"))
-	sb.WriteString(fmt.Sprintf("vector_mcp_memory_alloc_bytes %d\n", m.Alloc))
+	fmt.Fprintf(sb, "# HELP vector_mcp_memory_alloc_bytes Bytes of allocated heap objects\n")
+	fmt.Fprintf(sb, "# TYPE vector_mcp_memory_alloc_bytes gauge\n")
+	fmt.Fprintf(sb, "vector_mcp_memory_alloc_bytes %d\n", m.Alloc)
 
-	sb.WriteString(fmt.Sprintf("# HELP vector_mcp_memory_sys_bytes Total bytes of memory obtained from the OS\n"))
-	sb.WriteString(fmt.Sprintf("# TYPE vector_mcp_memory_sys_bytes gauge\n"))
-	sb.WriteString(fmt.Sprintf("vector_mcp_memory_sys_bytes %d\n", m.Sys))
+	fmt.Fprintf(sb, "# HELP vector_mcp_memory_sys_bytes Total bytes of memory obtained from the OS\n")
+	fmt.Fprintf(sb, "# TYPE vector_mcp_memory_sys_bytes gauge\n")
+	fmt.Fprintf(sb, "vector_mcp_memory_sys_bytes %d\n", m.Sys)
 
-	sb.WriteString(fmt.Sprintf("# HELP vector_mcp_gc_pause_total_seconds Total GC pause time\n"))
-	sb.WriteString(fmt.Sprintf("# TYPE vector_mcp_gc_pause_total_seconds counter\n"))
-	sb.WriteString(fmt.Sprintf("vector_mcp_gc_pause_total_seconds %g\n", float64(m.PauseTotalNs)/1e9))
+	fmt.Fprintf(sb, "# HELP vector_mcp_gc_pause_total_seconds Total GC pause time\n")
+	fmt.Fprintf(sb, "# TYPE vector_mcp_gc_pause_total_seconds counter\n")
+	fmt.Fprintf(sb, "vector_mcp_gc_pause_total_seconds %g\n", float64(m.PauseTotalNs)/1e9)
 }
 
 // Handler returns an http.Handler that serves Prometheus metrics.
 func (c *Collector) Handler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		w.Write([]byte(c.Export()))
+		_, _ = w.Write([]byte(c.Export()))
 	})
 }
 

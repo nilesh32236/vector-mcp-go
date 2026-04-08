@@ -76,22 +76,36 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 					}
 
 					relPath, _ := filepath.Rel(s.cfg.ProjectRoot, path)
-					lines := strings.Split(string(content), "\n")
-					for i, line := range lines {
-						matched := false
-						if isRegex {
-							matched = re.MatchString(line)
-						} else {
-							matched = strings.Contains(strings.ToLower(line), lowerQuery)
+					contentStr := string(content)
+
+					if !isRegex {
+						contentLower := strings.ToLower(contentStr)
+						// Early exit: if the query isn't in the file at all, skip processing lines.
+						// This avoids unnecessary allocations and per-line checks for most files.
+						if !strings.Contains(contentLower, lowerQuery) {
+							continue
 						}
 
-						if matched {
-							select {
-							case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
-							case <-ctx.Done():
-								return
-							default:
-								return // matches limit reach implicitly by channel capacity if we were careful, but we handle it below
+						lines := strings.Split(contentStr, "\n")
+						lowerLines := strings.Split(contentLower, "\n")
+						for i, line := range lines {
+							if strings.Contains(lowerLines[i], lowerQuery) {
+								select {
+								case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
+								case <-ctx.Done():
+									return
+								}
+							}
+						}
+					} else {
+						lines := strings.Split(contentStr, "\n")
+						for i, line := range lines {
+							if re.MatchString(line) {
+								select {
+								case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
+								case <-ctx.Done():
+									return
+								}
 							}
 						}
 					}
@@ -179,9 +193,9 @@ collect:
 	})
 
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("### Grep Results for '%s' (%d matches):\n\n", query, len(results)))
+	fmt.Fprintf(&out, "### Grep Results for '%s' (%d matches):\n\n", query, len(results))
 	for _, res := range results {
-		out.WriteString(fmt.Sprintf("%s:%d: %s\n", res.Path, res.Line, res.Content))
+		fmt.Fprintf(&out, "%s:%d: %s\n", res.Path, res.Line, res.Content)
 	}
 
 	if limitReached {
@@ -278,7 +292,7 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 	}
 
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("### Search Results for '%s':\n\n", query))
+	fmt.Fprintf(&out, "### Search Results for '%s':\n\n", query)
 	currentTokenCount := 0
 
 	for i, r := range filtered {
@@ -295,14 +309,14 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 			}
 		}
 
-		out.WriteString(fmt.Sprintf("#### Result %d: %s%s\n", i+1, r.Metadata["path"], lineRange))
+		fmt.Fprintf(&out, "#### Result %d: %s%s\n", i+1, r.Metadata["path"], lineRange)
 		if cat := r.Metadata["category"]; cat != "" {
-			out.WriteString(fmt.Sprintf("- **Category**: %s\n", cat))
+			fmt.Fprintf(&out, "- **Category**: %s\n", cat)
 		}
 		if syms := r.Metadata["symbols"]; syms != "" {
-			out.WriteString(fmt.Sprintf("- **Entities**: %s\n", syms))
+			fmt.Fprintf(&out, "- **Entities**: %s\n", syms)
 		}
-		out.WriteString(fmt.Sprintf("```\n%s\n```\n\n", r.Content))
+		fmt.Fprintf(&out, "```\n%s\n```\n\n", r.Content)
 		currentTokenCount += tokens
 	}
 

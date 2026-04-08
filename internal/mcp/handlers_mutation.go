@@ -11,7 +11,7 @@ import (
 )
 
 // handleApplyCodePatch applies a search-and-replace patch to a specific file.
-func (s *Server) handleApplyCodePatch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleApplyCodePatch(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path := request.GetString("path", "")
 	search := request.GetString("search", "")
 	replace := request.GetString("replace", "")
@@ -45,7 +45,7 @@ func (s *Server) handleApplyCodePatch(ctx context.Context, request mcp.CallToolR
 }
 
 // handleRunLinterAndFix executes a code formatter or linter with the fix flag.
-func (s *Server) handleRunLinterAndFix(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleRunLinterAndFix(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path := request.GetString("path", "")
 	tool := request.GetString("tool", "")
 
@@ -71,7 +71,7 @@ func (s *Server) handleRunLinterAndFix(ctx context.Context, request mcp.CallTool
 }
 
 // handleCreateFile creates a new file with content.
-func (s *Server) handleCreateFile(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleCreateFile(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path := request.GetString("path", "")
 	content := request.GetString("content", "")
 
@@ -105,7 +105,7 @@ func (s *Server) handleModifyWorkspace(ctx context.Context, request mcp.CallTool
 	content := request.GetString("content", "")
 	search := request.GetString("search", "")
 	replace := request.GetString("replace", "")
-	diagnosticJson := request.GetString("diagnostic_json", "")
+	diagnosticJSON := request.GetString("diagnostic_json", "")
 	tool := request.GetString("tool", "")
 
 	switch action {
@@ -151,7 +151,7 @@ func (s *Server) handleModifyWorkspace(ctx context.Context, request mcp.CallTool
 		return s.handleAutoFixMutation(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
 				Arguments: map[string]any{
-					"diagnostic_json": diagnosticJson,
+					"diagnostic_json": diagnosticJSON,
 				},
 			},
 		})

@@ -1,8 +1,11 @@
 package mutation
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
 )
 
 func TestNewSafetyChecker(t *testing.T) {
@@ -21,7 +24,7 @@ func TestNewSafetyChecker(t *testing.T) {
 func TestSafetyChecker_VerifyPatchIntegrity_NilProvider(t *testing.T) {
 	checker := NewSafetyChecker(nil)
 
-	diags, err := checker.VerifyPatchIntegrity(nil, "/test/path", "old", "new")
+	diags, err := checker.VerifyPatchIntegrity(context.TODO(), "/test/path", "old", "new")
 	if err == nil {
 		t.Error("Expected error with nil LSP provider")
 	}
@@ -31,12 +34,12 @@ func TestSafetyChecker_VerifyPatchIntegrity_NilProvider(t *testing.T) {
 }
 
 func TestSafetyChecker_VerifyPatchIntegrity_ProviderError(t *testing.T) {
-	// The actual signature expects *lsp.LSPManager
+	// The actual signature expects *lsp.Manager
 	checker := &SafetyChecker{
 		lspProvider: nil, // This will cause the nil provider error
 	}
 
-	diags, err := checker.VerifyPatchIntegrity(nil, "/test/path", "old", "new")
+	diags, err := checker.VerifyPatchIntegrity(context.TODO(), "/test/path", "old", "new")
 	if err == nil {
 		t.Error("Expected error with nil LSP provider")
 	}
@@ -48,10 +51,10 @@ func TestSafetyChecker_VerifyPatchIntegrity_ProviderError(t *testing.T) {
 func TestAutoFixMutation_Error(t *testing.T) {
 	checker := NewSafetyChecker(nil)
 
-	diag := Diagnostic{
-		Range: Range{
-			Start: Position{Line: 10, Character: 0},
-			End:   Position{Line: 10, Character: 20},
+	diag := lsp.Diagnostic{
+		Range: lsp.Range{
+			Start: lsp.Position{Line: 10, Character: 0},
+			End:   lsp.Position{Line: 10, Character: 20},
 		},
 		Severity: 1,
 		Message:  "undefined variable",
@@ -68,10 +71,10 @@ func TestAutoFixMutation_Error(t *testing.T) {
 func TestAutoFixMutation_Warning(t *testing.T) {
 	checker := NewSafetyChecker(nil)
 
-	diag := Diagnostic{
-		Range: Range{
-			Start: Position{Line: 5, Character: 0},
-			End:   Position{Line: 5, Character: 10},
+	diag := lsp.Diagnostic{
+		Range: lsp.Range{
+			Start: lsp.Position{Line: 5, Character: 0},
+			End:   lsp.Position{Line: 5, Character: 10},
 		},
 		Severity: 2, // Warning
 		Message:  "unused variable",
@@ -86,10 +89,10 @@ func TestAutoFixMutation_Warning(t *testing.T) {
 }
 
 func TestDiagnostic_JSON(t *testing.T) {
-	diag := Diagnostic{
-		Range: Range{
-			Start: Position{Line: 1, Character: 0},
-			End:   Position{Line: 1, Character: 10},
+	diag := lsp.Diagnostic{
+		Range: lsp.Range{
+			Start: lsp.Position{Line: 1, Character: 0},
+			End:   lsp.Position{Line: 1, Character: 10},
 		},
 		Severity: 1,
 		Message:  "test message",
@@ -98,12 +101,12 @@ func TestDiagnostic_JSON(t *testing.T) {
 
 	data, err := json.Marshal(diag)
 	if err != nil {
-		t.Fatalf("Failed to marshal Diagnostic: %v", err)
+		t.Fatalf("Failed to marshal lsp.Diagnostic: %v", err)
 	}
 
-	var unmarshaled Diagnostic
+	var unmarshaled lsp.Diagnostic
 	if err := json.Unmarshal(data, &unmarshaled); err != nil {
-		t.Fatalf("Failed to unmarshal Diagnostic: %v", err)
+		t.Fatalf("Failed to unmarshal lsp.Diagnostic: %v", err)
 	}
 
 	if unmarshaled.Message != diag.Message {
@@ -115,16 +118,16 @@ func TestDiagnostic_JSON(t *testing.T) {
 }
 
 func TestPosition_JSON(t *testing.T) {
-	pos := Position{Line: 42, Character: 10}
+	pos := lsp.Position{Line: 42, Character: 10}
 
 	data, err := json.Marshal(pos)
 	if err != nil {
-		t.Fatalf("Failed to marshal Position: %v", err)
+		t.Fatalf("Failed to marshal lsp.Position: %v", err)
 	}
 
-	var unmarshaled Position
+	var unmarshaled lsp.Position
 	if err := json.Unmarshal(data, &unmarshaled); err != nil {
-		t.Fatalf("Failed to unmarshal Position: %v", err)
+		t.Fatalf("Failed to unmarshal lsp.Position: %v", err)
 	}
 
 	if unmarshaled.Line != pos.Line {
@@ -136,19 +139,19 @@ func TestPosition_JSON(t *testing.T) {
 }
 
 func TestRange_JSON(t *testing.T) {
-	r := Range{
-		Start: Position{Line: 0, Character: 0},
-		End:   Position{Line: 10, Character: 20},
+	r := lsp.Range{
+		Start: lsp.Position{Line: 0, Character: 0},
+		End:   lsp.Position{Line: 10, Character: 20},
 	}
 
 	data, err := json.Marshal(r)
 	if err != nil {
-		t.Fatalf("Failed to marshal Range: %v", err)
+		t.Fatalf("Failed to marshal lsp.Range: %v", err)
 	}
 
-	var unmarshaled Range
+	var unmarshaled lsp.Range
 	if err := json.Unmarshal(data, &unmarshaled); err != nil {
-		t.Fatalf("Failed to unmarshal Range: %v", err)
+		t.Fatalf("Failed to unmarshal lsp.Range: %v", err)
 	}
 
 	if unmarshaled.Start.Line != r.Start.Line {

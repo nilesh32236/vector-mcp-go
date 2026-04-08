@@ -71,7 +71,7 @@ func (m *MockStore) GetCallCounts() (searchCalls, insertCalls int) {
 }
 
 // Search implements Searcher.
-func (m *MockStore) Search(ctx context.Context, embedding []float32, topK int, projectIDs []string, category string) ([]db.Record, error) {
+func (m *MockStore) Search(_ context.Context, embedding []float32, topK int, projectIDs []string, category string) ([]db.Record, error) {
 	m.mu.Lock()
 	m.searchCalls++
 	m.mu.Unlock()
@@ -90,7 +90,7 @@ func (m *MockStore) Search(ctx context.Context, embedding []float32, topK int, p
 }
 
 // SearchWithScore implements Searcher.
-func (m *MockStore) SearchWithScore(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]db.Record, []float32, error) {
+func (m *MockStore) SearchWithScore(_ context.Context, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]db.Record, []float32, error) {
 	m.mu.Lock()
 	m.searchCalls++
 	m.mu.Unlock()
@@ -113,7 +113,7 @@ func (m *MockStore) SearchWithScore(ctx context.Context, queryEmbedding []float3
 }
 
 // HybridSearch implements Searcher.
-func (m *MockStore) HybridSearch(ctx context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]db.Record, error) {
+func (m *MockStore) HybridSearch(_ context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]db.Record, error) {
 	m.mu.Lock()
 	m.searchCalls++
 	m.mu.Unlock()
@@ -132,7 +132,7 @@ func (m *MockStore) HybridSearch(ctx context.Context, query string, queryEmbeddi
 }
 
 // LexicalSearch implements Searcher.
-func (m *MockStore) LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string, category string) ([]db.Record, error) {
+func (m *MockStore) LexicalSearch(_ context.Context, query string, topK int, projectIDs []string, category string) ([]db.Record, error) {
 	m.mu.Lock()
 	m.searchCalls++
 	m.mu.Unlock()
@@ -156,7 +156,7 @@ func (m *MockStore) LexicalSearch(ctx context.Context, query string, topK int, p
 }
 
 // Insert implements StoreManager.
-func (m *MockStore) Insert(ctx context.Context, records []db.Record) error {
+func (m *MockStore) Insert(_ context.Context, records []db.Record) error {
 	m.mu.Lock()
 	m.insertCalls++
 	defer m.mu.Unlock()
@@ -170,7 +170,7 @@ func (m *MockStore) Insert(ctx context.Context, records []db.Record) error {
 }
 
 // DeleteByPrefix implements StoreManager.
-func (m *MockStore) DeleteByPrefix(ctx context.Context, prefix string, projectID string) error {
+func (m *MockStore) DeleteByPrefix(_ context.Context, prefix string, projectID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -189,7 +189,7 @@ func (m *MockStore) DeleteByPrefix(ctx context.Context, prefix string, projectID
 }
 
 // ClearProject implements StoreManager.
-func (m *MockStore) ClearProject(ctx context.Context, projectID string) error {
+func (m *MockStore) ClearProject(_ context.Context, projectID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -208,7 +208,7 @@ func (m *MockStore) ClearProject(ctx context.Context, projectID string) error {
 }
 
 // GetPathHashMapping implements StoreManager.
-func (m *MockStore) GetPathHashMapping(ctx context.Context, projectID string) (map[string]string, error) {
+func (m *MockStore) GetPathHashMapping(_ context.Context, projectID string) (map[string]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -220,7 +220,7 @@ func (m *MockStore) GetPathHashMapping(ctx context.Context, projectID string) (m
 }
 
 // GetAllRecords implements StoreManager.
-func (m *MockStore) GetAllRecords(ctx context.Context) ([]db.Record, error) {
+func (m *MockStore) GetAllRecords(_ context.Context) ([]db.Record, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -228,7 +228,7 @@ func (m *MockStore) GetAllRecords(ctx context.Context) ([]db.Record, error) {
 }
 
 // GetAllMetadata implements StoreManager.
-func (m *MockStore) GetAllMetadata(ctx context.Context) ([]db.Record, error) {
+func (m *MockStore) GetAllMetadata(_ context.Context) ([]db.Record, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -236,7 +236,7 @@ func (m *MockStore) GetAllMetadata(ctx context.Context) ([]db.Record, error) {
 }
 
 // GetByPath implements StoreManager.
-func (m *MockStore) GetByPath(ctx context.Context, path string, projectID string) ([]db.Record, error) {
+func (m *MockStore) GetByPath(_ context.Context, path string, projectID string) ([]db.Record, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -250,15 +250,12 @@ func (m *MockStore) GetByPath(ctx context.Context, path string, projectID string
 }
 
 // GetByPrefix implements StoreManager.
-func (m *MockStore) GetByPrefix(ctx context.Context, prefix string, projectID string) ([]db.Record, error) {
+func (m *MockStore) GetByPrefix(_ context.Context, prefix string, projectID string) ([]db.Record, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	var results []db.Record
-	for _, r := range m.records {
-		// Simple prefix check
-		results = append(results, r)
-	}
+	results = append(results, m.records...)
 	return results, nil
 }
 
@@ -270,7 +267,7 @@ func (m *MockStore) Count() int64 {
 }
 
 // GetStatus implements StatusProvider.
-func (m *MockStore) GetStatus(ctx context.Context, projectID string) (string, error) {
+func (m *MockStore) GetStatus(_ context.Context, projectID string) (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -281,7 +278,7 @@ func (m *MockStore) GetStatus(ctx context.Context, projectID string) (string, er
 }
 
 // GetAllStatuses implements StatusProvider.
-func (m *MockStore) GetAllStatuses(ctx context.Context) (map[string]string, error) {
+func (m *MockStore) GetAllStatuses(_ context.Context) (map[string]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
