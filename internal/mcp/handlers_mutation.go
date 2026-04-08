@@ -21,7 +21,7 @@ func (s *Server) handleApplyCodePatch(_ context.Context, request mcp.CallToolReq
 	}
 
 	// Validate path for security
-	absPath, err := s.pathValidator.ValidatePath(path)
+	absPath, err := s.validatePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
 	}
@@ -54,7 +54,7 @@ func (s *Server) handleRunLinterAndFix(_ context.Context, request mcp.CallToolRe
 	}
 
 	// Validate path for security
-	absPath, err := s.pathValidator.ValidatePath(path)
+	absPath, err := s.validatePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
 	}
@@ -80,7 +80,7 @@ func (s *Server) handleCreateFile(_ context.Context, request mcp.CallToolRequest
 	}
 
 	// Validate path for security
-	absPath, err := s.pathValidator.ValidatePath(path)
+	absPath, err := s.validatePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
 	}

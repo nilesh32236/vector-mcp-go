@@ -22,7 +22,7 @@ func (s *Server) handleDistillPackagePurpose(ctx context.Context, request mcp.Ca
 	}
 
 	distiller := analysis.NewDistiller(store, s.embedder, s.logger)
-	summary, err := distiller.DistillPackagePurpose(ctx, s.cfg.ProjectRoot, pkgPath)
+	summary, err := distiller.DistillPackagePurpose(ctx, s.projectRoot(), pkgPath)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Distillation failed: %v", err)), nil
 	}

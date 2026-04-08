@@ -77,7 +77,7 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 
 					contentStr := string(contentBytes)
 
-					relPath, _ := filepath.Rel(s.cfg.ProjectRoot, path)
+					relPath, _ := filepath.Rel(s.projectRoot(), path)
 
 					lines := strings.Split(contentStr, "\n")
 					var lowerLines []string
@@ -113,7 +113,7 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 
 	go func() {
 		defer close(paths)
-		err := filepath.WalkDir(s.cfg.ProjectRoot, func(path string, d os.DirEntry, err error) error {
+		err := filepath.WalkDir(s.projectRoot(), func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -219,7 +219,7 @@ func (s *Server) handleSearchCodebase(ctx context.Context, request mcp.CallToolR
 
 	pids := request.GetStringSlice("cross_reference_projects", nil)
 	if len(pids) == 0 {
-		pids = []string{s.cfg.ProjectRoot}
+		pids = []string{s.projectRoot()}
 	}
 
 	emb, err := s.embedder.Embed(ctx, query)

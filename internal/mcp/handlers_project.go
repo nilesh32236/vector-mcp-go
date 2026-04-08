@@ -21,9 +21,9 @@ func (s *Server) handleGetCodebaseSkeleton(_ context.Context, request mcp.CallTo
 	excludePattern := request.GetString("exclude_pattern", "")
 	maxItems := util.ClampInt(int(request.GetFloat("max_items", 1000)), 1, 10000)
 
-	root := s.cfg.ProjectRoot
+	root := s.projectRoot()
 	if targetPath != "" {
-		validatedPath, err := s.pathValidator.ValidatePath(targetPath)
+		validatedPath, err := s.validatePath(targetPath)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Invalid target_path: %v", err)), nil
 		}
@@ -145,7 +145,7 @@ func (s *Server) handleWorkspaceManager(ctx context.Context, request mcp.CallToo
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve absolute path: %v", err)), nil
 		}
-		validatedPath, err := s.pathValidator.ValidatePath(absPath)
+		validatedPath, err := s.validatePath(absPath)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Invalid path: %v", err)), nil
 		}
@@ -164,7 +164,7 @@ func (s *Server) handleWorkspaceManager(ctx context.Context, request mcp.CallToo
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve absolute path: %v", err)), nil
 		}
-		validatedPath, err := s.pathValidator.ValidatePath(absPath)
+		validatedPath, err := s.validatePath(absPath)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Invalid path: %v", err)), nil
 		}

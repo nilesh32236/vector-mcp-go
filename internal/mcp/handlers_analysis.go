@@ -21,7 +21,7 @@ import (
 // handleGetRelatedContext retrieves relevant code chunks and dependencies for a given file.
 // It also explores usage samples for symbols found in the target file.
 const (
-	ProjectTypeNPM = "npm"
+	ProjectTypeNPM    = "npm"
 	ProjectTypePython = "python"
 )
 
@@ -39,12 +39,12 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	pids := []string{s.cfg.ProjectRoot}
+	pids := []string{s.projectRoot()}
 	crossProjs := request.GetStringSlice("cross_reference_projects", nil)
 	if len(crossProjs) > 0 {
 		pids = append(pids, crossProjs...)
 	}
-	records, err := store.GetByPath(ctx, filePath, s.cfg.ProjectRoot)
+	records, err := store.GetByPath(ctx, filePath, s.projectRoot())
 	if err != nil || len(records) == 0 {
 		return mcp.NewToolResultText(fmt.Sprintf("No context found for file: %s", filePath)), nil
 	}
@@ -59,7 +59,7 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 					allImportStrings[d] = true
 					if strings.HasPrefix(d, "./") || strings.HasPrefix(d, "../") {
 						uniqueDeps[d] = filepath.Join(filepath.Dir(filePath), d)
-					} else if physPath, ok := s.monorepoResolver.Resolve(d); ok {
+					} else if physPath, ok := s.monorepoResolve(d); ok {
 						uniqueDeps[d] = physPath
 					}
 				}
@@ -233,14 +233,14 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	targetPath := request.GetString("target_path", "")
-	pids := []string{s.cfg.ProjectRoot}
+	pids := []string{s.projectRoot()}
 	crossProjs := request.GetStringSlice("cross_reference_projects", nil)
 	if len(crossProjs) > 0 {
 		pids = append(pids, crossProjs...)
 	}
 	store, _ := s.getStore(ctx)
 
-	targetChunks, _ := store.GetByPrefix(ctx, targetPath, s.cfg.ProjectRoot)
+	targetChunks, _ := store.GetByPrefix(ctx, targetPath, s.projectRoot())
 
 	var out strings.Builder
 	fmt.Fprintf(&out, "<duplicate_analysis target=\"%s\">\n", targetPath)
@@ -318,7 +318,7 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 // handleCheckDependencyHealth analyzes a directory's package.json against its indexed imports.
 func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	dirPath := request.GetString("directory_path", ".")
-	absPath, err := s.pathValidator.ValidatePath(dirPath)
+	absPath, err := s.validatePath(dirPath)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid directory_path: %v", err)), nil
 	}
@@ -386,12 +386,12 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	relDirPath, _ := filepath.Rel(s.cfg.ProjectRoot, absPath)
+	relDirPath, _ := filepath.Rel(s.projectRoot(), absPath)
 	if relDirPath == "." {
 		relDirPath = ""
 	}
 
-	records, err := store.GetByPrefix(ctx, relDirPath, s.cfg.ProjectRoot)
+	records, err := store.GetByPrefix(ctx, relDirPath, s.projectRoot())
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch records: %v", err)), nil
 	}
@@ -419,7 +419,7 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 						}
 					} else if projectType == "go" {
 						// Standard library check (simplified: no dots usually)
-						if !strings.Contains(dep, ".") || strings.HasPrefix(dep, s.cfg.ProjectRoot) {
+						if !strings.Contains(dep, ".") || strings.HasPrefix(dep, s.projectRoot()) {
 							continue
 						}
 						if !depSet[dep] {
@@ -514,7 +514,7 @@ func (s *Server) handleGenerateDocstringPrompt(ctx context.Context, request mcp.
 	}
 
 	// Use LexicalSearch to find the entity in the file
-	records, err := store.GetByPath(ctx, filePath, s.cfg.ProjectRoot)
+	records, err := store.GetByPath(ctx, filePath, s.projectRoot())
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to fetch records for file: %v", err)), nil
 	}
@@ -796,7 +796,7 @@ func (s *Server) handleVerifyImplementationGap(ctx context.Context, request mcp.
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	pids := []string{s.cfg.ProjectRoot}
+	pids := []string{s.projectRoot()}
 	emb, err := s.embedder.Embed(ctx, query)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
@@ -957,7 +957,7 @@ func (s *Server) handleListAPIEndpoints(ctx context.Context, _ mcp.CallToolReque
 
 	var allMatches []db.Record
 	for _, kw := range keywords {
-		matches, _ := store.LexicalSearch(ctx, kw, 20, []string{s.cfg.ProjectRoot}, "code")
+		matches, _ := store.LexicalSearch(ctx, kw, 20, []string{s.projectRoot()}, "code")
 		allMatches = append(allMatches, matches...)
 	}
 
@@ -997,14 +997,14 @@ func (s *Server) handleGetCodeHistory(ctx context.Context, request mcp.CallToolR
 		return mcp.NewToolResultError("file_path is required"), nil
 	}
 
-	absPath, err := s.pathValidator.ValidatePath(filePath)
+	absPath, err := s.validatePath(filePath)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid file_path: %v", err)), nil
 	}
 
 	// Check if git is available and it's a git repo
 	cmd := exec.CommandContext(ctx, "git", "log", "-n", "10", "--pretty=format:%h - %an, %ar : %s", "--", absPath)
-	cmd.Dir = s.cfg.ProjectRoot
+	cmd.Dir = s.projectRoot()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to run git log: %v\nOutput: %s", err, string(output))), nil
@@ -1042,7 +1042,7 @@ func (s *Server) handleGetSummarizedContext(ctx context.Context, request mcp.Cal
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to embed query: %v", err)), nil
 	}
 
-	records, err := store.HybridSearch(ctx, query, emb, topK, []string{s.cfg.ProjectRoot}, "")
+	records, err := store.HybridSearch(ctx, query, emb, topK, []string{s.projectRoot()}, "")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to search database: %v", err)), nil
 	}
@@ -1070,7 +1070,7 @@ func (s *Server) handleVerifyProposedChange(ctx context.Context, request mcp.Cal
 		return mcp.NewToolResultError("proposed_change is required"), nil
 	}
 
-	pids := []string{s.cfg.ProjectRoot}
+	pids := []string{s.projectRoot()}
 	crossProjs := request.GetStringSlice("cross_reference_projects", nil)
 	if len(crossProjs) > 0 {
 		pids = append(pids, crossProjs...)
@@ -1133,7 +1133,7 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 		return mcp.NewToolResultError(fmt.Errorf("failed to get store: %w", err).Error()), nil
 	}
 
-	records, err := store.Search(ctx, make([]float32, 768), 50, []string{s.cfg.ProjectRoot}, "code")
+	records, err := store.Search(ctx, make([]float32, 768), 50, []string{s.projectRoot()}, "code")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Errorf("failed to retrieve records: %w", err).Error()), nil
 	}
@@ -1161,7 +1161,7 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 		toolText = truncatedContent + "\n... [Truncated for length]"
 	}
 
-	storeErr := s.storeContext(ctx, truncatedContent, s.cfg.ProjectRoot)
+	storeErr := s.storeContext(ctx, truncatedContent, s.projectRoot())
 	if storeErr != nil {
 		s.logger.Error("Failed to store distilled context", "error", storeErr)
 		return mcp.NewToolResultText(fmt.Sprintf("### 🧠 Distilled Knowledge (Storage Failed)\n\n%s\n\n**Warning**: Failed to index this KI automatically.", toolText)), nil
