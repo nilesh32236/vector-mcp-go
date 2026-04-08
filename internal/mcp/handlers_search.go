@@ -70,42 +70,39 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 				case <-ctx.Done():
 					return
 				default:
-					content, err := os.ReadFile(path)
+					contentBytes, err := os.ReadFile(path)
 					if err != nil {
 						continue
 					}
 
-					relPath, _ := filepath.Rel(s.cfg.ProjectRoot, path)
-					contentStr := string(content)
+					contentStr := string(contentBytes)
 
+					relPath, _ := filepath.Rel(s.cfg.ProjectRoot, path)
+
+					lines := strings.Split(contentStr, "\n")
+					var lowerLines []string
 					if !isRegex {
-						contentLower := strings.ToLower(contentStr)
-						// Early exit: if the query isn't in the file at all, skip processing lines.
-						// This avoids unnecessary allocations and per-line checks for most files.
-						if !strings.Contains(contentLower, lowerQuery) {
+						lowerContent := strings.ToLower(contentStr)
+						// Early exit: if the file doesn't contain the query at all, skip it entirely
+						if !strings.Contains(lowerContent, lowerQuery) {
 							continue
 						}
+						lowerLines = strings.Split(lowerContent, "\n")
+					}
 
-						lines := strings.Split(contentStr, "\n")
-						lowerLines := strings.Split(contentLower, "\n")
-						for i, line := range lines {
-							if strings.Contains(lowerLines[i], lowerQuery) {
-								select {
-								case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
-								case <-ctx.Done():
-									return
-								}
-							}
+					for i, line := range lines {
+						matched := false
+						if isRegex {
+							matched = re.MatchString(line)
+						} else {
+							matched = strings.Contains(lowerLines[i], lowerQuery)
 						}
-					} else {
-						lines := strings.Split(contentStr, "\n")
-						for i, line := range lines {
-							if re.MatchString(line) {
-								select {
-								case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
-								case <-ctx.Done():
-									return
-								}
+
+						if matched {
+							select {
+							case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
+							case <-ctx.Done():
+								return
 							}
 						}
 					}
