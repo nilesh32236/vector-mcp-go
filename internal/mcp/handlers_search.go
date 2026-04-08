@@ -115,7 +115,7 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 		defer close(paths)
 		err := filepath.WalkDir(s.projectRoot(), func(path string, d os.DirEntry, err error) error {
 			if err != nil {
-				return nil
+				return err // propagate; WalkDir will skip this entry
 			}
 			if d.IsDir() {
 				if indexer.IsIgnoredDir(d.Name()) {

@@ -145,14 +145,13 @@ func (s *Server) handleWorkspaceManager(ctx context.Context, request mcp.CallToo
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve absolute path: %v", err)), nil
 		}
-		validatedPath, err := s.validatePath(absPath)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Invalid path: %v", err)), nil
+		if info, err := os.Stat(absPath); err != nil || !info.IsDir() {
+			return mcp.NewToolResultError(fmt.Sprintf("Path does not exist or is not a directory: %s", absPath)), nil
 		}
 		return s.handleSetProjectRoot(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
 				Arguments: map[string]any{
-					"project_path": validatedPath,
+					"project_path": absPath,
 				},
 			},
 		})
@@ -164,14 +163,13 @@ func (s *Server) handleWorkspaceManager(ctx context.Context, request mcp.CallToo
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve absolute path: %v", err)), nil
 		}
-		validatedPath, err := s.validatePath(absPath)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Invalid path: %v", err)), nil
+		if info, err := os.Stat(absPath); err != nil || !info.IsDir() {
+			return mcp.NewToolResultError(fmt.Sprintf("Path does not exist or is not a directory: %s", absPath)), nil
 		}
 		return s.handleTriggerProjectIndex(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
 				Arguments: map[string]any{
-					"project_path": validatedPath,
+					"project_path": absPath,
 				},
 			},
 		})

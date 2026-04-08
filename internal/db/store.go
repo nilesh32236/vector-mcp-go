@@ -22,13 +22,13 @@ import (
 
 // Store manages the vector and lexical search database.
 const (
-	FetchMultiplier = 3
+	FetchMultiplier         = 3
 	ExpandedFetchMultiplier = 2
-	WaitGroupCount = 2
-	SecondsPerDay = 24 * 60 * 60
-	RecencyBoostFactor = 0.5
-	RecencyDecayDays = 14.0
-	MaxParsedCacheSize = 10000
+	WaitGroupCount          = 2
+	SecondsPerDay           = 24 * 60 * 60
+	RecencyBoostFactor      = 0.5
+	RecencyDecayDays        = 14.0
+	MaxParsedCacheSize      = 10000
 )
 
 type Store struct {

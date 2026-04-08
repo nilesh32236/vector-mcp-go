@@ -20,9 +20,9 @@ import (
 
 // Service defines the RPC methods available on the Master.
 const (
-	EmbedTimeout = 30 * time.Second
+	EmbedTimeout      = 30 * time.Second
 	BatchEmbedTimeout = 60 * time.Second
-	RerankTimeout = 120 * time.Second
+	RerankTimeout     = 120 * time.Second
 )
 
 type Service struct {
@@ -467,7 +467,7 @@ func (c *Client) TriggerIndex(path string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = client.Close() }() 
+	defer func() { _ = client.Close() }()
 
 	var resp IndexResponse
 	err = client.Call("VectorDaemon.IndexProject", IndexRequest{Path: path}, &resp)
@@ -483,7 +483,7 @@ func (c *Client) GetProgress() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = client.Close() }() 
+	defer func() { _ = client.Close() }()
 
 	var resp ProgressResponse
 	if err := client.Call("VectorDaemon.GetProgress", StatusRequest{}, &resp); err != nil {
@@ -508,7 +508,7 @@ func (re *RemoteEmbedder) Embed(ctx context.Context, text string) ([]float32, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to master daemon: %w", err)
 	}
-	defer func() { _ = client.Close() }() 
+	defer func() { _ = client.Close() }()
 
 	var resp EmbedResponse
 	// RPC calls don't natively support context propagation easily in net/rpc,
@@ -537,7 +537,7 @@ func (re *RemoteEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to master daemon: %w", err)
 	}
-	defer func() { _ = client.Close() }() 
+	defer func() { _ = client.Close() }()
 
 	var resp EmbedBatchResponse
 	done := make(chan error, 1)
@@ -573,7 +573,7 @@ func (rs *RemoteStore) call(method string, req any, resp any) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to master daemon: %w", err)
 	}
-	defer func() { _ = client.Close() }() 
+	defer func() { _ = client.Close() }()
 	return client.Call("VectorDaemon."+method, req, resp)
 }
 
@@ -695,13 +695,14 @@ func (rs *RemoteStore) SearchWithScore(_ context.Context, queryEmbedding []float
 	}
 	return resp.Records, resp.Scores, nil
 }
+
 // RerankBatch reranks multiple texts relative to a query via the master daemon.
 func (re *RemoteEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
 	client, err := rpc.Dial("unix", re.socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to master daemon: %w", err)
 	}
-	defer func() { _ = client.Close() }() 
+	defer func() { _ = client.Close() }()
 
 	var resp RerankBatchResponse
 	done := make(chan error, 1)

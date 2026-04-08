@@ -200,6 +200,9 @@ func (s *Server) monorepoResolve(dep string) (string, bool) {
 	s.rootMu.RLock()
 	r := s.monorepoResolver
 	s.rootMu.RUnlock()
+	if r == nil {
+		return "", false
+	}
 	return r.Resolve(dep)
 }
 

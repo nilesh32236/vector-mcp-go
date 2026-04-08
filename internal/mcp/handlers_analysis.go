@@ -380,6 +380,17 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 		}
 	}
 
+	// Extract the Go module path for same-module import detection.
+	goModulePath := ""
+	if projectType == "go" {
+		for _, line := range strings.Split(string(content), "\n") {
+			if parts := strings.Fields(strings.TrimSpace(line)); len(parts) == 2 && parts[0] == "module" {
+				goModulePath = parts[1]
+				break
+			}
+		}
+	}
+
 	// 3. Find all imports in indexed chunks for this directory
 	store, err := s.getStore(ctx)
 	if err != nil {
@@ -418,8 +429,8 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 							missingDeps[pkgName] = append(missingDeps[pkgName], r.Metadata["path"])
 						}
 					} else if projectType == "go" {
-						// Standard library check (simplified: no dots usually)
-						if !strings.Contains(dep, ".") || strings.HasPrefix(dep, s.projectRoot()) {
+						// Skip stdlib (no dots) and same-module imports.
+						if !strings.Contains(dep, ".") || (goModulePath != "" && strings.HasPrefix(dep, goModulePath)) {
 							continue
 						}
 						if !depSet[dep] {
@@ -1128,12 +1139,14 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
+	projectRoot := s.projectRoot()
+
 	store, err := s.getStore(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Errorf("failed to get store: %w", err).Error()), nil
 	}
 
-	records, err := store.Search(ctx, make([]float32, 768), 50, []string{s.projectRoot()}, "code")
+	records, err := store.Search(ctx, make([]float32, 768), 50, []string{projectRoot}, "code")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Errorf("failed to retrieve records: %w", err).Error()), nil
 	}
@@ -1161,7 +1174,7 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 		toolText = truncatedContent + "\n... [Truncated for length]"
 	}
 
-	storeErr := s.storeContext(ctx, truncatedContent, s.projectRoot())
+	storeErr := s.storeContext(ctx, truncatedContent, projectRoot)
 	if storeErr != nil {
 		s.logger.Error("Failed to store distilled context", "error", storeErr)
 		return mcp.NewToolResultText(fmt.Sprintf("### 🧠 Distilled Knowledge (Storage Failed)\n\n%s\n\n**Warning**: Failed to index this KI automatically.", toolText)), nil
