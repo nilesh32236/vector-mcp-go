@@ -24,7 +24,7 @@ var (
 	tsNamedImportRegex  = regexp.MustCompile(`import\s*{([^}]+)}`)
 	goSingleImportRegex = regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
 	goBlockRegex        = regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
-	goInnerImportRegex  = regexp.MustCompile(`["']([^"']+)["']`)
+	goInnerImportRegex  = regexp.MustCompile(`(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
 	phpReqRegex         = regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
 	phpUseRegex         = regexp.MustCompile(`use\s+([^;]+);`)
 )
