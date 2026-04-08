@@ -129,7 +129,7 @@ func TestRetrievalKPIsOnPolyglotFixture(t *testing.T) {
 		}
 		content := string(b)
 		totalLOC += countLines(content)
-		chunks := indexer.CreateChunks(context.Background(), content, f)
+		chunks := indexer.CreateChunks(content, f)
 		if len(chunks) == 0 {
 			continue
 		}

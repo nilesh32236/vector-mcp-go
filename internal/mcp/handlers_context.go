@@ -12,7 +12,7 @@ import (
 )
 
 // handleSetProjectRoot updates the active project root directory and resets the file watcher.
-func (s *Server) handleSetProjectRoot(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleSetProjectRoot(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path := request.GetString("project_path", "")
 	if path == "" {
 		return mcp.NewToolResultError("project_path is required"), nil

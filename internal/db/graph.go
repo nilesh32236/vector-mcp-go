@@ -1,4 +1,3 @@
-// Package db provides data persistence and graph representation for code entities.
 package db
 
 import (

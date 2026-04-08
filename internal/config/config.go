@@ -1,5 +1,3 @@
-// Package config provides configuration management for the vector-mcp-go application,
-// handling environment variables, logging setup, and path resolutions.
 package config
 
 import (
@@ -13,17 +11,6 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Default directory and file permissions.
-const (
-	DirPerm  = 0755
-	FilePerm = 0644
-	// DefaultDimension is the default embedding dimension.
-	DefaultDimension = 1024
-	// LogFormatJSON is the JSON log format.
-	LogFormatJSON = "json"
-)
-
-// Config holds the application configuration parameters.
 type Config struct {
 	ProjectRoot        string
 	DataDir            string
@@ -40,13 +27,11 @@ type Config struct {
 	DisableWatcher     bool
 	EnableLiveIndexing bool
 	EmbedderPoolSize   int
-	APIPort            string
+	ApiPort            string
 	Logger             *slog.Logger
 	AllowedOrigins     []string
 }
 
-// LoadConfig initializes and returns a new Config instance, loading values from environment variables
-// and applying overrides where provided.
 func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Config {
 	_ = godotenv.Load() // Ignore error if .env file doesn't exist
 
@@ -96,11 +81,11 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 	logFormat = strings.ToLower(logFormat)
 
 	// Ensure directories exist
-	_ = os.MkdirAll(dbPath, DirPerm)
-	_ = os.MkdirAll(modelsDir, DirPerm)
+	os.MkdirAll(dbPath, 0755)
+	os.MkdirAll(modelsDir, 0755)
 
 	// Configure structured logging
-	logFile, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, FilePerm)
+	logFile, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	var writer io.Writer
 	if logFile != nil {
 		writer = io.MultiWriter(os.Stderr, logFile)
@@ -132,10 +117,9 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 	}
 
 	rerankerModelName := os.Getenv("RERANKER_MODEL_NAME")
-	switch rerankerModelName {
-	case "":
+	if rerankerModelName == "" {
 		rerankerModelName = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-	case "none":
+	} else if rerankerModelName == "none" {
 		rerankerModelName = ""
 	}
 
@@ -184,18 +168,17 @@ func LoadConfig(dataDirOverride, modelsDirOverride, dbPathOverride string) *Conf
 		ModelName:          modelName,
 		RerankerModelName:  rerankerModelName,
 		HFToken:            os.Getenv("HF_TOKEN"),
-		Dimension:          DefaultDimension,
+		Dimension:          1024,
 		MatryoshkaDim:      matryoshkaDim,
 		DisableWatcher:     disableWatcher,
 		EnableLiveIndexing: enableLiveIndexing,
 		EmbedderPoolSize:   embedderPoolSize,
-		APIPort:            apiPort,
+		ApiPort:            apiPort,
 		Logger:             logger,
 		AllowedOrigins:     allowedOrigins,
 	}
 }
 
-// GetRelativePath returns the relative path from root to path, or the original path if it fails.
 func GetRelativePath(path string, root string) string {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {

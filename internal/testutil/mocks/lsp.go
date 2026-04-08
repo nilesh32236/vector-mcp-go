@@ -3,47 +3,71 @@ package mocks
 import (
 	"context"
 	"sync"
-
-	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
 )
 
-// Manager implements a mock LSP manager for testing.
-type Manager struct {
+// MockLSPManager implements a mock LSP manager for testing.
+type MockLSPManager struct {
 	mu              sync.RWMutex
 	started         bool
 	startErr        error
 	stopErr         error
 	initialized     bool
-	definitions     map[string][]lsp.Location
-	references      map[string][]lsp.Location
-	diagnostics     map[string][]lsp.Diagnostic
+	definitions     map[string][]Location
+	references      map[string][]Location
+	diagnostics     map[string][]Diagnostic
 	callCount       int
 	initializeCalls int
 }
 
+// Location represents a code location for LSP responses.
+type Location struct {
+	URI   string `json:"uri"`
+	Range Range  `json:"range"`
+}
+
+// Range represents a text range in a document.
+type Range struct {
+	Start Position `json:"start"`
+	End   Position `json:"end"`
+}
+
+// Position represents a position in a document.
+type Position struct {
+	Line      int `json:"line"`
+	Character int `json:"character"`
+}
+
+// Diagnostic represents an LSP diagnostic.
+type Diagnostic struct {
+	Range    Range  `json:"range"`
+	Severity int    `json:"severity"`
+	Message  string `json:"message"`
+	Source   string `json:"source"`
+}
+
 // NewMockLSPManager creates a new mock LSP manager.
-func NewMockLSPManager() *Manager {
-	return &Manager{
-		definitions: make(map[string][]lsp.Location),
-		references:  make(map[string][]lsp.Location),
-		diagnostics: make(map[string][]lsp.Diagnostic),
+func NewMockLSPManager() *MockLSPManager {
+	return &MockLSPManager{
+		definitions: make(map[string][]Location),
+		references:  make(map[string][]Location),
+		diagnostics: make(map[string][]Diagnostic),
 	}
 }
 
 // WithStartError sets an error to return on Start.
-func (m *Manager) WithStartError(err error) *Manager {
+func (m *MockLSPManager) WithStartError(err error) *MockLSPManager {
 	m.startErr = err
 	return m
 }
 
 // WithStopError sets an error to return on Stop.
-func (m *Manager) WithStopError(err error) *Manager {
+func (m *MockLSPManager) WithStopError(err error) *MockLSPManager {
 	m.stopErr = err
 	return m
 }
 
 // WithDefinition sets a definition response for a position.
-func (m *Manager) WithDefinition(uri string, line, char int, locations []lsp.Location) *Manager {
+func (m *MockLSPManager) WithDefinition(uri string, line, char int, locations []Location) *MockLSPManager {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := formatKey(uri, line, char)
@@ -52,7 +76,7 @@ func (m *Manager) WithDefinition(uri string, line, char int, locations []lsp.Loc
 }
 
 // WithReferences sets a references response for a position.
-func (m *Manager) WithReferences(uri string, line, char int, locations []lsp.Location) *Manager {
+func (m *MockLSPManager) WithReferences(uri string, line, char int, locations []Location) *MockLSPManager {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := formatKey(uri, line, char)
@@ -61,7 +85,7 @@ func (m *Manager) WithReferences(uri string, line, char int, locations []lsp.Loc
 }
 
 // WithDiagnostics sets diagnostics for a file.
-func (m *Manager) WithDiagnostics(uri string, diagnostics []lsp.Diagnostic) *Manager {
+func (m *MockLSPManager) WithDiagnostics(uri string, diagnostics []Diagnostic) *MockLSPManager {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.diagnostics[uri] = diagnostics
@@ -69,14 +93,14 @@ func (m *Manager) WithDiagnostics(uri string, diagnostics []lsp.Diagnostic) *Man
 }
 
 // GetCallCount returns the total number of calls.
-func (m *Manager) GetCallCount() int {
+func (m *MockLSPManager) GetCallCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.callCount
 }
 
 // Start simulates starting the LSP server.
-func (m *Manager) Start(_ context.Context) error {
+func (m *MockLSPManager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.callCount++
@@ -87,13 +111,8 @@ func (m *Manager) Start(_ context.Context) error {
 	return nil
 }
 
-// EnsureStarted simulates ensuring the LSP server is started.
-func (m *Manager) EnsureStarted(ctx context.Context) error {
-	return m.Start(ctx)
-}
-
 // Stop simulates stopping the LSP server.
-func (m *Manager) Stop() error {
+func (m *MockLSPManager) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.callCount++
@@ -105,14 +124,14 @@ func (m *Manager) Stop() error {
 }
 
 // IsStarted returns whether the server is started.
-func (m *Manager) IsStarted() bool {
+func (m *MockLSPManager) IsStarted() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.started
 }
 
 // Initialize simulates LSP initialization.
-func (m *Manager) Initialize(_ context.Context) error {
+func (m *MockLSPManager) Initialize(ctx context.Context, rootPath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.initializeCalls++
@@ -120,29 +139,8 @@ func (m *Manager) Initialize(_ context.Context) error {
 	return nil
 }
 
-// Call simulates a generic LSP call.
-func (m *Manager) Call(_ context.Context, method string, params any, result any) error {
-	m.mu.Lock()
-	m.callCount++
-	m.mu.Unlock()
-	return nil
-}
-
-// Notify simulates a generic LSP notification.
-func (m *Manager) Notify(_ context.Context, method string, params any) error {
-	m.mu.Lock()
-	m.callCount++
-	m.mu.Unlock()
-	return nil
-}
-
-// RegisterNotificationHandler simulates registering a notification handler.
-func (m *Manager) RegisterNotificationHandler(_ string, handler func([]byte)) {
-	// Mock implementation doesn't need to do anything here for now
-}
-
 // GetDefinition simulates going to definition.
-func (m *Manager) GetDefinition(_ context.Context, uri string, line, char int) ([]lsp.Location, error) {
+func (m *MockLSPManager) GetDefinition(ctx context.Context, uri string, line, char int) ([]Location, error) {
 	m.mu.Lock()
 	m.callCount++
 	m.mu.Unlock()
@@ -157,7 +155,7 @@ func (m *Manager) GetDefinition(_ context.Context, uri string, line, char int) (
 }
 
 // GetReferences simulates finding references.
-func (m *Manager) GetReferences(_ context.Context, uri string, line, char int) ([]lsp.Location, error) {
+func (m *MockLSPManager) GetReferences(ctx context.Context, uri string, line, char int) ([]Location, error) {
 	m.mu.Lock()
 	m.callCount++
 	m.mu.Unlock()
@@ -172,7 +170,7 @@ func (m *Manager) GetReferences(_ context.Context, uri string, line, char int) (
 }
 
 // GetDiagnostics returns diagnostics for a file.
-func (m *Manager) GetDiagnostics(uri string) []lsp.Diagnostic {
+func (m *MockLSPManager) GetDiagnostics(uri string) []Diagnostic {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.diagnostics[uri]

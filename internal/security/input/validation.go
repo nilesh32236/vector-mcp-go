@@ -70,13 +70,12 @@ func (v *RegexValidator) Validate(pattern string) error {
 	depth := 0
 	maxDepth := 0
 	for _, ch := range pattern {
-		switch ch {
-		case '(':
+		if ch == '(' {
 			depth++
 			if depth > maxDepth {
 				maxDepth = depth
 			}
-		case ')':
+		} else if ch == ')' {
 			depth--
 		}
 	}
@@ -187,34 +186,34 @@ func (v *StringValidator) Validate(s string) error {
 }
 
 // ClampInt clamps an integer value between min and max.
-func ClampInt(value, low, high int) int {
-	if value < low {
-		return low
+func ClampInt(value, min, max int) int {
+	if value < min {
+		return min
 	}
-	if value > high {
-		return high
+	if value > max {
+		return max
 	}
 	return value
 }
 
 // ClampInt64 clamps an int64 value between min and max.
-func ClampInt64(value, low, high int64) int64 {
-	if value < low {
-		return low
+func ClampInt64(value, min, max int64) int64 {
+	if value < min {
+		return min
 	}
-	if value > high {
-		return high
+	if value > max {
+		return max
 	}
 	return value
 }
 
 // ClampFloat64 clamps a float64 value between min and max.
-func ClampFloat64(value, low, high float64) float64 {
-	if value < low {
-		return low
+func ClampFloat64(value, min, max float64) float64 {
+	if value < min {
+		return min
 	}
-	if value > high {
-		return high
+	if value > max {
+		return max
 	}
 	return value
 }

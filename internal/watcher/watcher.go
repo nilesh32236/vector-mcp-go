@@ -1,4 +1,3 @@
-// Package watcher provides file system watching capabilities to trigger re-indexing on changes.
 package watcher
 
 import (
@@ -74,13 +73,13 @@ func (fw *FileWatcher) Start(ctx context.Context) {
 			if event.Has(fsnotify.Create) {
 				info, _ := os.Stat(event.Name)
 				if info != nil && info.IsDir() && !indexer.IsIgnoredDir(info.Name()) {
-					_ = fw.tracker.Add(event.Name)
+					fw.tracker.Add(event.Name)
 					fw.watchRecursive(event.Name)
 				}
 			}
 			fw.eventChan <- event
 		case <-ctx.Done():
-			_ = fw.tracker.Close()
+			fw.tracker.Close()
 			return
 		}
 	}
@@ -89,12 +88,12 @@ func (fw *FileWatcher) Start(ctx context.Context) {
 func (fw *FileWatcher) watchRecursive(root string) {
 	fw.watcherMu.Lock()
 	defer fw.watcherMu.Unlock()
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, _ error) error {
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if d != nil && d.IsDir() {
 			if indexer.IsIgnoredDir(d.Name()) {
 				return filepath.SkipDir
 			}
-			_ = fw.tracker.Add(path)
+			fw.tracker.Add(path)
 		}
 		return nil
 	})
@@ -103,12 +102,12 @@ func (fw *FileWatcher) watchRecursive(root string) {
 func (fw *FileWatcher) resetWatcher(newRoot string) {
 	fw.watcherMu.Lock()
 	if fw.currentRoot != "" {
-		_ = filepath.WalkDir(fw.currentRoot, func(path string, d os.DirEntry, _ error) error {
+		filepath.WalkDir(fw.currentRoot, func(path string, d os.DirEntry, err error) error {
 			if d != nil && d.IsDir() {
 				if indexer.IsIgnoredDir(d.Name()) {
 					return filepath.SkipDir
 				}
-				_ = fw.tracker.Remove(path)
+				fw.tracker.Remove(path)
 			}
 			return nil
 		})
@@ -150,12 +149,12 @@ func (fw *FileWatcher) processPending(ctx context.Context, pending map[string]fs
 			if ext == ".go" || ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".md" {
 				store, err := fw.storeGetter(ctx)
 				if err == nil {
-					opts := indexer.Options{
+					opts := indexer.IndexerOptions{
 						Config:   fw.cfg,
 						Store:    store,
 						Embedder: fw.embedder,
 					}
-					_, _ = indexer.IndexSingleFile(ctx, name, opts)
+					indexer.IndexSingleFile(ctx, name, opts)
 					fw.logger.Info("File re-indexed (proactive)", "path", name)
 
 					// --- Architectural Guardrails ---
@@ -189,14 +188,13 @@ func (fw *FileWatcher) processPending(ctx context.Context, pending map[string]fs
 			relPath := config.GetRelativePath(name, activeRoot)
 			store, err := fw.storeGetter(ctx)
 			if err == nil {
-				_ = store.DeleteByPrefix(ctx, relPath, activeRoot)
+				store.DeleteByPrefix(ctx, relPath, activeRoot)
 				fw.logger.Info("Path removed from vector index (prefix delete)", "path", relPath, "project", activeRoot)
 			}
 		}
 	}
 }
 
-// CheckArchitecturalCompliance validates that the given file does not violate project-wide architecture rules.
 func (fw *FileWatcher) CheckArchitecturalCompliance(ctx context.Context, relPath string, projectRoot string) {
 	store, err := fw.storeGetter(ctx)
 	if err != nil {
@@ -245,7 +243,6 @@ func (fw *FileWatcher) CheckArchitecturalCompliance(ctx context.Context, relPath
 	}
 }
 
-// RedistillDependents triggers a re-distillation of packages that depend on the changed file.
 func (fw *FileWatcher) RedistillDependents(ctx context.Context, relPath string, projectRoot string) {
 	if fw.distiller == nil {
 		return

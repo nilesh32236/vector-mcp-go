@@ -1,4 +1,3 @@
-// Package system provides system-level utilities for resource monitoring and control.
 package system
 
 import (
@@ -67,7 +66,6 @@ func (mt *MemThrottler) update() {
 	mt.mu.Unlock()
 }
 
-// Stop halts the memory monitoring and throttling goroutine.
 func (mt *MemThrottler) Stop() {
 	close(mt.stopChan)
 }
@@ -117,7 +115,7 @@ func readMemInfo() (MemStatus, error) {
 	if err != nil {
 		return MemStatus{}, err
 	}
-	defer func() { _ = file.Close() }()
+	defer file.Close()
 
 	var total, available uint64
 	scanner := bufio.NewScanner(file)

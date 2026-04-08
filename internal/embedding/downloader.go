@@ -1,4 +1,3 @@
-// Package embedding provides tools for generating and managing vector embeddings.
 package embedding
 
 import (
@@ -8,6 +7,36 @@ import (
 	"os"
 	"path/filepath"
 )
+
+type ModelConfig struct {
+	OnnxURL       string
+	TokenizerURL  string
+	Filename      string
+	Dimension     int
+	IsReranker    bool
+	MatryoshkaDim int // optional: truncate embeddings to this dim (MRL models only)
+}
+
+// EffectiveDimension returns the vector width emitted by the embedder after any
+// optional Matryoshka truncation is applied.
+func (mc ModelConfig) EffectiveDimension() int {
+	if mc.IsReranker {
+		return mc.Dimension
+	}
+	if mc.MatryoshkaDim > 0 && mc.MatryoshkaDim < mc.Dimension {
+		return mc.MatryoshkaDim
+	}
+	return mc.Dimension
+}
+
+// WithMatryoshkaDimension applies a runtime truncation target when valid.
+func (mc ModelConfig) WithMatryoshkaDimension(dim int) ModelConfig {
+	if mc.IsReranker || dim <= 0 || dim >= mc.Dimension {
+		return mc
+	}
+	mc.MatryoshkaDim = dim
+	return mc
+}
 
 // Models contains all embedding and reranker model presets supported by the runtime downloader.
 var Models = map[string]ModelConfig{
@@ -66,7 +95,7 @@ var Models = map[string]ModelConfig{
 	},
 	"Xenova/jina-embeddings-v2-base-code": {
 		OnnxURL:      "https://huggingface.co/Xenova/jina-embeddings-v2-base-code/resolve/main/onnx/model_quantized.onnx",
-		TokenizerURL: "https://huggingface.co/Xina-embeddings-v2-base-code/resolve/main/tokenizer.json",
+		TokenizerURL: "https://huggingface.co/Xenova/jina-embeddings-v2-base-code/resolve/main/tokenizer.json",
 		Filename:     "jina_code_v2/model_quantized.onnx",
 		Dimension:    768,
 	},
@@ -128,7 +157,7 @@ func downloadFile(url string, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("bad status: %s", resp.Status)
@@ -140,9 +169,9 @@ func downloadFile(url string, dest string) error {
 	}
 
 	_, err = io.Copy(out, resp.Body)
-	_ = out.Close()
+	out.Close()
 	if err != nil {
-		_ = os.Remove(tempDest)
+		os.Remove(tempDest)
 		return err
 	}
 

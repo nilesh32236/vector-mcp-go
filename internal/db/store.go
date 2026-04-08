@@ -1,4 +1,3 @@
-// Package db provides data persistence and graph representation for code entities.
 package db
 
 import (
@@ -20,17 +19,6 @@ import (
 	"github.com/philippgille/chromem-go"
 )
 
-// Store manages the vector and lexical search database.
-const (
-	FetchMultiplier = 3
-	ExpandedFetchMultiplier = 2
-	WaitGroupCount = 2
-	SecondsPerDay = 24 * 60 * 60
-	RecencyBoostFactor = 0.5
-	RecencyDecayDays = 14.0
-	MaxParsedCacheSize = 10000
-)
-
 type Store struct {
 	db          *chromem.DB
 	collection  *chromem.Collection
@@ -40,7 +28,6 @@ type Store struct {
 	bm25        *lexical.Index // BM25 inverted index for O(log n) lexical search
 }
 
-// Record represents a single entry in the database.
 type Record struct {
 	ID         string            `json:"id"`
 	Content    string            `json:"content"`
@@ -49,7 +36,6 @@ type Record struct {
 	Similarity float32           `json:"similarity,omitempty"`
 }
 
-// Connect establishes a connection to the persistent database and ensures the collection exists.
 func Connect(ctx context.Context, dbPath string, collectionName string, dimension int) (*Store, error) {
 	db, err := chromem.NewPersistentDB(dbPath, false)
 	if err != nil {
@@ -156,7 +142,6 @@ func (s *Store) lexicalDocumentText(content string, metadata map[string]string) 
 	return builder.String()
 }
 
-// Insert adds a batch of records to the database and updates the lexical index.
 func (s *Store) Insert(ctx context.Context, records []Record) error {
 	ctx, span := tracing.StartSpan(ctx, "db.store", "db.insert")
 	defer span.End()
@@ -175,7 +160,6 @@ func (s *Store) Insert(ctx context.Context, records []Record) error {
 	return s.collection.AddDocuments(ctx, docs, runtime.NumCPU())
 }
 
-// Search performs a vector similarity search.
 func (s *Store) Search(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, error) {
 	if topK <= 0 {
 		return nil, nil
@@ -185,7 +169,6 @@ func (s *Store) Search(ctx context.Context, queryEmbedding []float32, topK int, 
 	return records, err
 }
 
-// LexicalSearch performs a keyword-based search using the BM25 index.
 func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string, category string) ([]Record, error) {
 	ctx, span := tracing.StartSpan(ctx, "db.store", "db.lexical_search")
 	defer span.End()
@@ -199,9 +182,11 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 		return nil, nil
 	}
 
-	fetchK := count
+	fetchK := topK
 	if topK <= count/3 {
-		fetchK = topK * FetchMultiplier
+		fetchK = topK * 3
+	} else {
+		fetchK = count
 	}
 
 	// Fast BM25 path: fetch extras up front so project/category filtering does not
@@ -282,7 +267,6 @@ func (s *Store) LexicalSearch(ctx context.Context, query string, topK int, proje
 	return records, nil
 }
 
-// HybridSearch combines vector and lexical search results using Reciprocal Rank Fusion (RRF).
 func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, error) {
 	ctx, span := tracing.StartSpan(ctx, "db.store", "db.hybrid_search")
 	defer span.End()
@@ -302,12 +286,12 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 	)
 	expandedTopK := topK
 	if topK <= int(^uint(0)>>1)/2 {
-		expandedTopK = topK * ExpandedFetchMultiplier
+		expandedTopK = topK * 2
 	}
 
 	// 1. & 2. Concurrent Vector and Lexical Search (Fetch more for better RRF)
 	var wg sync.WaitGroup
-	wg.Add(WaitGroupCount)
+	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
@@ -374,13 +358,13 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 			if updatedAtStr, ok := r.Metadata["updated_at"]; ok {
 				if updatedAt, err := strconv.ParseInt(updatedAtStr, 10, 64); err == nil {
 					now := time.Now().Unix()
-					ageDays := float64(now-updatedAt) / SecondsPerDay
+					ageDays := float64(now-updatedAt) / (24 * 60 * 60)
 					if ageDays < 0 {
 						ageDays = 0
 					}
 					// Half-life of 14 days, max boost of 1.5x
 					// Formula: 1.0 + 0.5 * 2^(-age/14)
-					recencyBoost := 1.0 + RecencyBoostFactor*math.Pow(2, -ageDays/RecencyDecayDays)
+					recencyBoost := 1.0 + 0.5*math.Pow(2, -ageDays/14.0)
 					boost *= recencyBoost
 				}
 			}
@@ -412,7 +396,6 @@ func (s *Store) HybridSearch(ctx context.Context, query string, queryEmbedding [
 	return finalResults, nil
 }
 
-// SearchWithScore performs a semantic search using vector embeddings and returns records along with their cosine similarity scores.
 func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, topK int, projectIDs []string, category string) ([]Record, []float32, error) {
 	ctx, span := tracing.StartSpan(ctx, "db.store", "db.vector_search")
 	defer span.End()
@@ -493,7 +476,6 @@ func (s *Store) SearchWithScore(ctx context.Context, queryEmbedding []float32, t
 	return records, scores, nil
 }
 
-// DeleteByPath removes all records associated with a specific file path.
 func (s *Store) DeleteByPath(ctx context.Context, path string, projectID string) error {
 	ctx, span := tracing.StartSpan(ctx, "db.store", "db.delete_by_path")
 	defer span.End()
@@ -530,7 +512,6 @@ func (s *Store) DeleteByPrefix(ctx context.Context, prefix string, projectID str
 	return nil
 }
 
-// ClearProject removes all records associated with a specific project.
 func (s *Store) ClearProject(ctx context.Context, projectID string) error {
 	ctx, span := tracing.StartSpan(ctx, "db.store", "db.clear_project")
 	defer span.End()
@@ -538,7 +519,6 @@ func (s *Store) ClearProject(ctx context.Context, projectID string) error {
 	return s.deleteByFilter(ctx, map[string]string{"project_id": projectID})
 }
 
-// GetPathHashMapping returns a map of file paths to their content hashes for a project.
 func (s *Store) GetPathHashMapping(ctx context.Context, projectID string) (map[string]string, error) {
 	count := s.collection.Count()
 	if count == 0 {
@@ -564,7 +544,6 @@ func (s *Store) GetPathHashMapping(ctx context.Context, projectID string) (map[s
 	return mapping, nil
 }
 
-// GetFileHash retrieves the SHA256 content hash of a file at the specified path within a project.
 func (s *Store) GetFileHash(ctx context.Context, path string, projectID string) (string, error) {
 	dummyEmb := make([]float32, s.Dimension)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, 1, map[string]string{
@@ -578,12 +557,10 @@ func (s *Store) GetFileHash(ctx context.Context, path string, projectID string) 
 	return res[0].Metadata["hash"], nil
 }
 
-// Count returns the total number of records currently stored in the vector database.
 func (s *Store) Count() int64 {
 	return int64(s.collection.Count())
 }
 
-// GetAllMetadata returns all records with only their ID and Metadata populated.
 func (s *Store) GetAllMetadata(ctx context.Context) ([]Record, error) {
 	count := s.collection.Count()
 	if count == 0 {
@@ -606,7 +583,6 @@ func (s *Store) GetAllMetadata(ctx context.Context) ([]Record, error) {
 	return records, nil
 }
 
-// GetAllRecords retrieves all records from the database without any filtering or sorting.
 func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {
 	count := s.collection.Count()
 	if count == 0 {
@@ -631,7 +607,6 @@ func (s *Store) GetAllRecords(ctx context.Context) ([]Record, error) {
 	return records, nil
 }
 
-// GetByPath retrieves all records matching a specific file path and project identifier.
 func (s *Store) GetByPath(ctx context.Context, path string, projectID string) ([]Record, error) {
 	count := s.collection.Count()
 	if count == 0 {
@@ -656,7 +631,6 @@ func (s *Store) GetByPath(ctx context.Context, path string, projectID string) ([
 	return records, nil
 }
 
-// GetByPrefix retrieves all records matching a path prefix and project identifier.
 func (s *Store) GetByPrefix(ctx context.Context, prefix string, projectID string) ([]Record, error) {
 	count := s.collection.Count()
 	if count == 0 {
@@ -685,7 +659,6 @@ func (s *Store) GetByPrefix(ctx context.Context, prefix string, projectID string
 	return records, nil
 }
 
-// SetStatus updates the indexing status of a project.
 func (s *Store) SetStatus(ctx context.Context, projectID string, status string) error {
 	ctx, span := tracing.StartSpan(ctx, "db.store", "db.set_status")
 	defer span.End()
@@ -708,7 +681,6 @@ func (s *Store) SetStatus(ctx context.Context, projectID string, status string) 
 	}})
 }
 
-// GetStatus retrieves the indexing status of a project.
 func (s *Store) GetStatus(ctx context.Context, projectID string) (string, error) {
 	dummyEmb := make([]float32, s.Dimension)
 	res, err := s.collection.QueryEmbedding(ctx, dummyEmb, 1, map[string]string{"type": "project_status", "project_id": projectID}, nil)
@@ -718,7 +690,6 @@ func (s *Store) GetStatus(ctx context.Context, projectID string) (string, error)
 	return res[0].Content, nil
 }
 
-// GetAllStatuses retrieves the indexing status of all projects.
 func (s *Store) GetAllStatuses(ctx context.Context) (map[string]string, error) {
 	count := s.collection.Count()
 	if count == 0 {
@@ -764,7 +735,7 @@ func (s *Store) parseStringArray(jsonStr string) []string {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	// Partial eviction: if cache gets too big, remove ~10% of entries to prevent thundering herd
-	if len(s.parsedCache) > MaxParsedCacheSize {
+	if len(s.parsedCache) > 10000 {
 		evictCount := 1000
 		for k := range s.parsedCache {
 			delete(s.parsedCache, k)

@@ -8,7 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-func (s *Server) handleGetInterfaceImplementations(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleGetInterfaceImplementations(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args, ok := request.Params.Arguments.(map[string]any)
 	if !ok {
 		return mcp.NewToolResultError("invalid arguments"), nil
@@ -24,15 +24,15 @@ func (s *Server) handleGetInterfaceImplementations(_ context.Context, request mc
 	}
 
 	var res strings.Builder
-	fmt.Fprintf(&res, "Found %d implementations for '%s':\n", len(impls), name)
+	res.WriteString(fmt.Sprintf("Found %d implementations for '%s':\n", len(impls), name))
 	for _, node := range impls {
-		fmt.Fprintf(&res, "- %s (Type: %s, Path: %s)\n", node.Name, node.Type, node.Path)
+		res.WriteString(fmt.Sprintf("- %s (Type: %s, Path: %s)\n", node.Name, node.Type, node.Path))
 	}
 
 	return mcp.NewToolResultText(res.String()), nil
 }
 
-func (s *Server) handleTraceDataFlow(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleTraceDataFlow(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args, ok := request.Params.Arguments.(map[string]any)
 	if !ok {
 		return mcp.NewToolResultError("invalid arguments"), nil
@@ -48,18 +48,18 @@ func (s *Server) handleTraceDataFlow(_ context.Context, request mcp.CallToolRequ
 	}
 
 	var res strings.Builder
-	fmt.Fprintf(&res, "Entities using/containing symbol '%s':\n", name)
+	res.WriteString(fmt.Sprintf("Entities using/containing symbol '%s':\n", name))
 	for _, node := range nodes {
-		fmt.Fprintf(&res, "- %s (Type: %s, Path: %s)\n", node.Name, node.Type, node.Path)
+		res.WriteString(fmt.Sprintf("- %s (Type: %s, Path: %s)\n", node.Name, node.Type, node.Path))
 		if node.Docstring != "" {
-			fmt.Fprintf(&res, "  Doc: %s\n", node.Docstring)
+			res.WriteString(fmt.Sprintf("  Doc: %s\n", node.Docstring))
 		}
 	}
 
 	return mcp.NewToolResultText(res.String()), nil
 }
 
-func (s *Server) handleGetImpactRadiusPrecise(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleGetImpactRadiusPrecise(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args, ok := request.Params.Arguments.(map[string]any)
 	if !ok {
 		return mcp.NewToolResultError("invalid arguments"), nil
@@ -75,9 +75,9 @@ func (s *Server) handleGetImpactRadiusPrecise(_ context.Context, request mcp.Cal
 	}
 
 	var output strings.Builder
-	fmt.Fprintf(&output, "Precise Impact Analysis for '%s':\n", name)
+	output.WriteString(fmt.Sprintf("Precise Impact Analysis for '%s':\n", name))
 	for _, node := range nodes {
-		fmt.Fprintf(&output, "\nEntity: %s (%s) in %s\n", node.Name, node.Type, node.Path)
+		output.WriteString(fmt.Sprintf("\nEntity: %s (%s) in %s\n", node.Name, node.Type, node.Path))
 
 		// 1. Structural Dependents (Implementations)
 		if node.Type == "interface" || node.Type == "interface_type" {
@@ -85,7 +85,7 @@ func (s *Server) handleGetImpactRadiusPrecise(_ context.Context, request mcp.Cal
 			if len(impls) > 0 {
 				output.WriteString("  - 🔄 Implemented by:\n")
 				for _, impl := range impls {
-					fmt.Fprintf(&output, "    * %s (%s)\n", impl.Name, impl.Path)
+					output.WriteString(fmt.Sprintf("    * %s (%s)\n", impl.Name, impl.Path))
 				}
 			}
 		}

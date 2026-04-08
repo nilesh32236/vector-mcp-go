@@ -34,8 +34,8 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.DbPath != filepath.Join(dataDir, "lancedb") {
 			t.Errorf("expected DbPath %s, got %s", filepath.Join(dataDir, "lancedb"), cfg.DbPath)
 		}
-		if cfg.APIPort != "47821" {
-			t.Errorf("expected APIPort 47821, got %s", cfg.APIPort)
+		if cfg.ApiPort != "47821" {
+			t.Errorf("expected ApiPort 47821, got %s", cfg.ApiPort)
 		}
 		if cfg.ModelName != "BAAI/bge-small-en-v1.5" {
 			t.Errorf("expected ModelName BAAI/bge-small-en-v1.5, got %s", cfg.ModelName)
@@ -46,7 +46,7 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.LogLevel != "info" {
 			t.Errorf("expected LogLevel info, got %s", cfg.LogLevel)
 		}
-		if cfg.LogFormat != LogFormatJSON {
+		if cfg.LogFormat != "json" {
 			t.Errorf("expected LogFormat json, got %s", cfg.LogFormat)
 		}
 		if cfg.MatryoshkaDim != 0 {
@@ -93,8 +93,8 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.EmbedderPoolSize != 5 {
 			t.Errorf("expected EmbedderPoolSize 5, got %d", cfg.EmbedderPoolSize)
 		}
-		if cfg.APIPort != "9090" {
-			t.Errorf("expected APIPort 9090, got %s", cfg.APIPort)
+		if cfg.ApiPort != "9090" {
+			t.Errorf("expected ApiPort 9090, got %s", cfg.ApiPort)
 		}
 		if !cfg.DisableWatcher {
 			t.Errorf("expected DisableWatcher true, got %v", cfg.DisableWatcher)

@@ -1,4 +1,3 @@
-// Package embedding provides tools for generating and managing vector embeddings.
 package embedding
 
 import (
@@ -7,6 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+)
+
+// ContentType identifies the type of content being embedded.
+type ContentType string
+
+const (
+	ContentTypeCode    ContentType = "code"
+	ContentTypeDoc     ContentType = "documentation"
+	ContentTypeConfig  ContentType = "config"
+	ContentTypeGeneral ContentType = "general"
+	ContentTypeQuery   ContentType = "query"
 )
 
 // ModelRouterConfig configures the model routing behavior.

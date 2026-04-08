@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-const DefaultTestRemoteAddr = "192.0.2.1:1234"
-
 func TestTokenBucket_Allow(t *testing.T) {
 	tb := NewTokenBucket(1, 3) // 1 request/second, burst of 3
 
@@ -168,13 +166,13 @@ func TestMiddleware_Handler(t *testing.T) {
 
 	handler := middleware.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
+		w.Write([]byte("OK"))
 	}))
 
 	// First 2 requests should succeed
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest("GET", "/", nil)
-		req.RemoteAddr = DefaultTestRemoteAddr
+		req.RemoteAddr = "192.0.2.1:1234"
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -185,7 +183,7 @@ func TestMiddleware_Handler(t *testing.T) {
 
 	// Third request should be rate limited
 	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = DefaultTestRemoteAddr
+	req.RemoteAddr = "192.0.2.1:1234"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -206,7 +204,7 @@ func TestMiddleware_DifferentClients(t *testing.T) {
 
 	// First client
 	req1 := httptest.NewRequest("GET", "/", nil)
-	req1.RemoteAddr = DefaultTestRemoteAddr
+	req1.RemoteAddr = "192.0.2.1:1234"
 	rec1 := httptest.NewRecorder()
 	handler.ServeHTTP(rec1, req1)
 
@@ -238,7 +236,7 @@ func TestMiddleware_XForwardedFor(t *testing.T) {
 	// Request with X-Forwarded-For
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("X-Forwarded-For", "203.0.113.1, 198.51.100.1")
-	req.RemoteAddr = DefaultTestRemoteAddr
+	req.RemoteAddr = "192.0.2.1:1234"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -249,7 +247,7 @@ func TestMiddleware_XForwardedFor(t *testing.T) {
 	// Same XFF should be rate limited
 	req2 := httptest.NewRequest("GET", "/", nil)
 	req2.Header.Set("X-Forwarded-For", "203.0.113.1, 198.51.100.1")
-	req2.RemoteAddr = DefaultTestRemoteAddr
+	req2.RemoteAddr = "192.0.2.1:1234"
 	rec2 := httptest.NewRecorder()
 	handler.ServeHTTP(rec2, req2)
 
@@ -301,7 +299,7 @@ func TestPerClientRateLimit(t *testing.T) {
 	// Should allow burst
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest("GET", "/", nil)
-		req.RemoteAddr = DefaultTestRemoteAddr
+		req.RemoteAddr = "192.0.2.1:1234"
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -353,7 +351,7 @@ func TestAPIKeyRateLimit(t *testing.T) {
 	// Request with API key
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("X-API-Key", "test-key-123")
-	req.RemoteAddr = DefaultTestRemoteAddr
+	req.RemoteAddr = "192.0.2.1:1234"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -375,7 +373,7 @@ func TestAPIKeyRateLimit(t *testing.T) {
 	// Different API key should work
 	req3 := httptest.NewRequest("GET", "/", nil)
 	req3.Header.Set("X-API-Key", "different-key")
-	req3.RemoteAddr = DefaultTestRemoteAddr
+	req3.RemoteAddr = "192.0.2.1:1234"
 	rec3 := httptest.NewRecorder()
 	handler.ServeHTTP(rec3, req3)
 

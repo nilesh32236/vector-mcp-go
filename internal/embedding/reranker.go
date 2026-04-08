@@ -1,4 +1,3 @@
-// Package embedding provides tools for generating and managing vector embeddings.
 package embedding
 
 import (
@@ -11,7 +10,6 @@ import (
 type RerankStrategy string
 
 const (
-	// RerankStrategyNone indicates no reranking will be applied to search results.
 	RerankStrategyNone     RerankStrategy = "none"     // No reranking
 	RerankStrategyAll      RerankStrategy = "all"      // Rerank all results
 	RerankStrategyTopK     RerankStrategy = "topk"     // Only rerank top K results

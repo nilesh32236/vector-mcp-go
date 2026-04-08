@@ -1,4 +1,3 @@
-// Package main is the entry point for the vector-mcp server.
 package main
 
 import (
@@ -94,107 +93,85 @@ func (a *App) getStore(ctx context.Context, forceRefresh bool) (*db.Store, error
 }
 
 func (a *App) Init(socketPath string) error {
-	if err := a.initTracing(); err != nil {
-		return err
-	}
-
-	if err := a.initDaemon(socketPath); err != nil {
-		return err
-	}
-
-	embedder, err := a.initModelsAndEmbedder(socketPath)
-	if err != nil {
-		return err
-	}
-
-	// Initialize LSP and Safety components
-	a.analyzer = analysis.NewMultiAnalyzer(
-		analysis.NewPatternAnalyzer(),
-		analysis.NewVettingAnalyzer(a.cfg.ProjectRoot),
-	)
-
-	a.initMcpServer(embedder, socketPath)
-	a.initAPIServer(embedder)
-
-	return nil
-}
-
-func (a *App) initTracing() error {
 	traceProvider, err := tracing.Init(a.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to initialize tracing: %w", err)
 	}
 	a.traceProv = traceProvider
-	return nil
-}
 
-func (a *App) initDaemon(socketPath string) error {
-	ms, err := daemon.StartMasterServer(socketPath, nil, a.indexQueue, nil, a.progressMap)
+	// 1. Master/Slave Detection
+	a.masterServer, err = daemon.StartMasterServer(socketPath, nil, a.indexQueue, nil, a.progressMap)
 	if err == nil {
 		a.isMaster = true
-		a.masterServer = ms
 		a.logger.Info("Starting as MASTER instance", "socket", socketPath, "version", Version)
-		return nil
-	}
-
-	if !strings.Contains(err.Error(), "master already running") {
-		return fmt.Errorf("failed to initialize master daemon: %w", err)
-	}
-
-	a.isMaster = false
-	a.logger.Info("Starting as SLAVE instance (master already running)", "socket", socketPath, "version", Version)
-	a.daemonClient = daemon.NewClient(socketPath)
-	a.cfg.DisableWatcher = true
-	return nil
-}
-
-func (a *App) initModelsAndEmbedder(socketPath string) (indexer.Embedder, error) {
-	if !a.isMaster {
-		return daemon.NewRemoteEmbedder(socketPath), nil
-	}
-
-	if err := onnx.Init(); err != nil {
-		return nil, fmt.Errorf("failed to initialize ONNX: %w", err)
-	}
-
-	mc, err := embedding.EnsureModel(a.cfg.ModelsDir, a.cfg.ModelName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ensure models: %w", err)
-	}
-	mc = mc.WithMatryoshkaDimension(a.cfg.MatryoshkaDim)
-	a.cfg.Dimension = mc.EffectiveDimension()
-
-	var rerankerMc *embedding.ModelConfig
-	if a.cfg.RerankerModelName != "" {
-		rmc, err := embedding.EnsureModel(a.cfg.ModelsDir, a.cfg.RerankerModelName)
-		if err == nil {
-			rerankerMc = &rmc
+	} else {
+		if !strings.Contains(err.Error(), "master already running") {
+			return fmt.Errorf("failed to initialize master daemon: %w", err)
 		}
+		a.isMaster = false
+		a.logger.Info("Starting as SLAVE instance (master already running)", "socket", socketPath, "version", Version)
+		a.daemonClient = daemon.NewClient(socketPath)
+		a.cfg.DisableWatcher = true
 	}
 
-	pool, err := embedding.NewEmbedderPool(a.ctx, a.cfg.ModelsDir, a.cfg.EmbedderPoolSize, mc, rerankerMc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to init embedder pool: %w", err)
+	var embedder indexer.Embedder
+
+	if a.isMaster {
+		if err := onnx.Init(); err != nil {
+			return fmt.Errorf("failed to initialize ONNX: %w", err)
+		}
+
+		mc, err := embedding.EnsureModel(a.cfg.ModelsDir, a.cfg.ModelName)
+		if err != nil {
+			return fmt.Errorf("failed to ensure models: %w", err)
+		}
+		mc = mc.WithMatryoshkaDimension(a.cfg.MatryoshkaDim)
+		a.cfg.Dimension = mc.EffectiveDimension()
+		if mc.MatryoshkaDim > 0 {
+			a.logger.Info("Matryoshka truncation enabled",
+				"model", a.cfg.ModelName,
+				"source_dimension", mc.Dimension,
+				"effective_dimension", mc.EffectiveDimension(),
+			)
+		}
+
+		var rerankerMc *embedding.ModelConfig
+		if a.cfg.RerankerModelName != "" {
+			rmc, err := embedding.EnsureModel(a.cfg.ModelsDir, a.cfg.RerankerModelName)
+			if err != nil {
+				a.logger.Warn("Failed to ensure reranker model", "error", err)
+			} else {
+				rerankerMc = &rmc
+			}
+		}
+
+		pool, err := embedding.NewEmbedderPool(a.ctx, a.cfg.ModelsDir, a.cfg.EmbedderPoolSize, mc, rerankerMc)
+		if err != nil {
+			return fmt.Errorf("failed to init embedder pool: %w", err)
+		}
+		a.embedPool = pool
+		realEmbedder := &poolEmbedder{pool: a.embedPool}
+		embedder = realEmbedder
+
+		store, err := a.getStore(a.ctx, false)
+		if err != nil {
+			return fmt.Errorf("failed to init store: %w", err)
+		}
+
+		a.masterServer.UpdateEmbedder(realEmbedder)
+		a.masterServer.UpdateStore(store)
+
+		if a.cfg.EnableLiveIndexing {
+			go a.runLiveIndexing(embedder)
+		}
+	} else {
+		embedder = daemon.NewRemoteEmbedder(socketPath)
 	}
-	a.embedPool = pool
-	realEmbedder := &poolEmbedder{pool: a.embedPool}
 
-	store, err := a.getStore(a.ctx, false)
-	if err != nil {
-		return nil, fmt.Errorf("failed to init store: %w", err)
-	}
+	// Initialize LSP and Safety components
+	a.analyzer = analysis.NewMultiAnalyzer(analysis.NewPatternAnalyzer(), analysis.NewVettingAnalyzer(a.cfg.ProjectRoot))
 
-	a.masterServer.UpdateEmbedder(realEmbedder)
-	a.masterServer.UpdateStore(store)
-
-	if a.cfg.EnableLiveIndexing {
-		go a.runLiveIndexing(realEmbedder)
-	}
-
-	return realEmbedder, nil
-}
-
-func (a *App) initMcpServer(embedder indexer.Embedder, socketPath string) {
+	// Initialize MCP Server
 	resolver := indexer.InitResolver(a.cfg.ProjectRoot)
 	storeGetter := func(ctx context.Context) (*db.Store, error) {
 		return a.getStore(ctx, false)
@@ -204,15 +181,13 @@ func (a *App) initMcpServer(embedder indexer.Embedder, socketPath string) {
 	if !a.isMaster {
 		a.mcpServer.WithRemoteStore(daemon.NewRemoteStore(socketPath))
 	}
-}
 
-func (a *App) initAPIServer(embedder indexer.Embedder) {
+	// Initialize API Server
 	if a.isMaster {
-		storeGetter := func(ctx context.Context) (*db.Store, error) {
-			return a.getStore(ctx, false)
-		}
 		a.apiServer = api.NewServer(a.cfg, storeGetter, embedder, a.mcpServer)
 	}
+
+	return nil
 }
 
 func (a *App) runLiveIndexing(embedder indexer.Embedder) {
@@ -222,7 +197,7 @@ func (a *App) runLiveIndexing(embedder indexer.Embedder) {
 		a.logger.Error("Live indexing failed to get store", "error", err)
 		return
 	}
-	opts := indexer.Options{
+	opts := indexer.IndexerOptions{
 		Config:      a.cfg,
 		Store:       store,
 		Embedder:    embedder,
@@ -243,11 +218,56 @@ func (a *App) runLiveIndexing(embedder indexer.Embedder) {
 
 func (a *App) Start(indexFlag, daemonFlag bool) error {
 	if a.isMaster {
-		a.startMasterComponents()
+		// Start API
+		go func() {
+			if err := a.apiServer.Start(); err != nil {
+				a.logger.Error("API server error", "error", err)
+			}
+		}()
+
+		// Start Worker
+		idxWorker := worker.NewIndexWorker(a.cfg, a.logger, a.indexQueue, a.progressMap, func(ctx context.Context) (*db.Store, error) {
+			return a.getStore(ctx, false)
+		}, a.mcpServer.GetEmbedder())
+		go idxWorker.Start(a.ctx)
+
+		// Start Watcher
+		if !a.cfg.DisableWatcher {
+			sg := func(ctx context.Context) (*db.Store, error) {
+				return a.getStore(ctx, false)
+			}
+			st, _ := sg(a.ctx)
+			distiller := analysis.NewDistiller(st, a.mcpServer.GetEmbedder(), a.logger)
+			fw, err := watcher.NewFileWatcher(a.cfg, a.logger, a.resetChan, sg, a.mcpServer.GetEmbedder(), a.analyzer, distiller, func(level libmcp.LoggingLevel, data any, logger string) {
+				a.mcpServer.SendNotification(level, data, logger)
+			})
+			if err == nil {
+				go fw.Start(a.ctx)
+			} else {
+				a.logger.Error("Failed to start watcher", "error", err)
+			}
+		}
+
+		// Pre-populate graph from existing Store if already indexed
+		if err := a.mcpServer.PopulateGraph(a.ctx); err != nil {
+			a.logger.Warn("Initial graph population failed (maybe DB is empty)", "error", err)
+		}
 	}
 
 	if indexFlag {
-		return a.startIndexing()
+		if !a.isMaster {
+			return fmt.Errorf("indexing requires master instance")
+		}
+		store, _ := a.getStore(a.ctx, false)
+		opts := indexer.IndexerOptions{
+			Config:      a.cfg,
+			Store:       store,
+			Embedder:    a.mcpServer.GetEmbedder(),
+			ProgressMap: a.progressMap,
+			Logger:      a.logger,
+		}
+		_, err := indexer.IndexFullCodebase(a.ctx, opts)
+		return err
 	}
 
 	if daemonFlag {
@@ -257,63 +277,6 @@ func (a *App) Start(indexFlag, daemonFlag bool) error {
 	}
 
 	return a.mcpServer.Serve()
-}
-
-func (a *App) startMasterComponents() {
-	// Start API
-	go func() {
-		if err := a.apiServer.Start(); err != nil {
-			a.logger.Error("API server error", "error", err)
-		}
-	}()
-
-	// Start Worker
-	idxWorker := worker.NewIndexWorker(a.cfg, a.logger, a.indexQueue, a.progressMap, func(ctx context.Context) (*db.Store, error) {
-		return a.getStore(ctx, false)
-	}, a.mcpServer.GetEmbedder())
-	go idxWorker.Start(a.ctx)
-
-	// Start Watcher
-	if !a.cfg.DisableWatcher {
-		a.startWatcher()
-	}
-
-	// Pre-populate graph from existing Store if already indexed
-	if err := a.mcpServer.PopulateGraph(a.ctx); err != nil {
-		a.logger.Warn("Initial graph population failed (maybe DB is empty)", "error", err)
-	}
-}
-
-func (a *App) startWatcher() {
-	sg := func(ctx context.Context) (*db.Store, error) {
-		return a.getStore(ctx, false)
-	}
-	st, _ := sg(a.ctx)
-	distiller := analysis.NewDistiller(st, a.mcpServer.GetEmbedder(), a.logger)
-	fw, err := watcher.NewFileWatcher(a.cfg, a.logger, a.resetChan, sg, a.mcpServer.GetEmbedder(), a.analyzer, distiller, func(level libmcp.LoggingLevel, data any, logger string) {
-		a.mcpServer.SendNotification(level, data, logger)
-	})
-	if err == nil {
-		go fw.Start(a.ctx)
-	} else {
-		a.logger.Error("Failed to start watcher", "error", err)
-	}
-}
-
-func (a *App) startIndexing() error {
-	if !a.isMaster {
-		return fmt.Errorf("indexing requires master instance")
-	}
-	store, _ := a.getStore(a.ctx, false)
-	opts := indexer.Options{
-		Config:      a.cfg,
-		Store:       store,
-		Embedder:    a.mcpServer.GetEmbedder(),
-		ProgressMap: a.progressMap,
-		Logger:      a.logger,
-	}
-	_, err := indexer.IndexFullCodebase(a.ctx, opts)
-	return err
 }
 
 func (a *App) Stop() {

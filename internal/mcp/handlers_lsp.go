@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
 	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
@@ -19,11 +18,12 @@ func parseAndClampLSPPosition(request mcp.CallToolRequest) (int, int) {
 
 // handleGetPreciseDefinition uses the LSP to find exact symbol definitions.
 func (s *Server) handleGetPreciseDefinition(ctx context.Context, path string, line, character int) (*mcp.CallToolResult, error) {
+
 	if path == "" {
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
-	lspManager, _, err := s.getManagerForFile(path)
+	lspManager, _, err := s.getLSPManagerForFile(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
 	}
@@ -38,7 +38,7 @@ func (s *Server) handleGetPreciseDefinition(ctx context.Context, path string, li
 		},
 	}
 
-	var result []lsp.Location
+	var result []any
 	err = lspManager.Call(ctx, "textDocument/definition", params, &result)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LSP call failed: %v", err)), nil
@@ -58,7 +58,7 @@ func (s *Server) handleFindReferencesPrecise(ctx context.Context, path string, l
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
-	lspManager, _, err := s.getManagerForFile(path)
+	lspManager, _, err := s.getLSPManagerForFile(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
 	}
@@ -76,7 +76,7 @@ func (s *Server) handleFindReferencesPrecise(ctx context.Context, path string, l
 		},
 	}
 
-	var result []lsp.Location
+	var result []any
 	err = lspManager.Call(ctx, "textDocument/references", params, &result)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LSP call failed: %v", err)), nil
@@ -100,7 +100,7 @@ func (s *Server) handleGetTypeHierarchy(ctx context.Context, path string, line, 
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
-	lspManager, _, err := s.getManagerForFile(path)
+	lspManager, _, err := s.getLSPManagerForFile(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
 	}

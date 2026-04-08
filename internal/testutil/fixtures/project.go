@@ -94,7 +94,7 @@ func (b *ProjectBuilder) Build() (string, error) {
 // Cleanup removes the temporary project directory.
 func (b *ProjectBuilder) Cleanup() {
 	if b.rootDir != "" {
-		_ = os.RemoveAll(b.rootDir)
+		os.RemoveAll(b.rootDir)
 	}
 }
 

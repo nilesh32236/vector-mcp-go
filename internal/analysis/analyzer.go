@@ -27,16 +27,10 @@ type Analyzer interface {
 }
 
 // PatternAnalyzer scans files for specific regex patterns (e.g., TODOs, deprecated APIs).
-const (
-	MaxSplitParts = 4
-	MinSplitParts = 3
-)
-
 type PatternAnalyzer struct {
 	patterns map[string]*regexp.Regexp
 }
 
-// NewPatternAnalyzer initializes and returns a new analyzer for pattern-based code logic.
 func NewPatternAnalyzer() *PatternAnalyzer {
 	return &PatternAnalyzer{
 		patterns: map[string]*regexp.Regexp{
@@ -48,10 +42,8 @@ func NewPatternAnalyzer() *PatternAnalyzer {
 	}
 }
 
-// Name returns the unique identifier for the pattern analyzer.
 func (p *PatternAnalyzer) Name() string { return "PatternAnalyzer" }
 
-// Analyze performs a pattern-based analysis on the file at the specified path.
 func (p *PatternAnalyzer) Analyze(ctx context.Context, path string) ([]Issue, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -82,15 +74,12 @@ type VettingAnalyzer struct {
 	ProjectRoot string
 }
 
-// NewVettingAnalyzer initializes and returns a new analyzer for vetting project-wide logic.
 func NewVettingAnalyzer(root string) *VettingAnalyzer {
 	return &VettingAnalyzer{ProjectRoot: root}
 }
 
-// Name returns the unique identifier for the vetting analyzer.
 func (v *VettingAnalyzer) Name() string { return "VettingAnalyzer" }
 
-// Analyze performs a vetting-based analysis on the project at the specified path.
 func (v *VettingAnalyzer) Analyze(ctx context.Context, path string) ([]Issue, error) {
 	if filepath.Ext(path) != ".go" {
 		return nil, nil
@@ -115,8 +104,8 @@ func (v *VettingAnalyzer) Analyze(ctx context.Context, path string) ([]Issue, er
 			continue
 		}
 		// Example: main.go:10:2: ...
-		parts := strings.SplitN(line, ":", MaxSplitParts)
-		if len(parts) >= MinSplitParts {
+		parts := strings.SplitN(line, ":", 4)
+		if len(parts) >= 3 {
 			issues = append(issues, Issue{
 				Path:     parts[0],
 				Message:  strings.TrimSpace(parts[len(parts)-1]),
@@ -134,15 +123,12 @@ type MultiAnalyzer struct {
 	analyzers []Analyzer
 }
 
-// NewMultiAnalyzer initializes and returns a combined analyzer that delegates to multiple sub-analyzers.
 func NewMultiAnalyzer(analyzers ...Analyzer) *MultiAnalyzer {
 	return &MultiAnalyzer{analyzers: analyzers}
 }
 
-// Name returns the unique identifier for the multi-analyzer.
 func (m *MultiAnalyzer) Name() string { return "MultiAnalyzer" }
 
-// Analyze performs a combined analysis using all registered sub-analyzers.
 func (m *MultiAnalyzer) Analyze(ctx context.Context, path string) ([]Issue, error) {
 	var allIssues []Issue
 	for _, a := range m.analyzers {

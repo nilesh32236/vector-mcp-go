@@ -9,8 +9,8 @@ import (
 func TestStoreStatuses(t *testing.T) {
 	ctx := context.Background()
 	dbPath := "./test_db"
-	_ = os.RemoveAll(dbPath)
-	defer func() { _ = os.RemoveAll(dbPath) }()
+	os.RemoveAll(dbPath)
+	defer os.RemoveAll(dbPath)
 
 	store, err := Connect(ctx, dbPath, "test_collection", 384)
 	if err != nil {

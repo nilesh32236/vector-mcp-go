@@ -37,7 +37,7 @@ func TestNewFileWatcher(t *testing.T) {
 	}
 
 	// Cleanup
-	_ = watcher.tracker.Close()
+	watcher.tracker.Close()
 }
 
 func TestFileWatcher_EventChannel(t *testing.T) {
@@ -49,7 +49,7 @@ func TestFileWatcher_EventChannel(t *testing.T) {
 	if err != nil {
 		t.Skipf("Could not create file watcher: %v", err)
 	}
-	defer func() { _ = watcher.tracker.Close() }()
+	defer watcher.tracker.Close()
 
 	// Verify event channel is buffered
 	if cap(watcher.eventChan) != 1000 {
@@ -67,7 +67,7 @@ func TestFileWatcher_ResetChan(t *testing.T) {
 	if err != nil {
 		t.Skipf("Could not create file watcher: %v", err)
 	}
-	defer func() { _ = watcher.tracker.Close() }()
+	defer watcher.tracker.Close()
 
 	if watcher.watcherResetChan == nil {
 		t.Error("Watcher reset channel should be set")
@@ -93,7 +93,7 @@ func TestFileWatcher_ContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Skipf("Could not create file watcher: %v", err)
 	}
-	defer func() { _ = watcher.tracker.Close() }()
+	defer watcher.tracker.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 

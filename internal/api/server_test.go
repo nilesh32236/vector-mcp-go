@@ -15,7 +15,7 @@ import (
 
 func TestNewServer(t *testing.T) {
 	cfg := &config.Config{
-		APIPort: "8080",
+		ApiPort: "8080",
 	}
 
 	storeGetter := func(ctx context.Context) (*db.Store, error) {
@@ -63,7 +63,7 @@ func TestHandleHealth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{APIPort: "8080"}
+			cfg := &config.Config{ApiPort: "8080"}
 			server := NewServer(cfg, tt.storeGetter, tt.embedder, nil)
 
 			req := httptest.NewRequest("GET", "/api/health", nil)
@@ -115,7 +115,7 @@ func TestHandleReady(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{APIPort: "8080"}
+			cfg := &config.Config{ApiPort: "8080"}
 			mockEmbedder := mocks.NewMockEmbedder(384)
 			server := NewServer(cfg, tt.storeGetter, mockEmbedder, nil)
 
@@ -147,7 +147,7 @@ func TestHandleReady(t *testing.T) {
 }
 
 func TestHandleLive(t *testing.T) {
-	cfg := &config.Config{APIPort: "8080"}
+	cfg := &config.Config{ApiPort: "8080"}
 	server := NewServer(cfg, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/api/live", nil)
@@ -170,7 +170,7 @@ func TestHandleLive(t *testing.T) {
 }
 
 func TestMetricsEndpoint(t *testing.T) {
-	cfg := &config.Config{APIPort: "8080"}
+	cfg := &config.Config{ApiPort: "8080"}
 	server := NewServer(cfg, nil, nil, nil)
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
@@ -218,7 +218,7 @@ func TestHandleSearch_Errors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{APIPort: "8080"}
+			cfg := &config.Config{ApiPort: "8080"}
 			server := NewServer(cfg, tt.storeGetter, tt.embedder, nil)
 
 			var body any
@@ -263,7 +263,7 @@ func TestHandleContext_Errors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{APIPort: "8080"}
+			cfg := &config.Config{ApiPort: "8080"}
 			server := NewServer(cfg, tt.storeGetter, tt.embedder, nil)
 
 			bodyBytes, _ := json.Marshal(tt.requestBody)
@@ -282,7 +282,7 @@ func TestHandleContext_Errors(t *testing.T) {
 
 func TestHandleListTools(t *testing.T) {
 	t.Run("without mcp server", func(t *testing.T) {
-		cfg := &config.Config{APIPort: "8080"}
+		cfg := &config.Config{ApiPort: "8080"}
 		server := NewServer(cfg, nil, nil, nil)
 
 		req := httptest.NewRequest("GET", "/api/tools/list", nil)
@@ -298,7 +298,7 @@ func TestHandleListTools(t *testing.T) {
 
 func TestHandleCallTool(t *testing.T) {
 	t.Run("without mcp server", func(t *testing.T) {
-		cfg := &config.Config{APIPort: "8080"}
+		cfg := &config.Config{ApiPort: "8080"}
 		server := NewServer(cfg, nil, nil, nil)
 
 		bodyBytes, _ := json.Marshal(map[string]any{
@@ -365,7 +365,7 @@ func TestCORSHeaders(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.Config{
-				APIPort:        "8080",
+				ApiPort:        "8080",
 				AllowedOrigins: tt.allowedOrigins,
 			}
 			server := NewServer(cfg, nil, nil, nil)
@@ -394,7 +394,7 @@ func TestCORSHeaders(t *testing.T) {
 }
 
 func TestRateLimiting(t *testing.T) {
-	cfg := &config.Config{APIPort: "8080"}
+	cfg := &config.Config{ApiPort: "8080"}
 	server := NewServer(cfg, nil, nil, nil)
 
 	// Make many requests rapidly to test rate limiting

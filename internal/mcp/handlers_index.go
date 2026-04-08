@@ -15,7 +15,7 @@ import (
 
 // handleTriggerProjectIndex triggers a full indexing of the specified project path.
 // If running as a slave, it delegates the task to the master daemon.
-func (s *Server) handleTriggerProjectIndex(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleTriggerProjectIndex(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path := request.GetString("project_path", "")
 	if path == "" {
 		return mcp.NewToolResultError("project_path is required"), nil
@@ -94,7 +94,7 @@ func (s *Server) handleDeleteContext(ctx context.Context, request mcp.CallToolRe
 }
 
 // handleIndexStatus returns the current status of the indexing process.
-func (s *Server) handleIndexStatus(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleIndexStatus(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	store, err := s.getStore(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -120,7 +120,7 @@ func (s *Server) handleIndexStatus(ctx context.Context, _ mcp.CallToolRequest) (
 		bgStatus.WriteString("- No active background indexing.\n")
 	} else {
 		for path, status := range progressData {
-			fmt.Fprintf(&bgStatus, "- %s: %s\n", path, status)
+			bgStatus.WriteString(fmt.Sprintf("- %s: %s\n", path, status))
 		}
 	}
 
@@ -144,21 +144,21 @@ func (s *Server) handleGetIndexingDiagnostics(ctx context.Context, _ mcp.CallToo
 
 	var out strings.Builder
 	out.WriteString("## 🛠️ Indexing Diagnostics\n\n")
-	fmt.Fprintf(&out, "**Active Project Root**: `%s`\n", s.cfg.ProjectRoot)
-	fmt.Fprintf(&out, "**Global Index Status**: %s\n\n", status)
+	out.WriteString(fmt.Sprintf("**Active Project Root**: `%s`\n", s.cfg.ProjectRoot))
+	out.WriteString(fmt.Sprintf("**Global Index Status**: %s\n\n", status))
 
 	out.WriteString("### 🚀 Active Background Tasks\n")
 	if len(progressData) == 0 {
 		out.WriteString("- No active background indexing tasks.\n")
 	} else {
 		for path, prog := range progressData {
-			fmt.Fprintf(&out, "- **%s**: %s\n", path, prog)
+			out.WriteString(fmt.Sprintf("- **%s**: %s\n", path, prog))
 		}
 	}
 
 	out.WriteString("\n### 📊 Database Statistics\n")
 	count := store.Count()
-	fmt.Fprintf(&out, "- **Total Chunks Indexed**: %d\n", count)
+	out.WriteString(fmt.Sprintf("- **Total Chunks Indexed**: %d\n", count))
 
 	// In a real implementation, we'd fetch actual error logs from the worker.
 	// For now, we'll provide guidance on how to check logs.
@@ -196,8 +196,8 @@ func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, err
 		}
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "🔍 Index Status for %s:\n", s.cfg.ProjectRoot)
-	fmt.Fprintf(&out, "✅ Fully Indexed: %d\n🔄 Modified: %d\n📂 Missing: %d\n🗑️ Deleted: %d\n", len(indexed), len(updated), len(missing), len(deleted))
+	out.WriteString(fmt.Sprintf("🔍 Index Status for %s:\n", s.cfg.ProjectRoot))
+	out.WriteString(fmt.Sprintf("✅ Fully Indexed: %d\n🔄 Modified: %d\n📂 Missing: %d\n🗑️ Deleted: %d\n", len(indexed), len(updated), len(missing), len(deleted)))
 	if len(missing) > 0 {
 		out.WriteString("\n📂 Missing Files (Next to index):\n")
 		for i, f := range missing {
@@ -205,7 +205,7 @@ func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, err
 				out.WriteString("  ... and more\n")
 				break
 			}
-			fmt.Fprintf(&out, "  - %s\n", f)
+			out.WriteString(fmt.Sprintf("  - %s\n", f))
 		}
 	}
 	if len(updated) > 0 {
@@ -215,12 +215,12 @@ func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, err
 				out.WriteString("  ... and more\n")
 				break
 			}
-			fmt.Fprintf(&out, "  - %s\n", f)
+			out.WriteString(fmt.Sprintf("  - %s\n", f))
 		}
 	}
 	status, _ := store.GetStatus(ctx, s.cfg.ProjectRoot)
 	if status != "" {
-		fmt.Fprintf(&out, "\n🛰️ Background Status (from DB): %s\n", status)
+		out.WriteString(fmt.Sprintf("\n🛰️ Background Status (from DB): %s\n", status))
 	}
 	return out.String(), nil
 }

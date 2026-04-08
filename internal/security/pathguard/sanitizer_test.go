@@ -12,7 +12,7 @@ func TestValidatePath_BasicPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	defer os.RemoveAll(tmpDir)
 
 	validator, err := NewValidator(tmpDir, DefaultOptions())
 	if err != nil {
@@ -43,7 +43,7 @@ func TestValidatePath_TraversalAttack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	defer os.RemoveAll(tmpDir)
 
 	validator, err := NewValidator(tmpDir, DefaultOptions())
 	if err != nil {
@@ -97,7 +97,7 @@ func TestValidatePath_AbsolutePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	defer os.RemoveAll(tmpDir)
 
 	// Test with absolute paths allowed (default)
 	validator, err := NewValidator(tmpDir, DefaultOptions())
@@ -127,7 +127,7 @@ func TestValidatePath_DisallowAbsolute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	defer os.RemoveAll(tmpDir)
 
 	// Test with absolute paths disabled
 	opts := DefaultOptions()
@@ -161,14 +161,14 @@ func TestValidatePath_Symlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	defer os.RemoveAll(tmpDir)
 
 	// Create a symlink pointing outside the base
 	outsideFile := filepath.Join(os.TempDir(), "outside-test.txt")
 	if err := os.WriteFile(outsideFile, []byte("test"), 0644); err != nil {
 		t.Fatalf("failed to create outside file: %v", err)
 	}
-	defer func() { _ = os.Remove(outsideFile) }()
+	defer os.Remove(outsideFile)
 
 	linkPath := filepath.Join(tmpDir, "link")
 	if err := os.Symlink(outsideFile, linkPath); err != nil {
@@ -193,7 +193,7 @@ func TestValidatePath_AllowSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	defer os.RemoveAll(tmpDir)
 
 	// Create a file inside the temp dir
 	internalFile := filepath.Join(tmpDir, "internal.txt")
@@ -230,7 +230,7 @@ func TestValidatePath_MaxDepth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	defer os.RemoveAll(tmpDir)
 
 	// Test with max depth of 3
 	opts := DefaultOptions()
@@ -258,7 +258,7 @@ func TestValidatePath_EmptyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	defer os.RemoveAll(tmpDir)
 
 	validator, err := NewValidator(tmpDir, DefaultOptions())
 	if err != nil {
@@ -369,7 +369,7 @@ func TestValidatePath_Exists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	defer os.RemoveAll(tmpDir)
 
 	// Create a file that exists
 	existingFile := filepath.Join(tmpDir, "exists.txt")
@@ -400,7 +400,7 @@ func TestIsSafePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	defer os.RemoveAll(tmpDir)
 
 	tests := []struct {
 		path     string

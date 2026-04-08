@@ -42,7 +42,7 @@ func (s *Server) handleVerifyPatchIntegrity(ctx context.Context, request mcp.Cal
 }
 
 // handleAutoFixMutation takes a diagnostic and returns a fix suggestion.
-func (s *Server) handleAutoFixMutation(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAutoFixMutation(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	diagJSON := request.GetString("diagnostic_json", "")
 	if diagJSON == "" {
 		return mcp.NewToolResultError("diagnostic_json is required"), nil

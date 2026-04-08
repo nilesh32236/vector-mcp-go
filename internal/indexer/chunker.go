@@ -1,8 +1,6 @@
-// Package indexer provides tools for chunking code and documentation and preparing them for indexing.
 package indexer
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -26,12 +24,11 @@ var (
 	tsNamedImportRegex  = regexp.MustCompile(`import\s*{([^}]+)}`)
 	goSingleImportRegex = regexp.MustCompile(`import\s+(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
 	goBlockRegex        = regexp.MustCompile(`import\s+\(([\s\S]*?)\)`)
-	goInnerImportRegex  = regexp.MustCompile(`(?:[a-zA-Z0-9_.]+\s+)?["']([^"']+)["']`)
+	goInnerImportRegex  = regexp.MustCompile(`["']([^"']+)["']`)
 	phpReqRegex         = regexp.MustCompile(`(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)['"]`)
 	phpUseRegex         = regexp.MustCompile(`use\s+([^;]+);`)
 )
 
-// Chunk represents a semantically meaningful segment of a file.
 type Chunk struct {
 	Content            string
 	ContextualString   string
@@ -53,14 +50,13 @@ type entityMatch struct {
 	chunk Chunk
 }
 
-// CreateChunks breaks a file's content into multiple semantically meaningful chunks.
-func CreateChunks(ctx context.Context, text string, filePath string) []Chunk {
+func CreateChunks(text string, filePath string) []Chunk {
 	ext := filepath.Ext(filePath)
 	relationships := parseRelationships(text, ext)
 	var chunks []Chunk
 
 	if isTreeSitterSupported(ext) {
-		chunks = treeSitterChunk(ctx, text, filePath)
+		chunks = treeSitterChunk(text, filePath)
 	} else {
 		chunks = fastChunk(text)
 	}
@@ -87,7 +83,7 @@ func CreateChunks(ctx context.Context, text string, filePath string) []Chunk {
 			var sb strings.Builder
 			sb.WriteString(" [Structure: ")
 			for k, v := range chunks[i].StructuralMetadata {
-				fmt.Fprintf(&sb, "%s=%s ", k, v)
+				sb.WriteString(fmt.Sprintf("%s=%s ", k, v))
 			}
 			sb.WriteString("]")
 			structStr = sb.String()
@@ -116,7 +112,7 @@ func CreateChunks(ctx context.Context, text string, filePath string) []Chunk {
 
 func isTreeSitterSupported(ext string) bool {
 	switch ext {
-	case ExtGo, ExtJS, ExtJSX, ExtTS, ExtTSX, ExtPHP, ExtPY, ExtRS, ExtHTML, ExtCSS:
+	case ".go", ".js", ".jsx", ".ts", ".tsx", ".php", ".py", ".rs", ".html", ".css":
 		return true
 	}
 	return false
@@ -125,44 +121,28 @@ func isTreeSitterSupported(ext string) bool {
 // treeSitterChunk builds semantically meaningful chunks using language-specific AST queries.
 // For HTML and CSS files, it extracts high-value blocks (tags, rulesets, and declarations)
 // and safely derives parent context without assuming fixed node shapes.
-const (
-	ExtGo = ".go"
-	ExtJS = ".js"
-	ExtJSX = ".jsx"
-	ExtTS = ".ts"
-	ExtTSX = ".tsx"
-	ExtPHP = ".php"
-	ExtPY = ".py"
-	ExtRS = ".rs"
-	ExtHTML = ".html"
-	ExtCSS = ".css"
-	TypeIdentifier = "type_identifier"
-	TypeFieldIdentifier = "field_identifier"
-	MethodStatusDefined = "defined"
-)
-
-func treeSitterChunk(ctx context.Context, content string, filePath string) []Chunk {
+func treeSitterChunk(content string, filePath string) []Chunk {
 	ext := filepath.Ext(filePath)
 	var lang *sitter.Language
 
 	switch ext {
-	case ExtGo:
+	case ".go":
 		lang = golang.GetLanguage()
-	case ExtJS, ExtJSX:
+	case ".js", ".jsx":
 		lang = javascript.GetLanguage()
-	case ExtTS:
+	case ".ts":
 		lang = typescript.GetLanguage()
-	case ExtTSX:
+	case ".tsx":
 		lang = tsx.GetLanguage()
-	case ExtPHP:
+	case ".php":
 		lang = php.GetLanguage()
-	case ExtPY:
+	case ".py":
 		lang = python.GetLanguage()
-	case ExtRS:
+	case ".rs":
 		lang = rust.GetLanguage()
-	case ExtHTML:
+	case ".html":
 		lang = html.GetLanguage()
-	case ExtCSS:
+	case ".css":
 		lang = css.GetLanguage()
 	default:
 		return fastChunk(content)
@@ -171,7 +151,7 @@ func treeSitterChunk(ctx context.Context, content string, filePath string) []Chu
 	parser := sitter.NewParser()
 	defer parser.Close()
 	parser.SetLanguage(lang)
-	tree, _ := parser.ParseCtx(ctx, nil, []byte(content))
+	tree := parser.Parse(nil, []byte(content))
 	if tree == nil {
 		return fastChunk(content)
 	}
@@ -181,14 +161,14 @@ func treeSitterChunk(ctx context.Context, content string, filePath string) []Chu
 
 	var queries []string
 	switch ext {
-	case ExtGo:
+	case ".go":
 		queries = []string{
 			`(function_declaration name: (identifier) @name) @entity`,
 			`(method_declaration name: (field_identifier) @name) @entity`,
 			`(type_declaration (type_spec name: (type_identifier) @name type: (struct_type))) @entity`,
 			`(type_declaration (type_spec name: (type_identifier) @name type: (interface_type))) @entity`,
 		}
-	case ExtJS, ExtJSX, ExtTS, ExtTSX:
+	case ".js", ".jsx", ".ts", ".tsx":
 		queries = []string{
 			`(export_statement declaration: (class_declaration name: (type_identifier) @name)) @entity`,
 			`(class_declaration name: (type_identifier) @name) @entity`,
@@ -200,7 +180,7 @@ func treeSitterChunk(ctx context.Context, content string, filePath string) []Chu
 			`(lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function)])) @entity`,
 			`(export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function)]))) @entity`,
 		}
-	case ExtPHP:
+	case ".php":
 		queries = []string{
 			`(class_declaration name: (name) @name) @entity`,
 			`(method_declaration name: (name) @name) @entity`,
@@ -208,12 +188,12 @@ func treeSitterChunk(ctx context.Context, content string, filePath string) []Chu
 			`(interface_declaration name: (name) @name) @entity`,
 			`(function_call_expression function: (name) @name arguments: (arguments (argument (string) @hook_name) (argument [(anonymous_function_creation_expression) (arrow_function)]))) @entity`,
 		}
-	case ExtPY:
+	case ".py":
 		queries = []string{
 			`(class_definition name: (identifier) @name) @entity`,
 			`(function_definition name: (identifier) @name) @entity`,
 		}
-	case ExtRS:
+	case ".rs":
 		queries = []string{
 			`(struct_item name: (type_identifier) @name) @entity`,
 			`(enum_item name: (type_identifier) @name) @entity`,
@@ -221,13 +201,13 @@ func treeSitterChunk(ctx context.Context, content string, filePath string) []Chu
 			`(impl_item type: (type_identifier) @name) @entity`,
 			`(trait_item name: (type_identifier) @name) @entity`,
 		}
-	case ExtHTML:
+	case ".html":
 		queries = []string{
 			`(element (start_tag (tag_name) @name) @entity)`,
 			`(script_element (start_tag (tag_name) @name) @entity)`,
 			`(style_element (start_tag (tag_name) @name) @entity)`,
 		}
-	case ExtCSS:
+	case ".css":
 		queries = []string{
 			`(rule_set (selectors) @name) @entity`,
 			`(media_statement) @entity`,
@@ -262,10 +242,9 @@ func treeSitterChunk(ctx context.Context, content string, filePath string) []Chu
 
 				for _, capture := range match.Captures {
 					captureName := query.CaptureNameForId(capture.Index)
-					switch captureName {
-					case "entity":
+					if captureName == "entity" {
 						entityNode = capture.Node
-					case "name", "hook_name":
+					} else if captureName == "name" || captureName == "hook_name" {
 						nameNode = capture.Node
 					}
 				}
@@ -294,7 +273,7 @@ func treeSitterChunk(ctx context.Context, content string, filePath string) []Chu
 									// Find the name of the class
 									for i := 0; i < int(p.ChildCount()); i++ {
 										c := p.Child(i)
-										if c.Type() == "type_identifier" || c.Type() == TypeIdentifier {
+										if c.Type() == "type_identifier" || c.Type() == "identifier" {
 											parentSymbol = c.Content([]byte(content))
 											break
 										}
@@ -322,7 +301,7 @@ func treeSitterChunk(ctx context.Context, content string, filePath string) []Chu
 								}
 								parentSymbol = findType(recv)
 							}
-						} else if ext == ExtHTML {
+						} else if ext == ".html" {
 							for p := entityNode.Parent(); p != nil; p = p.Parent() {
 								if p.Type() != "element" && p.Type() != "script_element" && p.Type() != "style_element" {
 									continue
@@ -332,7 +311,7 @@ func treeSitterChunk(ctx context.Context, content string, filePath string) []Chu
 									break
 								}
 							}
-						} else if ext == ExtCSS {
+						} else if ext == ".css" {
 							for p := entityNode.Parent(); p != nil; p = p.Parent() {
 								switch p.Type() {
 								case "rule_set":
@@ -500,7 +479,7 @@ func extractStructuralMetadata(node *sitter.Node, content string) map[string]str
 			if nameNode == nil {
 				for i := 0; i < int(n.ChildCount()); i++ {
 					child := n.Child(i)
-					if child.Type() == TypeFieldIdentifier || child.Type() == TypeIdentifier {
+					if child.Type() == "field_identifier" || child.Type() == "identifier" {
 						nameNode = child
 						break
 					}
@@ -511,7 +490,7 @@ func extractStructuralMetadata(node *sitter.Node, content string) map[string]str
 			if typeNode == nil && nameNode != nil {
 				for i := int(n.ChildCount()) - 1; i >= 0; i-- {
 					child := n.Child(i)
-					if child != nameNode && (strings.Contains(child.Type(), "type") || child.Type() == TypeIdentifier) {
+					if child != nameNode && (strings.Contains(child.Type(), "type") || child.Type() == "identifier") {
 						typeNode = child
 						break
 					}
@@ -529,14 +508,14 @@ func extractStructuralMetadata(node *sitter.Node, content string) map[string]str
 			if nameNode == nil {
 				for i := 0; i < int(n.ChildCount()); i++ {
 					child := n.Child(i)
-					if child.Type() == TypeFieldIdentifier || child.Type() == TypeIdentifier {
+					if child.Type() == "field_identifier" || child.Type() == "identifier" {
 						nameNode = child
 						break
 					}
 				}
 			}
 			if nameNode != nil {
-				meta["method:"+nameNode.Content(contentBytes)] = MethodStatusDefined
+				meta["method:"+nameNode.Content(contentBytes)] = "defined"
 			}
 		}
 		// TS/JS Class properties
@@ -546,7 +525,7 @@ func extractStructuralMetadata(node *sitter.Node, content string) map[string]str
 				nameNode = n.ChildByFieldName("name")
 			}
 			if nameNode != nil {
-				meta["prop:"+nameNode.Content(contentBytes)] = MethodStatusDefined
+				meta["prop:"+nameNode.Content(contentBytes)] = "defined"
 			}
 		}
 
@@ -632,13 +611,12 @@ func extractCallsGeneric(node *sitter.Node, content string) []string {
 			for i := 0; i < int(n.ChildCount()); i++ {
 				child := n.Child(i)
 				ct := child.Type()
-				switch ct {
-				case TypeIdentifier, "property_identifier", "name":
+				if ct == "identifier" || ct == "property_identifier" || ct == "name" {
 					uniqueCalls[child.Content(contentBytes)] = true
-				case "selector_expression", "member_expression":
+				} else if ct == "selector_expression" || ct == "member_expression" {
 					if child.ChildCount() > 0 {
 						lastChild := child.Child(int(child.ChildCount()) - 1)
-						if lastChild.Type() == TypeFieldIdentifier || lastChild.Type() == "property_identifier" {
+						if lastChild.Type() == "field_identifier" || lastChild.Type() == "property_identifier" {
 							uniqueCalls[lastChild.Content([]byte(content))] = true
 						}
 					}
@@ -676,8 +654,7 @@ func calculateScoreGeneric(node *sitter.Node, calls []string) float32 {
 
 func parseRelationships(text string, ext string) []string {
 	var relations []string
-	switch ext {
-	case ExtTS, ExtTSX, ExtJS, ExtJSX:
+	if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
 		matches := tsImportRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {
@@ -694,7 +671,7 @@ func parseRelationships(text string, ext string) []string {
 				}
 			}
 		}
-	case ExtGo:
+	} else if ext == ".go" {
 		matches := goSingleImportRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {
@@ -714,7 +691,7 @@ func parseRelationships(text string, ext string) []string {
 				}
 			}
 		}
-	case ExtPHP:
+	} else if ext == ".php" {
 		matches := phpReqRegex.FindAllStringSubmatch(text, -1)
 		for _, m := range matches {
 			if len(m) > 1 {

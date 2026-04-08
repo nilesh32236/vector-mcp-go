@@ -105,10 +105,10 @@ func TestMockEmbedder_CallCounts(t *testing.T) {
 	embedder := NewMockEmbedder(384)
 	ctx := context.Background()
 
-	_, _ = embedder.Embed(ctx, "text1")
-	_, _ = embedder.Embed(ctx, "text2")
-	_, _ = embedder.EmbedBatch(ctx, []string{"a", "b"})
-	_, _ = embedder.RerankBatch(ctx, "q", []string{"d"})
+	embedder.Embed(ctx, "text1")
+	embedder.Embed(ctx, "text2")
+	embedder.EmbedBatch(ctx, []string{"a", "b"})
+	embedder.RerankBatch(ctx, "q", []string{"d"})
 
 	embedCalls, batchCalls, rerankCalls := embedder.GetCallCounts()
 	if embedCalls != 2 {

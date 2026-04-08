@@ -22,18 +22,10 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/security/ratelimit"
 )
 
-const (
-	// RateLimitRequests is the maximum number of requests allowed within a rate-limited window.
-	RateLimitRequests = 30
-	RateLimitInterval = 60
-)
-
 // StoreGetter is a function type that retrieves the active vector database store.
 type StoreGetter func(ctx context.Context) (*db.Store, error)
 
 // Server represents the HTTP API server.
-const DefaultTimeout = 2 * time.Second
-
 type Server struct {
 	cfg         *config.Config        // System configuration
 	storeGetter StoreGetter           // Logic to retrieve the database store
@@ -55,7 +47,7 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 		embedder:    embedder,
 		mcpServer:   mcpServer,
 		// Initialize rate limiter: 30 requests/second per client, burst of 60
-		rateLimiter: ratelimit.PerClientRateLimit(RateLimitRequests, RateLimitInterval),
+		rateLimiter: ratelimit.PerClientRateLimit(30, 60),
 	}
 
 	mux.HandleFunc("GET /api/health", server.handleHealth)
@@ -102,7 +94,7 @@ func NewServer(cfg *config.Config, storeGetter StoreGetter, embedder indexer.Emb
 	mux.HandleFunc("GET /api/tools/list", server.handleListTools)
 	mux.HandleFunc("POST /api/tools/call", server.handleCallTool)
 
-	addr := fmt.Sprintf(":%s", cfg.APIPort)
+	addr := fmt.Sprintf(":%s", cfg.ApiPort)
 
 	rateLimitedMux := server.rateLimiter.Handler(mux)
 
@@ -176,7 +168,7 @@ func (s *Server) setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 // Start launches the HTTP API server on the configured port.
 func (s *Server) Start() error {
 	if s.cfg.Logger != nil {
-		s.cfg.Logger.Info("Starting HTTP API server", "port", s.cfg.APIPort)
+		s.cfg.Logger.Info("Starting HTTP API server", "port", s.cfg.ApiPort)
 	}
 	err := s.srv.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
@@ -205,7 +197,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	dbStart := time.Now()
 	dbStatus := "ok"
 	if s.storeGetter != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), DefaultTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		store, err := s.storeGetter(ctx)
 		if err != nil {
@@ -254,9 +246,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		s.cfg.Logger.Error("failed to encode response", "error", err)
-	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleReady reports whether the server is ready to accept traffic.
@@ -269,7 +259,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 
 	// Check database
 	if s.storeGetter != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), DefaultTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		_, err := s.storeGetter(ctx)
 		if err != nil {
@@ -289,18 +279,14 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}
 
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		s.cfg.Logger.Error("failed to encode response", "error", err)
-	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleLive reports whether the server process is alive.
 func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]string{
 		"status": "alive",
-	}); err != nil {
-		s.cfg.Logger.Error("failed to encode response", "error", err)
-	}
+	})
 }

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
 	"github.com/nilesh32236/vector-mcp-go/internal/util"
 )
 
@@ -21,7 +20,7 @@ func (s *Server) handleGetImpactAnalysis(ctx context.Context, request mcp.CallTo
 		return mcp.NewToolResultError("path is required"), nil
 	}
 
-	lspManager, _, err := s.getManagerForFile(path)
+	lspManager, _, err := s.getLSPManagerForFile(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get LSP session: %v", err)), nil
 	}
@@ -33,20 +32,25 @@ func (s *Server) handleGetImpactAnalysis(ctx context.Context, request mcp.CallTo
 		"context":      map[string]bool{"includeDeclaration": false},
 	}
 
-	var res []lsp.Location
+	var res any
 	err = lspManager.Call(ctx, "textDocument/references", params, &res)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("LSP references call failed: %v", err)), nil
 	}
 
-	if len(res) == 0 {
+	refs, ok := res.([]any)
+	if !ok || len(refs) == 0 {
 		return mcp.NewToolResultText("No downstream impact detected. This symbol appears to be unused or internal to this scope."), nil
 	}
 
 	// 2. Analyze "Blast Radius"
 	uniqueFiles := make(map[string]bool)
-	for _, r := range res {
-		uniqueFiles[r.URI] = true
+	for _, r := range refs {
+		if m, ok := r.(map[string]any); ok {
+			if uri, ok := m["uri"].(string); ok {
+				uniqueFiles[uri] = true
+			}
+		}
 	}
 
 	risk := "Low"
@@ -58,10 +62,10 @@ func (s *Server) handleGetImpactAnalysis(ctx context.Context, request mcp.CallTo
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "### Impact Analysis results:\n")
-	fmt.Fprintf(&sb, "- **Risk Level**: %s\n", risk)
-	fmt.Fprintf(&sb, "- **Total References**: %d\n", len(res))
-	fmt.Fprintf(&sb, "- **Impacted Files**: %d\n\n", len(uniqueFiles))
+	sb.WriteString(fmt.Sprintf("### Impact Analysis results:\n"))
+	sb.WriteString(fmt.Sprintf("- **Risk Level**: %s\n", risk))
+	sb.WriteString(fmt.Sprintf("- **Total References**: %d\n", len(refs)))
+	sb.WriteString(fmt.Sprintf("- **Impacted Files**: %d\n\n", len(uniqueFiles)))
 	sb.WriteString("#### Details:\n")
 
 	count := 0
@@ -70,7 +74,7 @@ func (s *Server) handleGetImpactAnalysis(ctx context.Context, request mcp.CallTo
 			sb.WriteString("- ... and more\n")
 			break
 		}
-		fmt.Fprintf(&sb, "- %s\n", strings.TrimPrefix(f, "file://"))
+		sb.WriteString(fmt.Sprintf("- %s\n", strings.TrimPrefix(f, "file://")))
 		count++
 	}
 

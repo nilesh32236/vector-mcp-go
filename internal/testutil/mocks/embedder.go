@@ -60,7 +60,7 @@ func (m *MockEmbedder) GetCallCounts() (embedCalls, batchCalls, rerankCalls int)
 }
 
 // Embed generates a mock embedding for the given text.
-func (m *MockEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+func (m *MockEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	m.mu.Lock()
 	m.embedCalls++
 	m.mu.Unlock()
@@ -82,7 +82,7 @@ func (m *MockEmbedder) Embed(_ context.Context, text string) ([]float32, error) 
 }
 
 // EmbedBatch generates mock embeddings for multiple texts.
-func (m *MockEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+func (m *MockEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	m.mu.Lock()
 	m.batchCalls++
 	m.mu.Unlock()
@@ -99,7 +99,7 @@ func (m *MockEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float3
 }
 
 // RerankBatch returns mock relevance scores for reranking.
-func (m *MockEmbedder) RerankBatch(_ context.Context, query string, texts []string) ([]float32, error) {
+func (m *MockEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
 	m.mu.Lock()
 	m.rerankCalls++
 	m.mu.Unlock()

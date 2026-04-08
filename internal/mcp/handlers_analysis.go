@@ -20,11 +20,6 @@ import (
 
 // handleGetRelatedContext retrieves relevant code chunks and dependencies for a given file.
 // It also explores usage samples for symbols found in the target file.
-const (
-	ProjectTypeNPM = "npm"
-	ProjectTypePython = "python"
-)
-
 func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -78,19 +73,19 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 	out.WriteString("<context>\n")
 	currentTokenCount := 0
 	var omittedFiles []string
-	fmt.Fprintf(&out, "  <file path=\"%s\">\n    <metadata>\n", filePath)
+	out.WriteString(fmt.Sprintf("  <file path=\"%s\">\n    <metadata>\n", filePath))
 	var depList []string
 	for d := range allImportStrings {
 		depList = append(depList, d)
 	}
 	depListJSON, _ := json.Marshal(depList)
-	fmt.Fprintf(&out, "      <dependencies>%s</dependencies>\n", string(depListJSON))
+	out.WriteString(fmt.Sprintf("      <dependencies>%s</dependencies>\n", string(depListJSON)))
 	var symList []string
 	for s := range allSymbols {
 		symList = append(symList, s)
 	}
 	symListJSON, _ := json.Marshal(symList)
-	fmt.Fprintf(&out, "      <symbols>%s</symbols>\n", string(symListJSON))
+	out.WriteString(fmt.Sprintf("      <symbols>%s</symbols>\n", string(symListJSON)))
 	out.WriteString("    </metadata>\n")
 	for _, r := range records {
 		tokens := indexer.EstimateTokens(r.Content)
@@ -113,7 +108,7 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 
 		for importPath, physPath := range uniqueDeps {
 			matchPath := strings.TrimSuffix(physPath, filepath.Ext(physPath))
-			fmt.Fprintf(&out, "  <file path=\"%s\" resolved_from=\"%s\">\n", physPath, importPath)
+			out.WriteString(fmt.Sprintf("  <file path=\"%s\" resolved_from=\"%s\">\n", physPath, importPath))
 			foundAny := false
 			fileDeps := make(map[string]bool)
 			fileSymbols := make(map[string]bool)
@@ -159,13 +154,13 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 					fdList = append(fdList, d)
 				}
 				fdJSON, _ := json.Marshal(fdList)
-				fmt.Fprintf(&out, "      <dependencies>%s</dependencies>\n", string(fdJSON))
+				out.WriteString(fmt.Sprintf("      <dependencies>%s</dependencies>\n", string(fdJSON)))
 				var fsList []string
 				for s := range fileSymbols {
 					fsList = append(fsList, s)
 				}
 				fsJSON, _ := json.Marshal(fsList)
-				fmt.Fprintf(&out, "      <symbols>%s</symbols>\n", string(fsJSON))
+				out.WriteString(fmt.Sprintf("      <symbols>%s</symbols>\n", string(fsJSON)))
 				out.WriteString("    </metadata>\n")
 				for _, dr := range fileChunks {
 					tokens := indexer.EstimateTokens(dr.Content)
@@ -211,7 +206,7 @@ func (s *Server) handleGetRelatedContext(ctx context.Context, request mcp.CallTo
 					continue
 				}
 
-				fmt.Fprintf(&out, "    <sample symbol=\"%s\" used_in=\"%s\">\n", s, dr.Metadata["path"])
+				out.WriteString(fmt.Sprintf("    <sample symbol=\"%s\" used_in=\"%s\">\n", s, dr.Metadata["path"]))
 				out.WriteString(dr.Content + "\n")
 				out.WriteString("    </sample>\n")
 				currentTokenCount += tokens
@@ -243,7 +238,7 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 	targetChunks, _ := store.GetByPrefix(ctx, targetPath, s.cfg.ProjectRoot)
 
 	var out strings.Builder
-	fmt.Fprintf(&out, "<duplicate_analysis target=\"%s\">\n", targetPath)
+	out.WriteString(fmt.Sprintf("<duplicate_analysis target=\"%s\">\n", targetPath))
 
 	// Optimization: Parallelize searches for each chunk
 	type finding struct {
@@ -302,9 +297,9 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 	found := false
 	for f := range findingsChan {
 		found = true
-		fmt.Fprintf(&out, "  <finding>\n    <original file=\"%s\">%s</original>\n", f.originalFile, f.originalFile)
-		fmt.Fprintf(&out, "    <match file=\"%s\" project=\"%s\">\n", f.matchFile, f.matchProject)
-		fmt.Fprintf(&out, "```\n%s\n```\n", f.content)
+		out.WriteString(fmt.Sprintf("  <finding>\n    <original file=\"%s\">%s</original>\n", f.originalFile, f.originalFile))
+		out.WriteString(fmt.Sprintf("    <match file=\"%s\" project=\"%s\">\n", f.matchFile, f.matchProject))
+		out.WriteString(fmt.Sprintf("```\n%s\n```\n", f.content))
 		out.WriteString("    </match>\n  </finding>\n")
 	}
 
@@ -318,9 +313,9 @@ func (s *Server) handleFindDuplicateCode(ctx context.Context, request mcp.CallTo
 // handleCheckDependencyHealth analyzes a directory's package.json against its indexed imports.
 func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	dirPath := request.GetString("directory_path", ".")
-	absPath, err := s.pathValidator.ValidatePath(dirPath)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid directory_path: %v", err)), nil
+	absPath := dirPath
+	if !filepath.IsAbs(dirPath) {
+		absPath = filepath.Join(s.cfg.ProjectRoot, dirPath)
 	}
 
 	// 1. Resolve workspace root for manifest detection
@@ -334,13 +329,13 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 	projectType := "unknown"
 	manifestPath := ""
 	if _, err := os.Stat(filepath.Join(workspaceRoot, "package.json")); err == nil {
-		projectType = ProjectTypeNPM
+		projectType = "npm"
 		manifestPath = filepath.Join(workspaceRoot, "package.json")
 	} else if _, err := os.Stat(filepath.Join(workspaceRoot, "go.mod")); err == nil {
 		projectType = "go"
 		manifestPath = filepath.Join(workspaceRoot, "go.mod")
 	} else if _, err := os.Stat(filepath.Join(workspaceRoot, "requirements.txt")); err == nil {
-		projectType = ProjectTypePython
+		projectType = "python"
 		manifestPath = filepath.Join(workspaceRoot, "requirements.txt")
 	}
 
@@ -351,12 +346,12 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 	// 2. Parse Manifest
 	depSet := make(map[string]bool)
 	content, _ := os.ReadFile(manifestPath)
-	if projectType == ProjectTypeNPM {
+	if projectType == "npm" {
 		var pkg struct {
 			Deps    map[string]string `json:"dependencies"`
 			DevDeps map[string]string `json:"devDependencies"`
 		}
-		_ = json.Unmarshal(content, &pkg)
+		json.Unmarshal(content, &pkg)
 		for d := range pkg.Deps {
 			depSet[d] = true
 		}
@@ -374,7 +369,7 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 			parts := strings.Fields(line)
 			if projectType == "go" && len(parts) >= 2 {
 				depSet[parts[0]] = true
-			} else if projectType == ProjectTypePython {
+			} else if projectType == "python" {
 				depSet[strings.Split(line, "==")[0]] = true
 			}
 		}
@@ -402,12 +397,12 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 		if relStr := r.Metadata["relationships"]; relStr != "" {
 			if err := json.Unmarshal([]byte(relStr), &rels); err == nil {
 				for _, dep := range rels {
-					if projectType == ProjectTypeNPM {
+					if projectType == "npm" {
 						// Skip local imports and monorepo prefix
 						if strings.HasPrefix(dep, ".") || strings.HasPrefix(dep, "/") || strings.HasPrefix(dep, "@herexa/") {
 							continue
 						}
-						var pkgName string
+						pkgName := dep
 						parts := strings.Split(dep, "/")
 						if strings.HasPrefix(dep, "@") && len(parts) > 1 {
 							pkgName = parts[0] + "/" + parts[1]
@@ -425,7 +420,7 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 						if !depSet[dep] {
 							missingDeps[dep] = append(missingDeps[dep], r.Metadata["path"])
 						}
-					} else if projectType == ProjectTypePython {
+					} else if projectType == "python" {
 						if strings.HasPrefix(dep, ".") {
 							continue
 						}
@@ -444,7 +439,7 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 	}
 
 	var out strings.Builder
-	fmt.Fprintf(&out, "## ⚠️ Dependency Health Report (%s)\n\n", projectType)
+	out.WriteString(fmt.Sprintf("## ⚠️ Dependency Health Report (%s)\n\n", projectType))
 	out.WriteString("The following external dependencies are imported but missing from your manifest:\n\n")
 
 	var deps []string
@@ -465,10 +460,10 @@ func (s *Server) handleCheckDependencyHealth(ctx context.Context, request mcp.Ca
 		}
 		sort.Strings(sortedFiles)
 
-		fmt.Fprintf(&out, "### `%s`\n", dep)
+		out.WriteString(fmt.Sprintf("### `%s`\n", dep))
 		out.WriteString("Imported in:\n")
 		for _, f := range sortedFiles {
-			fmt.Fprintf(&out, "- %s\n", f)
+			out.WriteString(fmt.Sprintf("- %s\n", f))
 		}
 		out.WriteString("\n")
 	}
@@ -504,7 +499,7 @@ func (s *Server) handleGenerateDocstringPrompt(ctx context.Context, request mcp.
 		docStyle = "Godoc comments"
 	case "typescript/javascript", "typescript", "javascript", "ts", "js":
 		docStyle = "JSDoc comments"
-	case ProjectTypePython:
+	case "python":
 		docStyle = "Python docstrings (PEP 257 format)"
 	}
 
@@ -631,7 +626,7 @@ func (s *Server) handleAnalyzeArchitecture(ctx context.Context, request mcp.Call
 		}
 		sort.Strings(targets)
 		for _, target := range targets {
-			fmt.Fprintf(&sb, "    \"%s\" --> \"%s\"\n", src, target)
+			sb.WriteString(fmt.Sprintf("    \"%s\" --> \"%s\"\n", src, target))
 		}
 	}
 
@@ -775,7 +770,7 @@ func (s *Server) handleFindDeadCode(ctx context.Context, request mcp.CallToolReq
 	out.WriteString("## 🔎 Potential Dead Code Report\n\n")
 	out.WriteString("The following exported symbols are not explicitly used (imported or called) in the indexed codebase:\n\n")
 	for _, d := range dead {
-		fmt.Fprintf(&out, "- **`%s`** in `%s`\n", d.name, d.path)
+		out.WriteString(fmt.Sprintf("- **`%s`** in `%s`\n", d.name, d.path))
 	}
 
 	return mcp.NewToolResultText(out.String()), nil
@@ -815,14 +810,14 @@ func (s *Server) handleVerifyImplementationGap(ctx context.Context, request mcp.
 	}
 
 	var out strings.Builder
-	fmt.Fprintf(&out, "# Verification Analysis for: '%s'\n\n", query)
+	out.WriteString(fmt.Sprintf("# Verification Analysis for: '%s'\n\n", query))
 
 	out.WriteString("## 📄 Found Requirements / Feedback\n")
 	if len(docs) == 0 {
 		out.WriteString("No matching documentation or feedback found.\n")
 	} else {
 		for i, d := range docs {
-			fmt.Fprintf(&out, "### Req %d: %s\n", i+1, d.Metadata["path"])
+			out.WriteString(fmt.Sprintf("### Req %d: %s\n", i+1, d.Metadata["path"]))
 			out.WriteString(d.Content + "\n\n")
 		}
 	}
@@ -832,7 +827,7 @@ func (s *Server) handleVerifyImplementationGap(ctx context.Context, request mcp.
 		out.WriteString("No matching implementation found in the codebase.\n")
 	} else {
 		for i, c := range code {
-			fmt.Fprintf(&out, "### Code %d: %s (Lines %s-%s)\n", i+1, c.Metadata["path"], c.Metadata["start_line"], c.Metadata["end_line"])
+			out.WriteString(fmt.Sprintf("### Code %d: %s (Lines %s-%s)\n", i+1, c.Metadata["path"], c.Metadata["start_line"], c.Metadata["end_line"]))
 			out.WriteString("```\n" + c.Content + "\n```\n\n")
 		}
 	}
@@ -847,7 +842,7 @@ func (s *Server) handleVerifyImplementationGap(ctx context.Context, request mcp.
 }
 
 // handleFindMissingTests identifies exported symbols that lack corresponding test coverage.
-func (s *Server) handleFindMissingTests(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleFindMissingTests(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
@@ -936,14 +931,14 @@ func (s *Server) handleFindMissingTests(ctx context.Context, _ mcp.CallToolReque
 	out.WriteString("## 🧪 Missing Test Coverage Report\n\n")
 	out.WriteString("The following exported symbols were found in source files but were not detected in any test files:\n\n")
 	for _, m := range missing {
-		fmt.Fprintf(&out, "- **`%s`** in `%s`\n", m.name, m.path)
+		out.WriteString(fmt.Sprintf("- **`%s`** in `%s`\n", m.name, m.path))
 	}
 
 	return mcp.NewToolResultText(out.String()), nil
 }
 
 // handleListAPIEndpoints identifies potential API route definitions in the codebase.
-func (s *Server) handleListAPIEndpoints(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleListAPIEndpoints(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -983,7 +978,7 @@ func (s *Server) handleListAPIEndpoints(ctx context.Context, _ mcp.CallToolReque
 
 	for _, p := range paths {
 		m := uniqueMatches[p]
-		fmt.Fprintf(&out, "### %s (Line %s)\n", m.Metadata["path"], m.Metadata["start_line"])
+		out.WriteString(fmt.Sprintf("### %s (Line %s)\n", m.Metadata["path"], m.Metadata["start_line"]))
 		out.WriteString("```\n" + strings.TrimSpace(m.Content) + "\n```\n\n")
 	}
 
@@ -997,9 +992,9 @@ func (s *Server) handleGetCodeHistory(ctx context.Context, request mcp.CallToolR
 		return mcp.NewToolResultError("file_path is required"), nil
 	}
 
-	absPath, err := s.pathValidator.ValidatePath(filePath)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid file_path: %v", err)), nil
+	absPath := filePath
+	if !filepath.IsAbs(filePath) {
+		absPath = filepath.Join(s.cfg.ProjectRoot, filePath)
 	}
 
 	// Check if git is available and it's a git repo
@@ -1015,7 +1010,7 @@ func (s *Server) handleGetCodeHistory(ctx context.Context, request mcp.CallToolR
 	}
 
 	var out strings.Builder
-	fmt.Fprintf(&out, "## 📜 Git History for %s\n\n", filePath)
+	out.WriteString(fmt.Sprintf("## 📜 Git History for %s\n\n", filePath))
 	out.WriteString(string(output))
 
 	return mcp.NewToolResultText(out.String()), nil
@@ -1052,9 +1047,9 @@ func (s *Server) handleGetSummarizedContext(ctx context.Context, request mcp.Cal
 	}
 
 	var combinedText strings.Builder
-	fmt.Fprintf(&combinedText, "### 📚 Retrieved Context for: '%s'\n\n", query)
+	combinedText.WriteString(fmt.Sprintf("### 📚 Retrieved Context for: '%s'\n\n", query))
 	for _, r := range records {
-		fmt.Fprintf(&combinedText, "**File**: %s\n**Content**:\n%s\n---\n", r.Metadata["path"], r.Content)
+		combinedText.WriteString(fmt.Sprintf("**File**: %s\n**Content**:\n%s\n---\n", r.Metadata["path"], r.Content))
 	}
 
 	return mcp.NewToolResultText(combinedText.String()), nil
@@ -1105,13 +1100,13 @@ func (s *Server) handleVerifyProposedChange(ctx context.Context, request mcp.Cal
 	out.WriteString("Please manually check your change against these identified rules:\n\n")
 
 	for _, r := range docRecords {
-		fmt.Fprintf(&out, "#### Rule/Decision (from %s):\n%s\n---\n", r.Metadata["path"], r.Content)
+		out.WriteString(fmt.Sprintf("#### Rule/Decision (from %s):\n%s\n---\n", r.Metadata["path"], r.Content))
 	}
 
 	if len(codeRecords) > 0 {
 		out.WriteString("\n### Similar Existing Implementation Patterns:\n")
 		for _, r := range codeRecords {
-			fmt.Fprintf(&out, "#### File: %s\n%s\n---\n", r.Metadata["path"], r.Content)
+			out.WriteString(fmt.Sprintf("#### File: %s\n%s\n---\n", r.Metadata["path"], r.Content))
 		}
 	}
 
@@ -1145,7 +1140,7 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 		relPath := r.Metadata["path"]
 
 		if strings.HasPrefix(relPath, path) {
-			fmt.Fprintf(&relevantContent, "File: %s\nContent:\n%s\n---\n", relPath, r.Content)
+			relevantContent.WriteString(fmt.Sprintf("File: %s\nContent:\n%s\n---\n", relPath, r.Content))
 			count++
 		}
 	}

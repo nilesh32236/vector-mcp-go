@@ -10,11 +10,6 @@ import (
 	"time"
 )
 
-const (
-	DefaultCacheSize = 1000
-	DefaultTTL       = 5 * time.Minute
-)
-
 // Cache is a generic cache interface.
 type Cache interface {
 	Get(ctx context.Context, key string) (any, bool)
@@ -25,8 +20,6 @@ type Cache interface {
 }
 
 // LRUCache implements an LRU (Least Recently Used) cache with TTL support.
-const DefaultCacheTTL = 10 * time.Minute
-
 type LRUCache struct {
 	mu         sync.RWMutex
 	maxSize    int
@@ -70,11 +63,11 @@ func WithOnEvict(fn func(key string, value any)) LRUCacheOption {
 // NewLRUCache creates a new LRU cache.
 func NewLRUCache(opts ...LRUCacheOption) *LRUCache {
 	c := &LRUCache{
-		maxSize:    DefaultCacheSize,
+		maxSize:    1000,
 		items:      make(map[string]*list.Element),
 		evictList:  list.New(),
 		ttls:       make(map[string]time.Time),
-		defaultTTL: DefaultTTL,
+		defaultTTL: 5 * time.Minute,
 	}
 
 	for _, opt := range opts {
@@ -221,7 +214,7 @@ type EmbeddingCache struct {
 // NewEmbeddingCache creates a new embedding cache.
 func NewEmbeddingCache(maxSize int) *EmbeddingCache {
 	return &EmbeddingCache{
-		cache: NewLRUCache(WithMaxSize(maxSize), WithDefaultTTL(DefaultCacheTTL)),
+		cache: NewLRUCache(WithMaxSize(maxSize), WithDefaultTTL(10*time.Minute)),
 	}
 }
 
@@ -293,7 +286,7 @@ func (c *SearchResultCache) Set(ctx context.Context, query string, projectIDs []
 func (c *SearchResultCache) InvalidateByProject(projectID string) {
 	// For simplicity, clear the entire cache when a project is modified
 	// A more sophisticated implementation would track which keys belong to which project
-	_ = c.cache.Clear()
+	c.cache.Clear()
 }
 
 // hashText creates a hash key for text.

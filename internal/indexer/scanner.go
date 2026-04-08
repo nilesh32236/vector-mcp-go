@@ -41,7 +41,6 @@ type Result struct {
 	Records []db.Record
 }
 
-// MaxContextTokens is the maximum number of tokens considered for a single file context.
 const MaxContextTokens = 10000
 
 // EstimateTokens provides a rough estimate of the number of tokens in a string.
@@ -56,8 +55,8 @@ type Embedder interface {
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 }
 
-// Options groups parameters needed for indexing operations.
-type Options struct {
+// IndexerOptions groups parameters needed for indexing operations.
+type IndexerOptions struct {
 	Config      *config.Config
 	Store       *db.Store
 	Embedder    Embedder
@@ -66,9 +65,10 @@ type Options struct {
 }
 
 // IndexFullCodebase performs a comprehensive index of the project directory.
-func IndexFullCodebase(ctx context.Context, opts Options) (IndexSummary, error) {
+func IndexFullCodebase(ctx context.Context, opts IndexerOptions) (IndexSummary, error) {
 	summary := IndexSummary{Status: "completed"}
-	_ = opts.Store.SetStatus(ctx, opts.Config.ProjectRoot, "Scanning files and cleaning index...")
+
+	opts.Store.SetStatus(ctx, opts.Config.ProjectRoot, "Scanning files and cleaning index...")
 
 	files, err := ScanFiles(opts.Config.ProjectRoot)
 	if err != nil {
@@ -76,36 +76,26 @@ func IndexFullCodebase(ctx context.Context, opts Options) (IndexSummary, error) 
 	}
 	summary.FilesProcessed = len(files)
 
+	// Phase 1: Discovery (Efficient Hash Comparison)
 	hashMapping, _ := opts.Store.GetPathHashMapping(ctx, opts.Config.ProjectRoot)
-	toIndex, discoverySkipped := opts.discoverFilesToIndex(files, hashMapping)
-	summary.FilesSkipped += discoverySkipped
-
-	opts.cleanupStaleFiles(ctx, files, hashMapping, &summary)
-
-	if len(toIndex) == 0 {
-		_ = opts.Store.SetStatus(ctx, opts.Config.ProjectRoot, fmt.Sprintf("Completed: %d files skipped (up to date)", summary.FilesSkipped))
-		return summary, nil
+	var toIndex []struct {
+		Path string
+		Hash string
 	}
-
-	return opts.processIndexing(ctx, toIndex, &summary)
-}
-
-func (opts Options) discoverFilesToIndex(files []string, hashMapping map[string]string) ([]struct{ Path, Hash string }, int) {
-	var toIndex []struct{ Path, Hash string }
-	skipped := 0
 	for _, path := range files {
 		relPath := config.GetRelativePath(path, opts.Config.ProjectRoot)
 		currentHash, _ := GetHash(path)
 		if existingHash, ok := hashMapping[relPath]; ok && existingHash == currentHash {
-			skipped++
+			summary.FilesSkipped++
 			continue
 		}
-		toIndex = append(toIndex, struct{ Path, Hash string }{path, currentHash})
+		toIndex = append(toIndex, struct {
+			Path string
+			Hash string
+		}{path, currentHash})
 	}
-	return toIndex, skipped
-}
 
-func (opts Options) cleanupStaleFiles(ctx context.Context, files []string, hashMapping map[string]string, summary *IndexSummary) {
+	// Cleanup stale files that no longer exist on disk
 	filePathsSet := make(map[string]struct{}, len(files))
 	for _, absPath := range files {
 		relPath := config.GetRelativePath(absPath, opts.Config.ProjectRoot)
@@ -121,12 +111,19 @@ func (opts Options) cleanupStaleFiles(ctx context.Context, files []string, hashM
 			}
 		}
 	}
-}
 
-func (opts Options) processIndexing(ctx context.Context, toIndex []struct{ Path, Hash string }, summary *IndexSummary) (IndexSummary, error) {
+	if len(toIndex) == 0 {
+		opts.Store.SetStatus(ctx, opts.Config.ProjectRoot, fmt.Sprintf("Completed: %d files skipped (up to date)", summary.FilesSkipped))
+		return summary, nil
+	}
+
+	// Phase 2: Processing and Atomic Update
 	var wg sync.WaitGroup
 	results := make(chan Result, len(toIndex))
-	tasks := make(chan struct{ Path, Hash string }, len(toIndex))
+	tasks := make(chan struct {
+		Path string
+		Hash string
+	}, len(toIndex))
 
 	for i := 0; i < runtime.NumCPU(); i++ {
 		wg.Add(1)
@@ -150,13 +147,9 @@ func (opts Options) processIndexing(ctx context.Context, toIndex []struct{ Path,
 		close(results)
 	}()
 
-	opts.collectResults(ctx, results, len(toIndex), summary)
-	return *summary, nil
-}
-
-func (opts Options) collectResults(ctx context.Context, results chan Result, total int, summary *IndexSummary) {
 	var batch []db.Record
 	processed := 0
+	totalToIndex := len(toIndex)
 	for r := range results {
 		processed++
 		if r.Err != "" {
@@ -164,7 +157,11 @@ func (opts Options) collectResults(ctx context.Context, results chan Result, tot
 		}
 		if r.Indexed {
 			summary.FilesIndexed++
-			_ = opts.Store.DeleteByPath(ctx, r.RelPath, opts.Config.ProjectRoot)
+			// Atomic Update: Delete old chunks before inserting new ones
+			// This prevents the "ghost-chunk" bug
+			if err := opts.Store.DeleteByPath(ctx, r.RelPath, opts.Config.ProjectRoot); err != nil {
+				opts.Logger.Error("Failed to delete old chunks for path", "path", r.RelPath, "error", err)
+			}
 			batch = append(batch, r.Records...)
 		}
 		if r.Skipped {
@@ -172,25 +169,29 @@ func (opts Options) collectResults(ctx context.Context, results chan Result, tot
 		}
 
 		if len(batch) >= 50 {
-			_ = opts.Store.Insert(ctx, batch)
+			opts.Logger.Info("Inserting batch of records", "count", len(batch))
+			opts.Store.Insert(ctx, batch)
 			batch = batch[:0]
 		}
 
-		progress := float64(processed) / float64(total) * 100
-		status := fmt.Sprintf("Indexing: %.1f%% (%d/%d) - Current: %s", progress, processed, total, r.RelPath)
+		// Real-time progress update
+		progress := float64(processed) / float64(totalToIndex) * 100
+		status := fmt.Sprintf("Indexing: %.1f%% (%d/%d) - Current: %s", progress, processed, totalToIndex, r.RelPath)
 		if opts.ProgressMap != nil {
 			opts.ProgressMap.Store(opts.Config.ProjectRoot, status)
 		}
-		_ = opts.Store.SetStatus(ctx, opts.Config.ProjectRoot, status)
+		opts.Store.SetStatus(ctx, opts.Config.ProjectRoot, status)
 	}
 
 	if len(batch) > 0 {
-		_ = opts.Store.Insert(ctx, batch)
+		opts.Store.Insert(ctx, batch)
 	}
+
+	return summary, nil
 }
 
 // ProcessFile indexes a single file if its hash has changed.
-func ProcessFile(ctx context.Context, path string, opts Options, currentHash string) Result {
+func ProcessFile(ctx context.Context, path string, opts IndexerOptions, currentHash string) Result {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("Panic processing file", "path", path, "recover", r)
@@ -198,172 +199,143 @@ func ProcessFile(ctx context.Context, path string, opts Options, currentHash str
 	}()
 
 	relPath := config.GetRelativePath(path, opts.Config.ProjectRoot)
-	content, err := readFileContent(path)
-	if err != nil {
-		return Result{Err: err.Error(), RelPath: relPath}
-	}
 
-	updatedAt := getFileUpdatedAt(path)
-	priority := GetPriority(relPath)
-	category := getFileCategory(path)
-
-	chunks := CreateChunks(ctx, content, relPath)
-	records, err := opts.prepareRecords(ctx, chunks, relPath, category, updatedAt, currentHash, priority)
-	if err != nil {
-		return Result{Err: err.Error(), RelPath: relPath}
-	}
-
-	return Result{Indexed: true, Records: records, RelPath: relPath}
-}
-
-func readFileContent(path string) (string, error) {
-	ext := strings.ToLower(filepath.Ext(path))
-	if ext == ".pdf" {
-		return readPDFContent(path)
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return string(content), nil
-}
-
-func readPDFContent(path string) (string, error) {
-	r, err := pdf.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse pdf: %w", err)
-	}
-	var b strings.Builder
-	for i := 1; i <= r.NumPage(); i++ {
-		p := r.Page(i)
-		if p.V.IsNull() {
-			continue
-		}
-		if text, err := p.GetPlainText(nil); err == nil {
-			b.WriteString(text)
-			b.WriteString("\n")
-		}
-	}
-	return b.String(), nil
-}
-
-func getFileUpdatedAt(path string) string {
+	// Capture modification time for recency boosting
+	var updatedAt string
 	if info, err := os.Stat(path); err == nil {
-		return strconv.FormatInt(info.ModTime().Unix(), 10)
+		updatedAt = strconv.FormatInt(info.ModTime().Unix(), 10)
+	} else {
+		updatedAt = strconv.FormatInt(time.Now().Unix(), 10)
 	}
-	return strconv.FormatInt(time.Now().Unix(), 10)
-}
 
-func getFileCategory(path string) string {
+	priority := GetPriority(relPath)
+
+	var contentStr string
 	ext := strings.ToLower(filepath.Ext(path))
+	category := "code"
 	if ext == ".pdf" || ext == ".md" || ext == ".txt" {
-		return "document"
+		category = "document"
 	}
-	return "code"
-}
 
-func (opts Options) prepareRecords(ctx context.Context, chunks []Chunk, relPath, category, updatedAt, hash string, priority float32) ([]db.Record, error) {
+	if ext == ".pdf" {
+		r, err := pdf.Open(path)
+		if err != nil {
+			return Result{Err: fmt.Sprintf("failed to parse pdf: %v", err), RelPath: relPath}
+		}
+		var b strings.Builder
+		for i := 1; i <= r.NumPage(); i++ {
+			p := r.Page(i)
+			if p.V.IsNull() {
+				continue
+			}
+			text, err := p.GetPlainText(nil)
+			if err == nil {
+				b.WriteString(text)
+				b.WriteString("\n")
+			}
+		}
+		contentStr = b.String()
+	} else {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return Result{Err: err.Error(), RelPath: relPath}
+		}
+		contentStr = string(content)
+	}
+
+	chunks := CreateChunks(contentStr, relPath)
+	var records []db.Record
+
+	// Prepare texts for batch embedding
 	var texts []string
 	for _, chunk := range chunks {
 		texts = append(texts, chunk.ContextualString)
 	}
 
-	if len(texts) == 0 {
-		return opts.addFileMetaOnly(relPath, updatedAt, hash), nil
-	}
-
-	embs, err := opts.Embedder.EmbedBatch(ctx, texts)
-	if err != nil {
-		opts.Logger.Warn("Batch embedding failed, falling back to sequential", "error", err, "path", relPath)
-		embs = opts.embedSequentially(ctx, texts)
-	}
-
-	var records []db.Record
-	for i, chunk := range chunks {
-		if i >= len(embs) {
-			break
-		}
-		records = append(records, opts.createChunkRecord(chunk, i, relPath, category, updatedAt, hash, priority, embs[i]))
-	}
-
-	records = append(records, opts.createFileMetaRecord(relPath, updatedAt, hash))
-	return records, nil
-}
-
-func (opts Options) embedSequentially(ctx context.Context, texts []string) [][]float32 {
-	embs := make([][]float32, 0, len(texts))
-	for _, text := range texts {
-		emb, err := opts.Embedder.Embed(ctx, text)
+	if len(texts) > 0 {
+		embs, err := opts.Embedder.EmbedBatch(ctx, texts)
 		if err != nil {
-			opts.Logger.Error("Single embedding failed", "error", err)
-			continue
+			// Fallback to single embedding if batch fails
+			opts.Logger.Warn("Batch embedding failed, falling back to sequential", "error", err, "path", relPath)
+			embs = make([][]float32, 0, len(texts))
+			for _, text := range texts {
+				emb, err := opts.Embedder.Embed(ctx, text)
+				if err != nil {
+					opts.Logger.Error("Single embedding failed", "error", err)
+					continue
+				}
+				embs = append(embs, emb)
+			}
 		}
-		embs = append(embs, emb)
+
+		for i, chunk := range chunks {
+			if i >= len(embs) {
+				break
+			}
+			relJSON, _ := json.Marshal(chunk.Relationships)
+			symJSON, _ := json.Marshal(chunk.Symbols)
+			callsJSON, _ := json.Marshal(chunk.Calls)
+
+			name := ""
+			if len(chunk.Symbols) > 0 {
+				name = chunk.Symbols[0]
+			}
+
+			structJSON, _ := json.Marshal(chunk.StructuralMetadata)
+
+			metadata := map[string]string{
+				"path":                relPath,
+				"project_id":          opts.Config.ProjectRoot,
+				"category":            category,
+				"updated_at":          updatedAt,
+				"hash":                currentHash,
+				"relationships":       string(relJSON),
+				"symbols":             string(symJSON),
+				"parent_symbol":       chunk.ParentSymbol,
+				"type":                "chunk",
+				"name":                name,
+				"calls":               string(callsJSON),
+				"priority":            fmt.Sprintf("%.1f", priority),
+				"function_score":      fmt.Sprintf("%.2f", chunk.FunctionScore),
+				"docstring":           chunk.Docstring,
+				"structural_metadata": string(structJSON),
+				"start_line":          strconv.Itoa(chunk.StartLine),
+				"end_line":            strconv.Itoa(chunk.EndLine),
+			}
+
+			// Deterministic ID for easier debugging
+			id := fmt.Sprintf("chunk:%s:%s:%d", opts.Config.ProjectRoot, relPath, i)
+			records = append(records, db.Record{
+				ID:        id,
+				Content:   chunk.Content,
+				Embedding: embs[i],
+				Metadata:  metadata,
+			})
+		}
 	}
-	return embs
-}
 
-func (opts Options) createChunkRecord(chunk Chunk, index int, relPath, category, updatedAt, hash string, priority float32, emb []float32) db.Record {
-	relJSON, _ := json.Marshal(chunk.Relationships)
-	symJSON, _ := json.Marshal(chunk.Symbols)
-	callsJSON, _ := json.Marshal(chunk.Calls)
-	structJSON, _ := json.Marshal(chunk.StructuralMetadata)
-
-	name := ""
-	if len(chunk.Symbols) > 0 {
-		name = chunk.Symbols[0]
-	}
-
-	metadata := map[string]string{
-		"path":                relPath,
-		"project_id":          opts.Config.ProjectRoot,
-		"category":            category,
-		"updated_at":          updatedAt,
-		"hash":                hash,
-		"relationships":       string(relJSON),
-		"symbols":             string(symJSON),
-		"parent_symbol":       chunk.ParentSymbol,
-		"type":                "chunk",
-		"name":                name,
-		"calls":               string(callsJSON),
-		"priority":            fmt.Sprintf("%.1f", priority),
-		"function_score":      fmt.Sprintf("%.2f", chunk.FunctionScore),
-		"docstring":           chunk.Docstring,
-		"structural_metadata": string(structJSON),
-		"start_line":          strconv.Itoa(chunk.StartLine),
-		"end_line":            strconv.Itoa(chunk.EndLine),
-	}
-
-	return db.Record{
-		ID:        fmt.Sprintf("chunk:%s:%s:%d", opts.Config.ProjectRoot, relPath, index),
-		Content:   chunk.Content,
-		Embedding: emb,
-		Metadata:  metadata,
-	}
-}
-
-func (opts Options) createFileMetaRecord(relPath, updatedAt, hash string) db.Record {
+	// Add the file metadata record
+	// Ensure dummyEmb has a consistent dimension from the store
 	dummyEmb := make([]float32, opts.Store.Dimension)
-	return db.Record{
+
+	records = append(records, db.Record{
 		ID:        fmt.Sprintf("filemeta:%s:%s", opts.Config.ProjectRoot, relPath),
-		Content:   "",
+		Content:   "", // No content for metadata
 		Embedding: dummyEmb,
 		Metadata: map[string]string{
 			"type":       "file_meta",
 			"path":       relPath,
 			"project_id": opts.Config.ProjectRoot,
-			"hash":       hash,
+			"hash":       currentHash,
 			"updated_at": updatedAt,
 		},
-	}
-}
+	})
 
-func (opts Options) addFileMetaOnly(relPath, updatedAt, hash string) []db.Record {
-	return []db.Record{opts.createFileMetaRecord(relPath, updatedAt, hash)}
+	return Result{Indexed: true, Records: records, RelPath: relPath}
 }
 
 // IndexSingleFile indexes a single file and updates the database.
-func IndexSingleFile(ctx context.Context, path string, opts Options) (IndexSummary, error) {
+func IndexSingleFile(ctx context.Context, path string, opts IndexerOptions) (IndexSummary, error) {
 	currentHash, err := GetHash(path)
 	if err != nil {
 		return IndexSummary{Status: "error", Errors: []string{err.Error()}}, err
@@ -376,14 +348,13 @@ func IndexSingleFile(ctx context.Context, path string, opts Options) (IndexSumma
 	}
 	if res.Indexed {
 		// Delete old chunks before inserting new ones
-		_ = opts.Store.DeleteByPath(ctx, relPath, opts.Config.ProjectRoot)
-		_ = opts.Store.Insert(ctx, res.Records)
+		opts.Store.DeleteByPath(ctx, relPath, opts.Config.ProjectRoot)
+		opts.Store.Insert(ctx, res.Records)
 	}
 	return IndexSummary{Status: "completed", FilesIndexed: 1}, nil
 }
 
 var (
-	// AllowExts lists all file extensions that the scanner is permitted to process.
 	AllowExts    = []string{".ts", ".tsx", ".js", ".jsx", ".prisma", ".json", ".css", ".html", ".md", ".env", ".yml", ".yaml", ".go", ".py", ".rs", ".sh", ".txt", ".pdf"}
 	allowExtsMap = make(map[string]struct{})
 
@@ -407,43 +378,53 @@ func init() {
 	}
 }
 
-// ScanFiles recursively discovers all allowed files within the specified root directory.
 func ScanFiles(root string) ([]string, error) {
-	ignorer := initIgnorer(root)
-	return walkFiles(root, ignorer)
-}
-
-func initIgnorer(root string) *ignore.GitIgnore {
-	if _, err := os.Stat(filepath.Join(root, ".vector-ignore")); err == nil {
-		ignorer, _ := ignore.CompileIgnoreFile(filepath.Join(root, ".vector-ignore"))
-		return ignorer
-	}
-	if _, err := os.Stat(filepath.Join(root, ".gitignore")); err == nil {
-		ignorer, _ := ignore.CompileIgnoreFile(filepath.Join(root, ".gitignore"))
-		return ignorer
-	}
-	return nil
-}
-
-func walkFiles(root string, ignorer *ignore.GitIgnore) ([]string, error) {
 	var files []string
+
+	// Try to load .vector-ignore first, then .gitignore
+	var ignorer *ignore.GitIgnore
+	if _, err := os.Stat(filepath.Join(root, ".vector-ignore")); err == nil {
+		ignorer, _ = ignore.CompileIgnoreFile(filepath.Join(root, ".vector-ignore"))
+	} else if _, err := os.Stat(filepath.Join(root, ".gitignore")); err == nil {
+		ignorer, _ = ignore.CompileIgnoreFile(filepath.Join(root, ".gitignore"))
+	}
+
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
+
 		relPath, _ := filepath.Rel(root, path)
 		if relPath == "." {
 			return nil
 		}
+
+		// Always exclude default dirs
 		if info.IsDir() {
-			if IsIgnoredDir(info.Name()) || (ignorer != nil && ignorer.MatchesPath(relPath)) {
+			if IsIgnoredDir(info.Name()) {
+				return filepath.SkipDir
+			}
+		}
+
+		// Always exclude heavy files and lockfiles
+		if !info.IsDir() {
+			if IsIgnoredFile(info.Name()) {
+				return nil
+			}
+		}
+
+		// Check against ignore rules
+		if ignorer != nil && ignorer.MatchesPath(relPath) {
+			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if IsIgnoredFile(info.Name()) || (ignorer != nil && ignorer.MatchesPath(relPath)) {
+
+		if info.IsDir() {
 			return nil
 		}
+
 		ext := filepath.Ext(path)
 		if _, allowed := allowExtsMap[ext]; allowed {
 			files = append(files, path)
@@ -453,13 +434,11 @@ func walkFiles(root string, ignorer *ignore.GitIgnore) ([]string, error) {
 	return files, err
 }
 
-// IsIgnoredDir returns true if the specified directory should be skipped during scanning.
 func IsIgnoredDir(name string) bool {
 	_, ignored := ignoredDirsMap[name]
 	return ignored
 }
 
-// IsIgnoredFile returns true if the specified file should be skipped during scanning.
 func IsIgnoredFile(name string) bool {
 	for _, f := range ignoredExactFiles {
 		if strings.EqualFold(name, f) {
@@ -488,13 +467,12 @@ func GetPriority(relPath string) float32 {
 	return 1.0
 }
 
-// GetHash computes the SHA256 content hash for a given file path.
 func GetHash(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
