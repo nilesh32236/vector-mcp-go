@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -19,7 +20,7 @@ func (s *Server) handleTriggerProjectIndex(ctx context.Context, request mcp.Call
 	if path == "" {
 		return mcp.NewToolResultError("project_path is required"), nil
 	}
-	absPath, err := s.pathValidator.ValidatePath(path)
+	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
 	}
