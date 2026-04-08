@@ -1,3 +1,4 @@
+// Package lsp provides language server protocol client capabilities.
 package lsp
 
 import (
@@ -33,8 +34,8 @@ func GetServerCommand(extension string) ([]string, bool) {
 	return cmd, ok
 }
 
-// LSPManager handles the lifecycle and communication with a language server.
-type LSPManager struct {
+// Manager handles the lifecycle and communication with a language server.
+type Manager struct {
 	serverCmd []string
 	rootPath  string
 	logger    *slog.Logger
@@ -51,9 +52,9 @@ type LSPManager struct {
 	isStopping bool
 }
 
-// NewLSPManager creates a new LSPManager instance.
-func NewLSPManager(serverCmd []string, rootPath string, logger *slog.Logger, throttler *system.MemThrottler) *LSPManager {
-	return &LSPManager{
+// NewManager creates a new Manager instance.
+func NewManager(serverCmd []string, rootPath string, logger *slog.Logger, throttler *system.MemThrottler) *Manager {
+	return &Manager{
 		serverCmd: serverCmd,
 		rootPath:  rootPath,
 		logger:    logger,
@@ -64,7 +65,8 @@ func NewLSPManager(serverCmd []string, rootPath string, logger *slog.Logger, thr
 }
 
 // EnsureStarted ensures the LSP server is running, starting it if necessary.
-func (m *LSPManager) EnsureStarted(ctx context.Context) error {
+// EnsureStarted ensures the LSP server is running, starting it if necessary.
+func (m *Manager) EnsureStarted(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -116,7 +118,8 @@ func (m *LSPManager) EnsureStarted(ctx context.Context) error {
 	return m.initialize(ctx)
 }
 
-func (m *LSPManager) initialize(ctx context.Context) error {
+// Initialize sends the initialize request to the LSP server.
+func (m *Manager) Initialize(ctx context.Context) error {
 	params := map[string]any{
 		"processId": os.Getpid(),
 		"rootUri":   fmt.Sprintf("file://%s", m.rootPath),
@@ -142,8 +145,13 @@ func (m *LSPManager) initialize(ctx context.Context) error {
 	return m.notifyLocked("initialized", map[string]any{})
 }
 
+func (m *Manager) initialize(ctx context.Context) error {
+	return m.Initialize(ctx)
+}
+
 // Call sends a request to the LSP and waits for a response.
-func (m *LSPManager) Call(ctx context.Context, method string, params any, result any) error {
+// Call sends a request to the LSP and waits for a response.
+func (m *Manager) Call(ctx context.Context, method string, params any, result any) error {
 	if err := m.EnsureStarted(ctx); err != nil {
 		return err
 	}
@@ -153,7 +161,7 @@ func (m *LSPManager) Call(ctx context.Context, method string, params any, result
 	return m.callLocked(ctx, method, params, result)
 }
 
-func (m *LSPManager) callLocked(ctx context.Context, method string, params any, result any) error {
+func (m *Manager) callLocked(ctx context.Context, method string, params any, result any) error {
 	m.idCounter++
 	id := m.idCounter
 	m.lastUsed = time.Now()
@@ -206,7 +214,8 @@ func (m *LSPManager) callLocked(ctx context.Context, method string, params any, 
 }
 
 // Notify sends a notification to the LSP (no response expected).
-func (m *LSPManager) Notify(ctx context.Context, method string, params any) error {
+// Notify sends a notification to the LSP (no response expected).
+func (m *Manager) Notify(ctx context.Context, method string, params any) error {
 	if err := m.EnsureStarted(ctx); err != nil {
 		return err
 	}
@@ -215,7 +224,7 @@ func (m *LSPManager) Notify(ctx context.Context, method string, params any) erro
 	return m.notifyLocked(method, params)
 }
 
-func (m *LSPManager) notifyLocked(method string, params any) error {
+func (m *Manager) notifyLocked(method string, params any) error {
 	req := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,
@@ -229,13 +238,14 @@ func (m *LSPManager) notifyLocked(method string, params any) error {
 }
 
 // RegisterNotificationHandler registers a callback for a specific LSP notification method.
-func (m *LSPManager) RegisterNotificationHandler(method string, handler func([]byte)) {
+// RegisterNotificationHandler registers a callback for a specific LSP notification method.
+func (m *Manager) RegisterNotificationHandler(method string, handler func([]byte)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.handlers[method] = append(m.handlers[method], handler)
 }
 
-func (m *LSPManager) writeLocked(data []byte) error {
+func (m *Manager) writeLocked(data []byte) error {
 	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))
 	if _, err := io.WriteString(m.stdin, header); err != nil {
 		return err
@@ -246,7 +256,7 @@ func (m *LSPManager) writeLocked(data []byte) error {
 	return nil
 }
 
-func (m *LSPManager) readLoop() {
+func (m *Manager) readLoop() {
 	reader := bufio.NewReader(m.stdout)
 	for {
 		// Read headers
@@ -303,7 +313,7 @@ func (m *LSPManager) readLoop() {
 	}
 }
 
-func (m *LSPManager) handleDisconnect() {
+func (m *Manager) handleDisconnect() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.isStopping {
@@ -313,9 +323,9 @@ func (m *LSPManager) handleDisconnect() {
 	m.cleanupLocked()
 }
 
-func (m *LSPManager) cleanupLocked() {
+func (m *Manager) cleanupLocked() {
 	if m.cmd != nil && m.cmd.Process != nil {
-		m.cmd.Process.Kill()
+		_ = m.cmd.Process.Kill()
 	}
 	m.cmd = nil
 	m.stdin = nil
@@ -326,7 +336,7 @@ func (m *LSPManager) cleanupLocked() {
 	}
 }
 
-func (m *LSPManager) monitorTTL() {
+func (m *Manager) monitorTTL() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -346,9 +356,48 @@ func (m *LSPManager) monitorTTL() {
 	}
 }
 
-func (m *LSPManager) Stop() {
+// Stop shuts down the LSP server and cleans up resources.
+func (m *Manager) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.isStopping = true
 	m.cleanupLocked()
+	return nil
+}
+
+// GetDefinition returns the definition(s) for the symbol at the given position.
+func (m *Manager) GetDefinition(ctx context.Context, uri string, line, character int) ([]Location, error) {
+	params := map[string]any{
+		"textDocument": map[string]any{
+			"uri": uri,
+		},
+		"position": map[string]any{
+			"line":      line,
+			"character": character,
+		},
+	}
+
+	var result []Location
+	err := m.Call(ctx, "textDocument/definition", params, &result)
+	return result, err
+}
+
+// GetReferences returns the references for the symbol at the given position.
+func (m *Manager) GetReferences(ctx context.Context, uri string, line, character int) ([]Location, error) {
+	params := map[string]any{
+		"textDocument": map[string]any{
+			"uri": uri,
+		},
+		"position": map[string]any{
+			"line":      line,
+			"character": character,
+		},
+		"context": map[string]any{
+			"includeDeclaration": true,
+		},
+	}
+
+	var result []Location
+	err := m.Call(ctx, "textDocument/references", params, &result)
+	return result, err
 }

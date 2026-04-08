@@ -1,3 +1,4 @@
+// Package mutation provides tools for safely applying and verifying code changes.
 package mutation
 
 import (
@@ -12,35 +13,18 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/lsp"
 )
 
-// Diagnostic represents an LSP diagnostic issue.
-type Diagnostic struct {
-	Range    Range  `json:"range"`
-	Severity int    `json:"severity"`
-	Message  string `json:"message"`
-	Source   string `json:"source"`
-}
-
-type Range struct {
-	Start Position `json:"start"`
-	End   Position `json:"end"`
-}
-
-type Position struct {
-	Line      int `json:"line"`
-	Character int `json:"character"`
-}
-
 // SafetyChecker provides tools to verify code integrity before/after mutations.
 type SafetyChecker struct {
-	lspProvider func(path string) (*lsp.LSPManager, error)
+	lspProvider func(path string) (*lsp.Manager, error)
 }
 
-func NewSafetyChecker(provider func(path string) (*lsp.LSPManager, error)) *SafetyChecker {
+// NewSafetyChecker creates a new SafetyChecker.
+func NewSafetyChecker(provider func(path string) (*lsp.Manager, error)) *SafetyChecker {
 	return &SafetyChecker{lspProvider: provider}
 }
 
 // VerifyPatchIntegrity checks if applying a search-and-replace patch introduces compiler errors.
-func (c *SafetyChecker) VerifyPatchIntegrity(ctx context.Context, path, search, replace string) ([]Diagnostic, error) {
+func (c *SafetyChecker) VerifyPatchIntegrity(ctx context.Context, path, search, replace string) ([]lsp.Diagnostic, error) {
 	if c.lspProvider == nil {
 		return nil, fmt.Errorf("LSP provider not configured")
 	}
@@ -64,15 +48,15 @@ func (c *SafetyChecker) VerifyPatchIntegrity(ctx context.Context, path, search, 
 	newContent := strings.ReplaceAll(strContent, search, replace)
 
 	// 3. Prepare to receive diagnostics
-	diagChan := make(chan []Diagnostic, 1)
+	diagChan := make(chan []lsp.Diagnostic, 1)
 	uri := fmt.Sprintf("file://%s", path)
 
 	var once sync.Once
 	handler := func(payload []byte) {
 		var msg struct {
 			Params struct {
-				URI         string       `json:"uri"`
-				Diagnostics []Diagnostic `json:"diagnostics"`
+				URI         string           `json:"uri"`
+				Diagnostics []lsp.Diagnostic `json:"diagnostics"`
 			} `json:"params"`
 		}
 		if err := json.Unmarshal(payload, &msg); err == nil && msg.Params.URI == uri {
@@ -116,10 +100,13 @@ func (c *SafetyChecker) VerifyPatchIntegrity(ctx context.Context, path, search, 
 // AutoFixMutation takes a diagnostic and returns a human-readable explanation and suggestion
 // for fixing the issue. In a real scenario, this could also interact with an LLM
 // to provide a corrected patch.
-func (c *SafetyChecker) AutoFixMutation(diag Diagnostic) string {
+func (c *SafetyChecker) AutoFixMutation(diag lsp.Diagnostic) string {
 	severity := "Error"
 	if diag.Severity == 2 {
 		severity = "Warning"
 	}
 	return fmt.Sprintf("[%s] %s at line %d. Suggesting re-analysis of this block and checking for missing imports or type mismatches.", severity, diag.Message, diag.Range.Start.Line)
 }
+
+// Diagnostic is a re-export of lsp.Diagnostic for use in other packages.
+type Diagnostic = lsp.Diagnostic

@@ -184,7 +184,7 @@ func NewMiddleware(opts ...MiddlewareOption) *Middleware {
 		rate:    10, // Default: 10 requests per second
 		burst:   20, // Default: allow burst of 20
 		keyFunc: DefaultKeyFunc,
-		onLimited: func(w http.ResponseWriter, r *http.Request) {
+		onLimited: func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, `{"error":"rate limit exceeded","retry_after":1}`, http.StatusTooManyRequests)
 		},
@@ -282,7 +282,7 @@ func PerClientRateLimit(rate float64, burst int) *Middleware {
 // burst: maximum burst
 func GlobalRateLimit(rate float64, burst int) *Middleware {
 	return NewMiddleware(
-		WithKeyFunc(func(r *http.Request) string {
+		WithKeyFunc(func(_ *http.Request) string {
 			return "global" // Same key for all requests
 		}),
 		WithRate(rate),

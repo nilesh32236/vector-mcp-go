@@ -1,0 +1,6 @@
+internal/config/config.go:1: : # github.com/nilesh32236/vector-mcp-go/internal/config [github.com/nilesh32236/vector-mcp-go/internal/config.test]
+internal/config/config.go:183:23: undefined: DefaultDimension
+internal/config/config_test.go:49:23: undefined: LogFormatJSON (typecheck)
+// Package config provides configuration management for the vector-mcp-go application,
+1 issues:
+* typecheck: 1

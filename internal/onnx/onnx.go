@@ -1,3 +1,4 @@
+// Package onnx provides an interface for interacting with ONNX models for embedding and reranking.
 package onnx
 
 import (

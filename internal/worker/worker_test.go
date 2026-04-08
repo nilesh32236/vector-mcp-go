@@ -14,7 +14,7 @@ import (
 
 type mockEmbedder struct{}
 
-func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+func (m *mockEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
 	return make([]float32, 1024), nil
 }
 
@@ -30,15 +30,15 @@ func (m *mockEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]floa
 	return results, nil
 }
 
-func (m *mockEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
+func (m *mockEmbedder) RerankBatch(_ context.Context, query string, texts []string) ([]float32, error) {
 	return make([]float32, len(texts)), nil
 }
 
 func TestWorkerStatusUpdate(t *testing.T) {
 	ctx := context.Background()
 	dbPath := "./test_worker_db"
-	os.RemoveAll(dbPath)
-	defer os.RemoveAll(dbPath)
+	_ = os.RemoveAll(dbPath)
+	defer func() { _ = os.RemoveAll(dbPath) }()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
@@ -55,15 +55,15 @@ func TestWorkerStatusUpdate(t *testing.T) {
 		cfg:         cfg,
 		logger:      logger,
 		progressMap: progressMap,
-		storeGetter: func(ctx context.Context) (*db.Store, error) { return store, nil },
+		storeGetter: func(_ context.Context) (*db.Store, error) { return store, nil },
 		embedder:    &mockEmbedder{},
 	}
 
 	// Create a temporary directory for the project root.
 	root := "./test_project_root"
-	os.MkdirAll(root, 0755)
-	defer os.RemoveAll(root)
-	os.WriteFile(root+"/test.go", []byte("package main\nfunc main() {}"), 0644)
+	_ = os.MkdirAll(root, 0755)
+	defer func() { _ = os.RemoveAll(root) }()
+	_ = os.WriteFile(root+"/test.go", []byte("package main\nfunc main() {}"), 0644)
 
 	w.processPath(ctx, root)
 
