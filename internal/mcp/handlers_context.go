@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -17,7 +16,7 @@ func (s *Server) handleSetProjectRoot(ctx context.Context, request mcp.CallToolR
 	if path == "" {
 		return mcp.NewToolResultError("project_path is required"), nil
 	}
-	absPath, err := filepath.Abs(path)
+	absPath, err := s.pathValidator.ValidatePath(path)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
 	}

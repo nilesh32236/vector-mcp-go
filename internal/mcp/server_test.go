@@ -259,7 +259,10 @@ export class SharedUtils {
 		Dimension:   dim,
 	}
 
-	validator, _ := pathguard.NewValidator(tempDir, pathguard.DefaultOptions())
+	validator, err := pathguard.NewValidator(tempDir, pathguard.DefaultOptions())
+	if err != nil {
+		t.Fatalf("failed to create path validator: %v", err)
+	}
 	srv := &Server{
 		cfg:              cfg,
 		localStoreGetter: func(ctx context.Context) (*db.Store, error) { return store, nil },
