@@ -23,11 +23,11 @@ func (s *Server) handleGetCodebaseSkeleton(_ context.Context, request mcp.CallTo
 
 	root := s.cfg.ProjectRoot
 	if targetPath != "" {
-		absPath, err := s.pathValidator.ValidatePath(targetPath)
+		validatedPath, err := s.pathValidator.ValidatePath(targetPath)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("invalid target_path: %v", err)), nil
+			return mcp.NewToolResultError(fmt.Sprintf("Invalid target_path: %v", err)), nil
 		}
-		root = absPath
+		root = validatedPath
 	}
 
 	type Node struct {
@@ -138,18 +138,40 @@ func (s *Server) handleWorkspaceManager(ctx context.Context, request mcp.CallToo
 
 	switch action {
 	case "set_project_root":
+		if path == "" {
+			return mcp.NewToolResultError("path is required for set_project_root"), nil
+		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve absolute path: %v", err)), nil
+		}
+		validatedPath, err := s.pathValidator.ValidatePath(absPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Invalid path: %v", err)), nil
+		}
 		return s.handleSetProjectRoot(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
 				Arguments: map[string]any{
-					"project_path": path,
+					"project_path": validatedPath,
 				},
 			},
 		})
 	case "trigger_index":
+		if path == "" {
+			return mcp.NewToolResultError("path is required for trigger_index"), nil
+		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to resolve absolute path: %v", err)), nil
+		}
+		validatedPath, err := s.pathValidator.ValidatePath(absPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Invalid path: %v", err)), nil
+		}
 		return s.handleTriggerProjectIndex(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
 				Arguments: map[string]any{
-					"project_path": path,
+					"project_path": validatedPath,
 				},
 			},
 		})

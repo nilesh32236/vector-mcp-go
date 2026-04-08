@@ -156,7 +156,7 @@ import (
 	alias "github.com/pkg/errors"
 )`,
 			ext:      ".go",
-			expected: []string{"fmt", "strings", "github.com/pkg/errors"},
+			expected: []string{"fmt", "context", "strings", "github.com/pkg/errors"},
 		},
 		{
 			name: "PHP requires",

@@ -1,4 +1,4 @@
-## 2025-05-18 - Overly Permissive CORS Configuration
-**Vulnerability:** Found `Access-Control-Allow-Origin: *` hardcoded in multiple places for HTTP servers and MCP stream transports.
-**Learning:** Hardcoded wildcard CORS enables CSRF and cross-origin data leakage, which is especially critical for a local agentic API server interfacing with sensitive codebase data.
-**Prevention:** Avoid hardcoding `*` for CORS. Instead, configure allowed origins dynamically using an environment variable (like `ALLOWED_ORIGINS`) and parse them securely, defaulting to restricted access.
+## 2026-04-07 - Path Traversal Vulnerability in MCP Handlers
+**Vulnerability:** Found unvalidated absolute path resolution in `handleGetCodebaseSkeleton` (via `filepath.Join(s.cfg.ProjectRoot, targetPath)` and `filepath.IsAbs`) which allowed directory traversal outside the project bounds.
+**Learning:** File paths supplied by users or via external requests must always be subjected to explicit validation.
+**Prevention:** Use `s.pathValidator.ValidatePath` (from `internal/security/pathguard`) for all user-provided file paths in the MCP handler layer instead of relying solely on `filepath` functions.
