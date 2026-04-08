@@ -259,10 +259,15 @@ export class SharedUtils {
 		Dimension:   dim,
 	}
 
+	validator, err := pathguard.NewValidator(tempDir, pathguard.DefaultOptions())
+	if err != nil {
+		t.Fatalf("pathguard.NewValidator: %v", err)
+	}
 	srv := &Server{
 		cfg:              cfg,
 		localStoreGetter: func(_ context.Context) (*db.Store, error) { return store, nil },
 		embedder:         &mockEmbedder{dim: dim},
+		pathValidator:    validator,
 	}
 	srv.WithRemoteStore(store)
 
