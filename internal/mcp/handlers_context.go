@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/security/pathguard"
 )
 
 // handleSetProjectRoot updates the active project root directory and resets the file watcher.
@@ -21,7 +22,14 @@ func (s *Server) handleSetProjectRoot(_ context.Context, request mcp.CallToolReq
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
 	}
+
+	newValidator, err := pathguard.NewValidator(absPath, pathguard.DefaultOptions())
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to validate new project root: %v", err)), nil
+	}
+
 	s.cfg.ProjectRoot = absPath
+	s.pathValidator = newValidator
 	s.monorepoResolver = indexer.InitResolver(s.cfg.ProjectRoot)
 	select {
 	case s.watcherResetChan <- absPath:
