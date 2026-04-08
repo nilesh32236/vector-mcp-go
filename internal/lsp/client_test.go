@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"context"
 	"testing"
 )
 
@@ -46,14 +47,14 @@ func TestGetServerCommandCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestNewLSPManager(t *testing.T) {
+func TestNewManager(t *testing.T) {
 	cmd := []string{"gopls"}
 	root := "/test/path"
 
-	mgr := NewLSPManager(cmd, root, nil, nil)
+	mgr := NewManager(cmd, root, nil, nil)
 
 	if mgr == nil {
-		t.Fatal("Expected non-nil LSPManager")
+		t.Fatal("Expected non-nil Manager")
 	}
 	if len(mgr.serverCmd) == 0 || mgr.serverCmd[0] != "gopls" {
 		t.Errorf("Expected serverCmd to be %v, got %v", cmd, mgr.serverCmd)
@@ -69,11 +70,11 @@ func TestNewLSPManager(t *testing.T) {
 	}
 }
 
-func TestLSPManagerStop(t *testing.T) {
-	mgr := NewLSPManager([]string{"test"}, "/tmp", nil, nil)
+func TestManagerStop(t *testing.T) {
+	mgr := NewManager([]string{"test"}, "/tmp", nil, nil)
 
 	// Should not panic when called without a running process
-	mgr.Stop()
+	_ = mgr.Stop()
 
 	// Verify isStopping flag
 	if !mgr.isStopping {
@@ -82,7 +83,7 @@ func TestLSPManagerStop(t *testing.T) {
 }
 
 func TestRegisterNotificationHandler(t *testing.T) {
-	mgr := NewLSPManager([]string{"test"}, "/tmp", nil, nil)
+	mgr := NewManager([]string{"test"}, "/tmp", nil, nil)
 
 	called := false
 	handler := func([]byte) {
@@ -103,7 +104,7 @@ func TestRegisterNotificationHandler(t *testing.T) {
 }
 
 func TestMultipleNotificationHandlers(t *testing.T) {
-	mgr := NewLSPManager([]string{"test"}, "/tmp", nil, nil)
+	mgr := NewManager([]string{"test"}, "/tmp", nil, nil)
 
 	callCount := 0
 	handler1 := func([]byte) { callCount++ }
@@ -126,9 +127,9 @@ func TestMultipleNotificationHandlers(t *testing.T) {
 }
 
 func TestEnsureStartedEmptyCommand(t *testing.T) {
-	mgr := NewLSPManager([]string{}, "/tmp", nil, nil)
+	mgr := NewManager([]string{}, "/tmp", nil, nil)
 
-	err := mgr.EnsureStarted(nil)
+	err := mgr.EnsureStarted(context.TODO())
 	if err == nil {
 		t.Error("Expected error for empty server command")
 	}
@@ -137,7 +138,7 @@ func TestEnsureStartedEmptyCommand(t *testing.T) {
 func TestWriteLocked(t *testing.T) {
 	// This test verifies the message framing format
 	// We can't fully test without a real stdin pipe
-	mgr := NewLSPManager([]string{"test"}, "/tmp", nil, nil)
+	mgr := NewManager([]string{"test"}, "/tmp", nil, nil)
 
 	// Test with nil stdin (should handle gracefully)
 	// In real usage, stdin would be connected to a process

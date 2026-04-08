@@ -8,39 +8,53 @@ import (
 	"path/filepath"
 	"unicode/utf8"
 
-	"github.com/nilesh32236/vector-mcp-go/internal/observability/tracing"
 	"github.com/sugarme/tokenizer"
 	"github.com/sugarme/tokenizer/pretrained"
 	"github.com/yalue/onnxruntime_go"
 )
 
+// MaxSeqLength is the maximum sequence length supported by the embedding model.
 const MaxSeqLength = 512
 
+// SessionData stores model context and session information for an embedding task.
 type SessionData struct {
 	session             *onnxruntime_go.AdvancedSession
 	tokenizer           *tokenizer.Tokenizer
-	inputIdsTensor      *onnxruntime_go.Tensor[int64]
+	inputIDsTensor      *onnxruntime_go.Tensor[int64]
 	attentionMaskTensor *onnxruntime_go.Tensor[int64]
-	tokenTypeIdsTensor  *onnxruntime_go.Tensor[int64]
+	tokenTypeIDsTensor  *onnxruntime_go.Tensor[int64]
 	outputTensor        *onnxruntime_go.Tensor[float32]
 	dimension           int
 	modelName           string
 	matryoshkaDim       int // 0 = disabled; >0 = truncate to this many dims (MRL)
 }
 
-type Embedder struct {
-	embSess    *SessionData
-	rerankSess *SessionData
+// NewEmbedder initializes and returns a new embedder with optional reranking capability.
+func NewEmbedder(_ context.Context, modelsDir string, embCfg ModelConfig, rerankCfg *ModelConfig) (*Embedder, error) {
+	embSess, err := newSessionData(modelsDir, embCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load embedding model: %w", err)
+	}
+
+	var rerankSess *SessionData
+	if rerankCfg != nil {
+		rerankSess, err = newSessionData(modelsDir, *rerankCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to load reranker: %v\n", err)
+		}
+	}
+
+	return &Embedder{
+		embSess:    embSess,
+		rerankSess: rerankSess,
+	}, nil
 }
 
-type EmbedderPool struct {
-	pool chan *Embedder
-}
-
+// NewEmbedderPool creates a pool of embedders for concurrent processing.
 func NewEmbedderPool(ctx context.Context, modelsDir string, size int, embCfg ModelConfig, rerankerCfg *ModelConfig) (*EmbedderPool, error) {
 	pool := make(chan *Embedder, size)
 	for i := 0; i < size; i++ {
-		embSess, err := newSessionData(modelsDir, embCfg)
+		emb, err := NewEmbedder(ctx, modelsDir, embCfg, rerankerCfg)
 		if err != nil {
 			close(pool)
 			for e := range pool {
@@ -48,42 +62,9 @@ func NewEmbedderPool(ctx context.Context, modelsDir string, size int, embCfg Mod
 			}
 			return nil, fmt.Errorf("failed to initialize embedder pool (index %d): %w", i, err)
 		}
-
-		var rerankSess *SessionData
-		if rerankerCfg != nil {
-			rerankSess, err = newSessionData(modelsDir, *rerankerCfg)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: Failed to load reranker: %v\n", err)
-			}
-		}
-
-		emb := &Embedder{
-			embSess:    embSess,
-			rerankSess: rerankSess,
-		}
 		pool <- emb
 	}
 	return &EmbedderPool{pool: pool}, nil
-}
-
-func (p *EmbedderPool) Get(ctx context.Context) (*Embedder, error) {
-	select {
-	case e := <-p.pool:
-		return e, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-func (p *EmbedderPool) Put(e *Embedder) {
-	p.pool <- e
-}
-
-func (p *EmbedderPool) Close() {
-	close(p.pool)
-	for e := range p.pool {
-		e.Close()
-	}
 }
 
 func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
@@ -105,8 +86,8 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 
 	shape := onnxruntime_go.NewShape(1, MaxSeqLength)
 
-	inputIds := make([]int64, MaxSeqLength)
-	inputIdsTensor, err := onnxruntime_go.NewTensor(shape, inputIds)
+	inputIDs := make([]int64, MaxSeqLength)
+	inputIDsTensor, err := onnxruntime_go.NewTensor(shape, inputIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -114,15 +95,15 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 	attentionMask := make([]int64, MaxSeqLength)
 	attentionMaskTensor, err := onnxruntime_go.NewTensor(shape, attentionMask)
 	if err != nil {
-		inputIdsTensor.Destroy()
+		_ = inputIDsTensor.Destroy()
 		return nil, err
 	}
 
-	tokenTypeIds := make([]int64, MaxSeqLength)
-	tokenTypeIdsTensor, err := onnxruntime_go.NewTensor(shape, tokenTypeIds)
+	tokenTypeIDs := make([]int64, MaxSeqLength)
+	tokenTypeIDsTensor, err := onnxruntime_go.NewTensor(shape, tokenTypeIDs)
 	if err != nil {
-		inputIdsTensor.Destroy()
-		attentionMaskTensor.Destroy()
+		_ = inputIDsTensor.Destroy()
+		_ = attentionMaskTensor.Destroy()
 		return nil, err
 	}
 
@@ -135,20 +116,20 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 
 	outputTensor, err := onnxruntime_go.NewEmptyTensor[float32](outputShape)
 	if err != nil {
-		inputIdsTensor.Destroy()
-		attentionMaskTensor.Destroy()
-		tokenTypeIdsTensor.Destroy()
+		_ = inputIDsTensor.Destroy()
+		_ = attentionMaskTensor.Destroy()
+		_ = tokenTypeIDsTensor.Destroy()
 		return nil, err
 	}
 
 	inputNodeNames := []string{"input_ids", "attention_mask", "token_type_ids"}
-	inputs := []onnxruntime_go.Value{inputIdsTensor, attentionMaskTensor, tokenTypeIdsTensor}
+	inputs := []onnxruntime_go.Value{inputIDsTensor, attentionMaskTensor, tokenTypeIDsTensor}
 	outputs := []onnxruntime_go.Value{outputTensor}
 
 	// BGE-M3 and some other models don't have token_type_ids
 	if mc.Filename == "bge-m3-q4.onnx" {
 		inputNodeNames = []string{"input_ids", "attention_mask"}
-		inputs = []onnxruntime_go.Value{inputIdsTensor, attentionMaskTensor}
+		inputs = []onnxruntime_go.Value{inputIDsTensor, attentionMaskTensor}
 	}
 
 	session, err := onnxruntime_go.NewAdvancedSession(modelPath,
@@ -156,30 +137,24 @@ func newSessionData(modelsDir string, mc ModelConfig) (*SessionData, error) {
 		outputNodeNames,
 		inputs, outputs, nil)
 	if err != nil {
-		inputIdsTensor.Destroy()
-		attentionMaskTensor.Destroy()
-		tokenTypeIdsTensor.Destroy()
-		outputTensor.Destroy()
+		_ = inputIDsTensor.Destroy()
+		_ = attentionMaskTensor.Destroy()
+		_ = tokenTypeIDsTensor.Destroy()
+		_ = outputTensor.Destroy()
 		return nil, fmt.Errorf("failed to create ONNX session: %w", err)
 	}
 
 	return &SessionData{
 		session:             session,
 		tokenizer:           tk,
-		inputIdsTensor:      inputIdsTensor,
+		inputIDsTensor:      inputIDsTensor,
 		attentionMaskTensor: attentionMaskTensor,
-		tokenTypeIdsTensor:  tokenTypeIdsTensor,
+		tokenTypeIDsTensor:  tokenTypeIDsTensor,
 		outputTensor:        outputTensor,
 		dimension:           dim,
 		modelName:           mc.Filename,
 		matryoshkaDim:       mc.MatryoshkaDim,
 	}, nil
-}
-
-func (e *Embedder) Embed(ctx context.Context, text string) (emb []float32, err error) {
-	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.embed")
-	defer span.End()
-	return e.embSess.embedSingle(text)
 }
 
 func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
@@ -209,25 +184,25 @@ func (s *SessionData) embedSingle(text string) (emb []float32, err error) {
 	ids := en.GetIds()
 	mask := en.GetAttentionMask()
 
-	inputIdsData := s.inputIdsTensor.GetData()
+	inputIDsData := s.inputIDsTensor.GetData()
 	attentionMaskData := s.attentionMaskTensor.GetData()
-	tokenTypeIdsData := s.tokenTypeIdsTensor.GetData()
+	tokenTypeIDsData := s.tokenTypeIDsTensor.GetData()
 
-	typeIds := en.GetTypeIds()
+	typeIDs := en.GetTypeIds()
 
 	for i := 0; i < MaxSeqLength; i++ {
 		if i < len(ids) {
-			inputIdsData[i] = int64(ids[i])
+			inputIDsData[i] = int64(ids[i])
 			attentionMaskData[i] = int64(mask[i])
-			if i < len(typeIds) {
-				tokenTypeIdsData[i] = int64(typeIds[i])
+			if i < len(typeIDs) {
+				tokenTypeIDsData[i] = int64(typeIDs[i])
 			} else {
-				tokenTypeIdsData[i] = 0
+				tokenTypeIDsData[i] = 0
 			}
 		} else {
-			inputIdsData[i] = 0
+			inputIDsData[i] = 0
 			attentionMaskData[i] = 0
-			tokenTypeIdsData[i] = 0
+			tokenTypeIDsData[i] = 0
 		}
 	}
 
@@ -270,65 +245,23 @@ func normalize(v []float32) {
 	}
 }
 
-func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.embed_batch")
-	defer span.End()
-
-	results := make([][]float32, len(texts))
-	for i, text := range texts {
-		emb, err := e.Embed(ctx, text)
-		if err != nil {
-			return nil, err
-		}
-		results[i] = emb
-	}
-	return results, nil
-}
-
-func (e *Embedder) Close() {
-	if e.embSess != nil {
-		e.embSess.Close()
-	}
-	if e.rerankSess != nil {
-		e.rerankSess.Close()
-	}
-}
-
+// Close releases resources and terminates the model session for the associated data.
 func (s *SessionData) Close() {
 	if s.session != nil {
-		s.session.Destroy()
+		_ = s.session.Destroy()
 	}
-	if s.inputIdsTensor != nil {
-		s.inputIdsTensor.Destroy()
+	if s.inputIDsTensor != nil {
+		_ = s.inputIDsTensor.Destroy()
 	}
 	if s.attentionMaskTensor != nil {
-		s.attentionMaskTensor.Destroy()
+		_ = s.attentionMaskTensor.Destroy()
 	}
-	if s.tokenTypeIdsTensor != nil {
-		s.tokenTypeIdsTensor.Destroy()
+	if s.tokenTypeIDsTensor != nil {
+		_ = s.tokenTypeIDsTensor.Destroy()
 	}
 	if s.outputTensor != nil {
-		s.outputTensor.Destroy()
+		_ = s.outputTensor.Destroy()
 	}
-}
-
-func (e *Embedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
-	ctx, span := tracing.StartSpan(ctx, "embedding", "embedding.rerank_batch")
-	defer span.End()
-
-	if e.rerankSess == nil {
-		return nil, fmt.Errorf("reranker model not loaded")
-	}
-
-	scores := make([]float32, len(texts))
-	for i, text := range texts {
-		score, err := e.rerankSess.rerankSingle(query, text)
-		if err != nil {
-			return nil, err
-		}
-		scores[i] = score
-	}
-	return scores, nil
 }
 
 func (s *SessionData) rerankSingle(query, text string) (score float32, err error) {
@@ -352,25 +285,25 @@ func (s *SessionData) rerankSingle(query, text string) (score float32, err error
 	ids := en.GetIds()
 	mask := en.GetAttentionMask()
 
-	inputIdsData := s.inputIdsTensor.GetData()
+	inputIDsData := s.inputIDsTensor.GetData()
 	attentionMaskData := s.attentionMaskTensor.GetData()
-	tokenTypeIdsData := s.tokenTypeIdsTensor.GetData()
+	tokenTypeIDsData := s.tokenTypeIDsTensor.GetData()
 
-	typeIds := en.GetTypeIds()
+	typeIDs := en.GetTypeIds()
 
 	for i := 0; i < MaxSeqLength; i++ {
 		if i < len(ids) {
-			inputIdsData[i] = int64(ids[i])
+			inputIDsData[i] = int64(ids[i])
 			attentionMaskData[i] = int64(mask[i])
-			if i < len(typeIds) {
-				tokenTypeIdsData[i] = int64(typeIds[i])
+			if i < len(typeIDs) {
+				tokenTypeIDsData[i] = int64(typeIDs[i])
 			} else {
-				tokenTypeIdsData[i] = 0
+				tokenTypeIDsData[i] = 0
 			}
 		} else {
-			inputIdsData[i] = 0
+			inputIDsData[i] = 0
 			attentionMaskData[i] = 0
-			tokenTypeIdsData[i] = 0
+			tokenTypeIDsData[i] = 0
 		}
 	}
 

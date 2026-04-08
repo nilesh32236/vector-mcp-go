@@ -20,6 +20,8 @@ type IndexerStore interface {
 }
 
 // Distiller provides methods to generate high-level semantic summaries of the codebase.
+const MaxDistillDepth = 5
+
 type Distiller struct {
 	Store    IndexerStore
 	Embedder indexer.Embedder
@@ -85,7 +87,7 @@ func (d *Distiller) DistillPackagePurpose(ctx context.Context, projectRoot strin
 
 		// Build entity description
 		var desc strings.Builder
-		desc.WriteString(fmt.Sprintf("%s", t))
+		fmt.Fprintf(&desc, "%s", t)
 		if len(meta) > 0 {
 			desc.WriteString(" {")
 			var keys []string
@@ -94,11 +96,11 @@ func (d *Distiller) DistillPackagePurpose(ctx context.Context, projectRoot strin
 			}
 			sort.Strings(keys)
 			for i, k := range keys {
-				if i > 5 {
+				if i > MaxDistillDepth {
 					desc.WriteString("...")
 					break
 				}
-				desc.WriteString(fmt.Sprintf("%s", strings.TrimPrefix(k, "field:")))
+				fmt.Fprintf(&desc, "%s", strings.TrimPrefix(k, "field:"))
 				if i < len(keys)-1 && i < 5 {
 					desc.WriteString(", ")
 				}
@@ -115,7 +117,7 @@ func (d *Distiller) DistillPackagePurpose(ctx context.Context, projectRoot strin
 
 	// 2. Generate Manifest
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# Package Architectural Manifest: `%s`\n\n", pkgPath))
+	fmt.Fprintf(&sb, "# Package Architectural Manifest: `%s`\n\n", pkgPath)
 
 	sb.WriteString("## 🚀 Exported API\n")
 	if len(exportedAPI) == 0 {
@@ -127,19 +129,19 @@ func (d *Distiller) DistillPackagePurpose(ctx context.Context, projectRoot strin
 		}
 		sort.Strings(names)
 		for _, n := range names {
-			sb.WriteString(fmt.Sprintf("- **`%s`**: %s\n", n, exportedAPI[n]))
+			fmt.Fprintf(&sb, "- **`%s`**: %s\n", n, exportedAPI[n])
 		}
 	}
 
 	sb.WriteString("\n## 🧱 Internal Components\n")
-	sb.WriteString(fmt.Sprintf("Contains %d total entities across ", len(exportedAPI)+len(internalDetails)))
+	fmt.Fprintf(&sb, "Contains %d total entities across ", len(exportedAPI)+len(internalDetails))
 	var types []string
 	for t := range typeCounts {
 		types = append(types, t)
 	}
 	sort.Strings(types)
 	for i, t := range types {
-		sb.WriteString(fmt.Sprintf("%d %ss", typeCounts[t], t))
+		fmt.Fprintf(&sb, "%d %ss", typeCounts[t], t)
 		if i < len(types)-1 {
 			sb.WriteString(", ")
 		}
@@ -156,7 +158,7 @@ func (d *Distiller) DistillPackagePurpose(ctx context.Context, projectRoot strin
 		}
 		sort.Strings(deps)
 		for _, d := range deps {
-			sb.WriteString(fmt.Sprintf("- `%s`\n", d))
+			fmt.Fprintf(&sb, "- `%s`\n", d)
 		}
 	}
 

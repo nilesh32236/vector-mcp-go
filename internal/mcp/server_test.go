@@ -15,13 +15,14 @@ import (
 	"github.com/nilesh32236/vector-mcp-go/internal/config"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/security/pathguard"
 )
 
 type mockEmbedder struct {
 	dim int
 }
 
-func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+func (m *mockEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
 	d := m.dim
 	if d == 0 {
 		d = 1024
@@ -43,15 +44,15 @@ func (m *mockEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]floa
 	return results, nil
 }
 
-func (m *mockEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
+func (m *mockEmbedder) RerankBatch(_ context.Context, query string, texts []string) ([]float32, error) {
 	return make([]float32, len(texts)), nil
 }
 
 func TestIndexStatusTool(t *testing.T) {
 	ctx := context.Background()
 	dbPath := "./test_mcp_db"
-	os.RemoveAll(dbPath)
-	defer os.RemoveAll(dbPath)
+	_ = os.RemoveAll(dbPath)
+	defer func() { _ = os.RemoveAll(dbPath) }()
 
 	cfg := &config.Config{
 		ProjectRoot: "/test/project",
@@ -60,10 +61,10 @@ func TestIndexStatusTool(t *testing.T) {
 
 	store, _ := db.Connect(ctx, dbPath, "test_collection", 1024)
 	// Set status for local project and another project in DB
-	store.SetStatus(ctx, "/test/project", "Indexing: 73.2% (73/100) - Current: file.go")
-	store.SetStatus(ctx, "/other/project", "Indexing: 10.0% (1/10) - Current: remote.go")
+	_ = store.SetStatus(ctx, "/test/project", "Indexing: 73.2% (73/100) - Current: file.go")
+	_ = store.SetStatus(ctx, "/other/project", "Indexing: 10.0% (1/10) - Current: remote.go")
 
-	localStoreGetter := func(ctx context.Context) (*db.Store, error) { return store, nil }
+	localStoreGetter := func(_ context.Context) (*db.Store, error) { return store, nil }
 	progressMap := &sync.Map{}
 	progressMap.Store("/test/project", "Indexing: 73.2% (73/100) - Current: file.go")
 
@@ -94,8 +95,8 @@ func TestIndexStatusTool(t *testing.T) {
 func TestSearchCodebaseTool(t *testing.T) {
 	ctx := context.Background()
 	dbPath := "./test_search_db"
-	os.RemoveAll(dbPath)
-	defer os.RemoveAll(dbPath)
+	_ = os.RemoveAll(dbPath)
+	defer func() { _ = os.RemoveAll(dbPath) }()
 
 	cfg := &config.Config{
 		ProjectRoot: "/test/project",
@@ -137,7 +138,7 @@ func TestSearchCodebaseTool(t *testing.T) {
 
 	srv := &Server{
 		cfg:              cfg,
-		localStoreGetter: func(ctx context.Context) (*db.Store, error) { return store, nil },
+		localStoreGetter: func(_ context.Context) (*db.Store, error) { return store, nil },
 		embedder:         &mockEmbedder{dim: 1024},
 	}
 
@@ -168,11 +169,11 @@ func TestArchitectTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// 1. Setup Mock Monorepo
-	os.MkdirAll(filepath.Join(tempDir, "apps/api"), 0755)
-	os.MkdirAll(filepath.Join(tempDir, "packages/shared"), 0755)
+	_ = os.MkdirAll(filepath.Join(tempDir, "apps/api"), 0755)
+	_ = os.MkdirAll(filepath.Join(tempDir, "packages/shared"), 0755)
 
 	pkgJSON := `{
   "name": "api",
@@ -180,7 +181,7 @@ func TestArchitectTools(t *testing.T) {
     "lodash": "^4.17.21"
   }
 }`
-	os.WriteFile(filepath.Join(tempDir, "apps/api/package.json"), []byte(pkgJSON), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "apps/api/package.json"), []byte(pkgJSON), 0644)
 
 	mainTS := `import axios from 'axios';
 import { SharedUtils } from '@herexa/shared';
@@ -196,7 +197,7 @@ export function deadFn() {
   return "I am dead code";
 }
 `
-	os.WriteFile(filepath.Join(tempDir, "apps/api/main.ts"), []byte(mainTS), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "apps/api/main.ts"), []byte(mainTS), 0644)
 
 	utilsTS := `export interface User {
   id: string;
@@ -208,7 +209,7 @@ export class SharedUtils {
   }
 }
 `
-	os.WriteFile(filepath.Join(tempDir, "packages/shared/utils.ts"), []byte(utilsTS), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "packages/shared/utils.ts"), []byte(utilsTS), 0644)
 
 	// 2. Initialize DB & Index (using real chunker but mock embedding)
 	dbPath := filepath.Join(tempDir, "db")
@@ -224,7 +225,7 @@ export class SharedUtils {
 
 	for _, f := range files {
 		content, _ := os.ReadFile(f)
-		chunks := indexer.CreateChunks(string(content), f)
+		chunks := indexer.CreateChunks(ctx, string(content), f)
 		var records []db.Record
 		for _, chunk := range chunks {
 			emb, _ := mockEmb.Embed(ctx, chunk.Content)
@@ -249,7 +250,7 @@ export class SharedUtils {
 				},
 			})
 		}
-		store.Insert(ctx, records)
+		_ = store.Insert(ctx, records)
 	}
 
 	cfg := &config.Config{
@@ -260,7 +261,7 @@ export class SharedUtils {
 
 	srv := &Server{
 		cfg:              cfg,
-		localStoreGetter: func(ctx context.Context) (*db.Store, error) { return store, nil },
+		localStoreGetter: func(_ context.Context) (*db.Store, error) { return store, nil },
 		embedder:         &mockEmbedder{dim: dim},
 	}
 	srv.WithRemoteStore(store)

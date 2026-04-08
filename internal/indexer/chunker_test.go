@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -150,6 +151,7 @@ require('module3');`,
 			name: "Go imports",
 			text: `import "fmt"
 import (
+	"context"
 	"strings"
 	alias "github.com/pkg/errors"
 )`,
@@ -200,7 +202,7 @@ func TestCreateChunks(t *testing.T) {
 	unsupportedText := "This is a simple text file.\nIt has two lines."
 	unsupportedFilePath := "test.txt"
 
-	chunks := CreateChunks(unsupportedText, unsupportedFilePath)
+	chunks := CreateChunks(context.TODO(), unsupportedText, unsupportedFilePath)
 	if len(chunks) == 0 {
 		t.Fatal("CreateChunks(test.txt) returned 0 chunks")
 	}
@@ -224,7 +226,7 @@ func hello() {
 `
 	supportedFilePath := "test.go"
 
-	goChunks := CreateChunks(supportedText, supportedFilePath)
+	goChunks := CreateChunks(context.TODO(), supportedText, supportedFilePath)
 	if len(goChunks) == 0 {
 		t.Fatal("CreateChunks(test.go) returned 0 chunks")
 	}
@@ -276,7 +278,7 @@ type Service interface {
 	GetUser(id int) *User
 }
 `
-	chunks := CreateChunks(code, "test.go")
+	chunks := CreateChunks(context.TODO(), code, "test.go")
 
 	foundStruct := false
 	foundInterface := false

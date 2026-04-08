@@ -1,3 +1,4 @@
+// Package indexer provides tools for chunking code and documentation and preparing them for indexing.
 package indexer
 
 import (
@@ -7,12 +8,14 @@ import (
 	"strings"
 )
 
+// WorkspaceResolver handles path mapping for monorepos and TypeScript path aliases.
 type WorkspaceResolver struct {
 	ProjectRoot string
 	PathAliases map[string]string
 	Workspaces  map[string]string
 }
 
+// InitResolver initializes a new WorkspaceResolver for the given project root.
 func InitResolver(projectRoot string) *WorkspaceResolver {
 	r := &WorkspaceResolver{
 		ProjectRoot: projectRoot,
@@ -166,6 +169,7 @@ func (r *WorkspaceResolver) findNestedPackages(pattern string) {
 	}
 }
 
+// Resolve converts an import path to a relative file path if it matches an alias or workspace.
 func (r *WorkspaceResolver) Resolve(importPath string) (string, bool) {
 	// 1. Try Path Aliases
 	for alias, target := range r.PathAliases {

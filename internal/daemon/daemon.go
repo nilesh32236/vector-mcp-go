@@ -1,3 +1,7 @@
+/*
+ * Package daemon provides RPC-based communication between the MCP server and a master process.
+ * It enables shared resource management, background indexing, and centralized state.
+ */
 package daemon
 
 import (
@@ -15,6 +19,12 @@ import (
 )
 
 // Service defines the RPC methods available on the Master.
+const (
+	EmbedTimeout = 30 * time.Second
+	BatchEmbedTimeout = 60 * time.Second
+	RerankTimeout = 120 * time.Second
+)
+
 type Service struct {
 	Embedder    indexer.Embedder
 	IndexQueue  chan string
@@ -22,39 +32,48 @@ type Service struct {
 	ProgressMap *sync.Map
 }
 
+// EmbedRequest represents a request to generate an embedding for a single text.
 type EmbedRequest struct {
 	Text string
 }
 
+// EmbedBatchRequest represents a request to generate embeddings for multiple texts.
 type EmbedBatchRequest struct {
 	Texts []string
 }
 
+// EmbedResponse contains the generated embedding for a single text.
 type EmbedResponse struct {
 	Embedding []float32
 }
 
+// EmbedBatchResponse contains the generated embeddings for multiple texts.
 type EmbedBatchResponse struct {
 	Embeddings [][]float32
 }
 
+// RerankBatchRequest represents a request to rerank a list of texts against a query.
 type RerankBatchRequest struct {
 	Query string
 	Texts []string
 }
 
+// RerankBatchResponse contains the reranking scores for the requested texts.
 type RerankBatchResponse struct {
 	Scores []float32
 }
 
+// IndexRequest represents a request to trigger an indexing run for a project path.
 type IndexRequest struct {
 	Path string
 }
 
+// IndexResponse indicates the success status of an indexing request.
 type IndexResponse struct {
 	Success bool
 }
 
+// SearchRequest represents a semantic search request using vector embeddings.
 type SearchRequest struct {
 	Embedding []float32
 	TopK      int
@@ -62,6 +81,7 @@ type SearchRequest struct {
 	Category  string
 }
 
+// HybridSearchRequest represents a combined semantic and lexical search request.
 type HybridSearchRequest struct {
 	Query     string
 	Embedding []float32
@@ -70,45 +90,55 @@ type HybridSearchRequest struct {
 	Category  string
 }
 
+// SearchResponse contains the matching records and their respective scores.
 type SearchResponse struct {
 	Records []db.Record
 	Scores  []float32
 }
 
+// InsertRequest represents a request to insert new records into the vector store.
 type InsertRequest struct {
 	Records []db.Record
 }
 
+// InsertResponse indicates the success status of a record insertion request.
 type InsertResponse struct {
 	Success bool
 }
 
+// DeleteRequest represents a request to delete records by prefix or project ID.
 type DeleteRequest struct {
 	Prefix    string
 	ProjectID string
 }
 
+// DeleteResponse indicates the success status of a deletion request.
 type DeleteResponse struct {
 	Success bool
 }
 
+// StatusRequest represents a request for project indexing status.
 type StatusRequest struct {
 	ProjectID string
 }
 
+// StatusResponse contains the current status of one or more projects.
 type StatusResponse struct {
 	Status      string
 	AllStatuses map[string]string
 }
 
+// MappingRequest represents a request for path-to-hash mapping of a project.
 type MappingRequest struct {
 	ProjectID string
 }
 
+// MappingResponse contains the requested path-to-hash mappings.
 type MappingResponse struct {
 	Mapping map[string]string
 }
 
+// Embed generates a single vector embedding for the provided text.
 func (s *Service) Embed(req EmbedRequest, resp *EmbedResponse) error {
 	emb, err := s.Embedder.Embed(context.Background(), req.Text)
 	if err != nil {
@@ -118,6 +148,7 @@ func (s *Service) Embed(req EmbedRequest, resp *EmbedResponse) error {
 	return nil
 }
 
+// EmbedBatch generates vector embeddings for a batch of texts.
 func (s *Service) EmbedBatch(req EmbedBatchRequest, resp *EmbedBatchResponse) error {
 	embs, err := s.Embedder.EmbedBatch(context.Background(), req.Texts)
 	if err != nil {
@@ -127,6 +158,7 @@ func (s *Service) EmbedBatch(req EmbedBatchRequest, resp *EmbedBatchResponse) er
 	return nil
 }
 
+// RerankBatch reranks a list of texts relative to a query string.
 func (s *Service) RerankBatch(req RerankBatchRequest, resp *RerankBatchResponse) error {
 	scores, err := s.Embedder.RerankBatch(context.Background(), req.Query, req.Texts)
 	if err != nil {
@@ -136,6 +168,7 @@ func (s *Service) RerankBatch(req RerankBatchRequest, resp *RerankBatchResponse)
 	return nil
 }
 
+// IndexProject triggers an indexing operation for a project at the specified path.
 func (s *Service) IndexProject(req IndexRequest, resp *IndexResponse) error {
 	select {
 	case s.IndexQueue <- req.Path:
@@ -146,6 +179,7 @@ func (s *Service) IndexProject(req IndexRequest, resp *IndexResponse) error {
 	return nil
 }
 
+// Search performs a semantic search using vector embeddings.
 func (s *Service) Search(req SearchRequest, resp *SearchResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -159,6 +193,7 @@ func (s *Service) Search(req SearchRequest, resp *SearchResponse) error {
 	return nil
 }
 
+// HybridSearch performs a combined semantic and lexical search.
 func (s *Service) HybridSearch(req HybridSearchRequest, resp *SearchResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -171,6 +206,7 @@ func (s *Service) HybridSearch(req HybridSearchRequest, resp *SearchResponse) er
 	return nil
 }
 
+// LexicalSearch performs a keyword-based search on the index.
 func (s *Service) LexicalSearch(req HybridSearchRequest, resp *SearchResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -183,7 +219,8 @@ func (s *Service) LexicalSearch(req HybridSearchRequest, resp *SearchResponse) e
 	return nil
 }
 
-func (s *Service) Count(req struct{}, resp *struct{ Count int64 }) error {
+// Count returns the total number of records in the vector store.
+func (s *Service) Count(_ struct{}, resp *struct{ Count int64 }) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
 	}
@@ -191,6 +228,7 @@ func (s *Service) Count(req struct{}, resp *struct{ Count int64 }) error {
 	return nil
 }
 
+// Insert adds new records to the vector store.
 func (s *Service) Insert(req InsertRequest, resp *InsertResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -202,6 +240,7 @@ func (s *Service) Insert(req InsertRequest, resp *InsertResponse) error {
 	return err
 }
 
+// DeleteByPrefix removes records that match a given prefix and project ID.
 func (s *Service) DeleteByPrefix(req DeleteRequest, resp *DeleteResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -213,6 +252,7 @@ func (s *Service) DeleteByPrefix(req DeleteRequest, resp *DeleteResponse) error 
 	return err
 }
 
+// ClearProject removes all records for a specific project ID.
 func (s *Service) ClearProject(req DeleteRequest, resp *DeleteResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -224,6 +264,7 @@ func (s *Service) ClearProject(req DeleteRequest, resp *DeleteResponse) error {
 	return err
 }
 
+// GetStatus retrieves the indexing status of a specific project.
 func (s *Service) GetStatus(req StatusRequest, resp *StatusResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -236,7 +277,8 @@ func (s *Service) GetStatus(req StatusRequest, resp *StatusResponse) error {
 	return nil
 }
 
-func (s *Service) GetAllStatuses(req StatusRequest, resp *StatusResponse) error {
+// GetAllStatuses retrieves the indexing status of all active projects.
+func (s *Service) GetAllStatuses(_ StatusRequest, resp *StatusResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
 	}
@@ -248,6 +290,7 @@ func (s *Service) GetAllStatuses(req StatusRequest, resp *StatusResponse) error 
 	return nil
 }
 
+// GetPathHashMapping returns the path-to-hash mapping for a project ID.
 func (s *Service) GetPathHashMapping(req MappingRequest, resp *MappingResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -260,7 +303,8 @@ func (s *Service) GetPathHashMapping(req MappingRequest, resp *MappingResponse) 
 	return nil
 }
 
-func (s *Service) GetAllRecords(req StatusRequest, resp *SearchResponse) error {
+// GetAllRecords retrieves all records from the vector store.
+func (s *Service) GetAllRecords(_ StatusRequest, resp *SearchResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
 	}
@@ -272,7 +316,8 @@ func (s *Service) GetAllRecords(req StatusRequest, resp *SearchResponse) error {
 	return nil
 }
 
-func (s *Service) GetAllMetadata(req StatusRequest, resp *SearchResponse) error {
+// GetAllMetadata retrieves only the metadata for all records in the store.
+func (s *Service) GetAllMetadata(_ StatusRequest, resp *SearchResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
 	}
@@ -284,6 +329,7 @@ func (s *Service) GetAllMetadata(req StatusRequest, resp *SearchResponse) error 
 	return nil
 }
 
+// GetByPath retrieves records matching a specific file path and project ID.
 func (s *Service) GetByPath(req DeleteRequest, resp *SearchResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -296,6 +342,7 @@ func (s *Service) GetByPath(req DeleteRequest, resp *SearchResponse) error {
 	return nil
 }
 
+// GetByPrefix retrieves records matching a path prefix and project ID.
 func (s *Service) GetByPrefix(req DeleteRequest, resp *SearchResponse) error {
 	if s.Store == nil {
 		return fmt.Errorf("master store not initialized")
@@ -308,10 +355,12 @@ func (s *Service) GetByPrefix(req DeleteRequest, resp *SearchResponse) error {
 	return nil
 }
 
+// ProgressResponse contains indexing progress information for all active projects.
 type ProgressResponse struct {
 	Progress map[string]string
 }
 
+// GetProgress retrieves the current indexing progress from the progress map.
 func (s *Service) GetProgress(_ StatusRequest, resp *ProgressResponse) error {
 	resp.Progress = make(map[string]string)
 	if s.ProgressMap != nil {
@@ -330,6 +379,7 @@ type MasterServer struct {
 	svc        *Service
 }
 
+// StartMasterServer initializes and starts the master daemon on the specified socket path.
 func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue chan string, store *db.Store, progressMap *sync.Map) (*MasterServer, error) {
 	svc := &Service{
 		Embedder:    embedder,
@@ -347,7 +397,7 @@ func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue 
 
 	// Check if a master is already listening on the socket before removing it.
 	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("master already running on %s", socketPath)
 	}
 	// Socket exists but is stale (no one listening) — safe to remove.
@@ -377,21 +427,24 @@ func StartMasterServer(socketPath string, embedder indexer.Embedder, indexQueue 
 	}, nil
 }
 
+// UpdateEmbedder dynamically updates the embedding engine used by the server.
 func (s *MasterServer) UpdateEmbedder(e indexer.Embedder) {
 	if s.svc != nil {
 		s.svc.Embedder = e
 	}
 }
 
+// UpdateStore dynamically updates the database store used by the server.
 func (s *MasterServer) UpdateStore(st *db.Store) {
 	if s.svc != nil {
 		s.svc.Store = st
 	}
 }
 
+// Close gracefully shuts down the master server and removes its socket file.
 func (s *MasterServer) Close() {
 	if s.listener != nil {
-		s.listener.Close()
+		_ = s.listener.Close()
 	}
 	if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
 		slog.Warn("Failed to remove socket file on close", "path", s.socketPath, "error", err)
@@ -403,16 +456,18 @@ type Client struct {
 	socketPath string
 }
 
+// NewClient returns a new RPC client for interacting with the master daemon.
 func NewClient(socketPath string) *Client {
 	return &Client{socketPath: socketPath}
 }
 
+// TriggerIndex requests the master server to start indexing a project path.
 func (c *Client) TriggerIndex(path string) error {
 	client, err := rpc.Dial("unix", c.socketPath)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }() 
 
 	var resp IndexResponse
 	err = client.Call("VectorDaemon.IndexProject", IndexRequest{Path: path}, &resp)
@@ -422,12 +477,13 @@ func (c *Client) TriggerIndex(path string) error {
 	return nil
 }
 
+// GetProgress retrieves the latest indexing progress from the master server.
 func (c *Client) GetProgress() (map[string]string, error) {
 	client, err := rpc.Dial("unix", c.socketPath)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }() 
 
 	var resp ProgressResponse
 	if err := client.Call("VectorDaemon.GetProgress", StatusRequest{}, &resp); err != nil {
@@ -441,16 +497,18 @@ type RemoteEmbedder struct {
 	socketPath string
 }
 
+// NewRemoteEmbedder returns an embedder that delegates operations to the master daemon.
 func NewRemoteEmbedder(socketPath string) *RemoteEmbedder {
 	return &RemoteEmbedder{socketPath: socketPath}
 }
 
+// Embed generates a single vector embedding by calling the master daemon.
 func (re *RemoteEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	client, err := rpc.Dial("unix", re.socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to master daemon: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }() 
 
 	var resp EmbedResponse
 	// RPC calls don't natively support context propagation easily in net/rpc,
@@ -468,17 +526,18 @@ func (re *RemoteEmbedder) Embed(ctx context.Context, text string) ([]float32, er
 		return resp.Embedding, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(30 * time.Second):
+	case <-time.After(EmbedTimeout):
 		return nil, fmt.Errorf("embedding RPC timeout")
 	}
 }
 
+// EmbedBatch generates multiple vector embeddings by calling the master daemon.
 func (re *RemoteEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	client, err := rpc.Dial("unix", re.socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to master daemon: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }() 
 
 	var resp EmbedBatchResponse
 	done := make(chan error, 1)
@@ -494,7 +553,7 @@ func (re *RemoteEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]f
 		return resp.Embeddings, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(60 * time.Second):
+	case <-time.After(BatchEmbedTimeout):
 		return nil, fmt.Errorf("embedding batch RPC timeout")
 	}
 }
@@ -504,6 +563,7 @@ type RemoteStore struct {
 	socketPath string
 }
 
+// NewRemoteStore returns a store that delegates database operations to the master daemon.
 func NewRemoteStore(socketPath string) *RemoteStore {
 	return &RemoteStore{socketPath: socketPath}
 }
@@ -513,80 +573,93 @@ func (rs *RemoteStore) call(method string, req any, resp any) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to master daemon: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }() 
 	return client.Call("VectorDaemon."+method, req, resp)
 }
 
-func (rs *RemoteStore) Search(ctx context.Context, embedding []float32, topK int, pids []string, category string) ([]db.Record, error) {
+// Search performs a semantic search via the master daemon RPC interface.
+func (rs *RemoteStore) Search(_ context.Context, embedding []float32, topK int, pids []string, category string) ([]db.Record, error) {
 	var resp SearchResponse
 	err := rs.call("Search", SearchRequest{Embedding: embedding, TopK: topK, PIDs: pids, Category: category}, &resp)
 	return resp.Records, err
 }
 
-func (rs *RemoteStore) HybridSearch(ctx context.Context, query string, embedding []float32, topK int, pids []string, category string) ([]db.Record, error) {
+// HybridSearch performs a hybrid search via the master daemon RPC interface.
+func (rs *RemoteStore) HybridSearch(_ context.Context, query string, embedding []float32, topK int, pids []string, category string) ([]db.Record, error) {
 	var resp SearchResponse
 	err := rs.call("HybridSearch", HybridSearchRequest{Query: query, Embedding: embedding, TopK: topK, PIDs: pids, Category: category}, &resp)
 	return resp.Records, err
 }
 
-func (rs *RemoteStore) Insert(ctx context.Context, records []db.Record) error {
+// Insert adds records to the database via the master daemon RPC interface.
+func (rs *RemoteStore) Insert(_ context.Context, records []db.Record) error {
 	var resp InsertResponse
 	return rs.call("Insert", InsertRequest{Records: records}, &resp)
 }
 
-func (rs *RemoteStore) DeleteByPrefix(ctx context.Context, prefix string, projectID string) error {
+// DeleteByPrefix removes records via the master daemon RPC interface.
+func (rs *RemoteStore) DeleteByPrefix(_ context.Context, prefix string, projectID string) error {
 	var resp DeleteResponse
 	return rs.call("DeleteByPrefix", DeleteRequest{Prefix: prefix, ProjectID: projectID}, &resp)
 }
 
-func (rs *RemoteStore) ClearProject(ctx context.Context, projectID string) error {
+// ClearProject removes all project records via the master daemon RPC interface.
+func (rs *RemoteStore) ClearProject(_ context.Context, projectID string) error {
 	var resp DeleteResponse
 	return rs.call("ClearProject", DeleteRequest{ProjectID: projectID}, &resp)
 }
 
-func (rs *RemoteStore) GetStatus(ctx context.Context, projectID string) (string, error) {
+// GetStatus retrieves project status via the master daemon RPC interface.
+func (rs *RemoteStore) GetStatus(_ context.Context, projectID string) (string, error) {
 	var resp StatusResponse
 	err := rs.call("GetStatus", StatusRequest{ProjectID: projectID}, &resp)
 	return resp.Status, err
 }
 
-func (rs *RemoteStore) GetAllStatuses(ctx context.Context) (map[string]string, error) {
+// GetAllStatuses retrieves all project statuses via the master daemon RPC interface.
+func (rs *RemoteStore) GetAllStatuses(_ context.Context) (map[string]string, error) {
 	var resp StatusResponse
 	err := rs.call("GetAllStatuses", StatusRequest{}, &resp)
 	return resp.AllStatuses, err
 }
 
-func (rs *RemoteStore) GetPathHashMapping(ctx context.Context, projectID string) (map[string]string, error) {
+// GetPathHashMapping retrieves path-to-hash mappings via the master daemon RPC interface.
+func (rs *RemoteStore) GetPathHashMapping(_ context.Context, projectID string) (map[string]string, error) {
 	var resp MappingResponse
 	err := rs.call("GetPathHashMapping", MappingRequest{ProjectID: projectID}, &resp)
 	return resp.Mapping, err
 }
 
-func (rs *RemoteStore) GetAllRecords(ctx context.Context) ([]db.Record, error) {
+// GetAllRecords retrieves all records via the master daemon RPC interface.
+func (rs *RemoteStore) GetAllRecords(_ context.Context) ([]db.Record, error) {
 	var resp SearchResponse
 	err := rs.call("GetAllRecords", StatusRequest{}, &resp)
 	return resp.Records, err
 }
 
-func (rs *RemoteStore) GetAllMetadata(ctx context.Context) ([]db.Record, error) {
+// GetAllMetadata retrieves record metadata via the master daemon RPC interface.
+func (rs *RemoteStore) GetAllMetadata(_ context.Context) ([]db.Record, error) {
 	var resp SearchResponse
 	err := rs.call("GetAllMetadata", StatusRequest{}, &resp)
 	return resp.Records, err
 }
 
-func (rs *RemoteStore) GetByPath(ctx context.Context, path string, projectID string) ([]db.Record, error) {
+// GetByPath retrieves records by file path via the master daemon RPC interface.
+func (rs *RemoteStore) GetByPath(_ context.Context, path string, projectID string) ([]db.Record, error) {
 	var resp SearchResponse
 	err := rs.call("GetByPath", DeleteRequest{Prefix: path, ProjectID: projectID}, &resp)
 	return resp.Records, err
 }
 
-func (rs *RemoteStore) GetByPrefix(ctx context.Context, prefix string, projectID string) ([]db.Record, error) {
+// GetByPrefix retrieves records by prefix via the master daemon RPC interface.
+func (rs *RemoteStore) GetByPrefix(_ context.Context, prefix string, projectID string) ([]db.Record, error) {
 	var resp SearchResponse
 	err := rs.call("GetByPrefix", DeleteRequest{Prefix: prefix, ProjectID: projectID}, &resp)
 	return resp.Records, err
 }
 
-func (rs *RemoteStore) LexicalSearch(ctx context.Context, query string, topK int, projectIDs []string, category string) ([]db.Record, error) {
+// LexicalSearch performs a keyword search via the master daemon RPC interface.
+func (rs *RemoteStore) LexicalSearch(_ context.Context, query string, topK int, projectIDs []string, category string) ([]db.Record, error) {
 	var resp SearchResponse
 	// We'll reuse HybridSearchRequest structure or create a new LexicalSearchRequest.
 	// For simplicity, let's just use HybridSearchRequest but the master will call LexicalSearch.
@@ -596,6 +669,7 @@ func (rs *RemoteStore) LexicalSearch(ctx context.Context, query string, topK int
 	return resp.Records, err
 }
 
+// Count returns the total records in the store via the master daemon RPC interface.
 func (rs *RemoteStore) Count() int64 {
 	var resp struct {
 		Count int64
@@ -607,12 +681,13 @@ func (rs *RemoteStore) Count() int64 {
 	return resp.Count
 }
 
-func (rs *RemoteStore) SetStatus(ctx context.Context, projectID string, status string) error {
+func (rs *RemoteStore) SetStatus(_ context.Context, projectID string, status string) error {
 	// For now, let's just let slaves read status. Setting status is usually master's job during indexing.
 	return nil
 }
 
-func (rs *RemoteStore) SearchWithScore(ctx context.Context, queryEmbedding []float32, topK int, pids []string, category string) ([]db.Record, []float32, error) {
+// SearchWithScore performs a semantic search and returns scores via the master daemon RPC interface.
+func (rs *RemoteStore) SearchWithScore(_ context.Context, queryEmbedding []float32, topK int, pids []string, category string) ([]db.Record, []float32, error) {
 	var resp SearchResponse
 	err := rs.call("Search", SearchRequest{Embedding: queryEmbedding, TopK: topK, PIDs: pids, Category: category}, &resp)
 	if err != nil {
@@ -620,12 +695,13 @@ func (rs *RemoteStore) SearchWithScore(ctx context.Context, queryEmbedding []flo
 	}
 	return resp.Records, resp.Scores, nil
 }
+// RerankBatch reranks multiple texts relative to a query via the master daemon.
 func (re *RemoteEmbedder) RerankBatch(ctx context.Context, query string, texts []string) ([]float32, error) {
 	client, err := rpc.Dial("unix", re.socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to master daemon: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }() 
 
 	var resp RerankBatchResponse
 	done := make(chan error, 1)
@@ -641,7 +717,7 @@ func (re *RemoteEmbedder) RerankBatch(ctx context.Context, query string, texts [
 		return resp.Scores, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(120 * time.Second):
+	case <-time.After(RerankTimeout):
 		return nil, fmt.Errorf("rerank batch RPC timeout")
 	}
 }

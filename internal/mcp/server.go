@@ -78,13 +78,24 @@ type Server struct {
 	progressMap      *sync.Map                                                                                      // Thread-safe map for tracking indexing progress
 	watcherResetChan chan string                                                                                    // Channel to signal file watcher resets
 	monorepoResolver *indexer.WorkspaceResolver                                                                     // Resolver for monorepo package structures
-	lspSessions      map[string]*lsp.LSPManager                                                                     // Map of root paths to LSP managers
+	lspSessions      map[string]lspManagerInterface                                                                 // Map of root paths to LSP managers
 	lspMu            sync.Mutex                                                                                     // Mutex for lspSessions map
 	throttler        *system.MemThrottler                                                                           // Shared system memory throttler
 	safety           *mutation.SafetyChecker                                                                        // Safety checker for mutation integrity
 	graph            *db.KnowledgeGraph                                                                             // Code relationship graph for reasoning
 	pathValidator    *pathguard.Validator                                                                           // Path validator for security
 	toolHandlers     map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) // Map of tool names to handlers
+}
+
+// lspManagerInterface defines the interface for LSP manager, allowing for mocks in tests.
+type lspManagerInterface interface {
+	EnsureStarted(ctx context.Context) error
+	Call(ctx context.Context, method string, params any, result any) error
+	Notify(ctx context.Context, method string, params any) error
+	RegisterNotificationHandler(method string, handler func([]byte))
+	Stop() error
+	GetDefinition(ctx context.Context, uri string, line, character int) ([]lsp.Location, error)
+	GetReferences(ctx context.Context, uri string, line, character int) ([]lsp.Location, error)
 }
 
 // NewServer initializes and returns a new Server instance.
@@ -103,7 +114,7 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 		progressMap:      progress,
 		watcherResetChan: resetChan,
 		monorepoResolver: resolver,
-		lspSessions:      make(map[string]*lsp.LSPManager),
+		lspSessions:      make(map[string]lspManagerInterface),
 		throttler:        throttler,
 		graph:            db.NewKnowledgeGraph(),
 		toolHandlers:     make(map[string]func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)),
@@ -119,9 +130,16 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 	srv.pathValidator = pathValidator
 
 	// Initialize SafetyChecker with a provider that uses the server's session management
-	srv.safety = mutation.NewSafetyChecker(func(path string) (*lsp.LSPManager, error) {
-		manager, _, err := srv.getLSPManagerForFile(path)
-		return manager, err
+	srv.safety = mutation.NewSafetyChecker(func(path string) (*lsp.Manager, error) {
+		manager, _, err := srv.getManagerForFile(path)
+		if manager == nil {
+			return nil, err
+		}
+		m, ok := manager.(*lsp.Manager)
+		if !ok {
+			return nil, fmt.Errorf("unexpected manager type")
+		}
+		return m, err
 	})
 
 	srv.registerResources()
@@ -130,9 +148,9 @@ func NewServer(cfg *config.Config, logger *slog.Logger, storeGetter func(ctx con
 	return srv
 }
 
-// getLSPManagerForFile resolves the workspace root for a given file and returns
-// the appropriate LSPManager session, starting it if necessary.
-func (s *Server) getLSPManagerForFile(filePath string) (*lsp.LSPManager, string, error) {
+// getManagerForFile resolves the workspace root for a given file and returns
+// the appropriate Manager session, starting it if necessary.
+func (s *Server) getManagerForFile(filePath string) (lspManagerInterface, string, error) {
 	// 1. Resolve workspace root
 	root, err := util.FindWorkspaceRoot(filePath)
 	if err != nil {
@@ -156,7 +174,7 @@ func (s *Server) getLSPManagerForFile(filePath string) (*lsp.LSPManager, string,
 		return manager, root, nil
 	}
 
-	manager := lsp.NewLSPManager(cmd, root, s.logger, s.throttler)
+	manager := lsp.NewManager(cmd, root, s.logger, s.throttler)
 	s.lspSessions[sessionKey] = manager
 	return manager, root, nil
 }
@@ -207,7 +225,7 @@ func (s *Server) registerResources() {
 	s.MCPServer.AddResource(mcp.NewResource("index://status", "Indexing Status",
 		mcp.WithResourceDescription("Current indexing status and background progress diagnostics."),
 		mcp.WithMIMEType("application/json"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	), func(ctx context.Context, _ mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 		status := "Idle"
 		if s.progressMap != nil {
 			if val, ok := s.progressMap.Load(s.cfg.ProjectRoot); ok {
@@ -242,7 +260,7 @@ func (s *Server) registerResources() {
 	s.MCPServer.AddResource(mcp.NewResource("config://project", "Project Configuration",
 		mcp.WithResourceDescription("Active configuration for the vector-mcp-go server."),
 		mcp.WithMIMEType("application/json"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	), func(_ context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 		jsonBytes, _ := json.MarshalIndent(s.cfg, "", "  ")
 		return []mcp.ResourceContents{
 			mcp.TextResourceContents{
@@ -256,7 +274,7 @@ func (s *Server) registerResources() {
 	s.MCPServer.AddResource(mcp.NewResource("docs://guide", "Usage Guide",
 		mcp.WithResourceDescription("Quick guide on how to use vector-mcp-go effectively."),
 		mcp.WithMIMEType("text/markdown"),
-	), func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	), func(_ context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 		guide := `
 # Vector MCP Go Usage Guide
 
@@ -292,7 +310,7 @@ func (s *Server) registerPrompts() {
 		mcp.WithPromptDescription("Generates a highly contextual prompt to write professional documentation."),
 		mcp.WithArgument("file_path", mcp.ArgumentDescription("The relative path of the file"), mcp.RequiredArgument()),
 		mcp.WithArgument("entity_name", mcp.ArgumentDescription("The name of the function or class to document"), mcp.RequiredArgument()),
-	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	), func(_ context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		filePath := request.Params.Arguments["file_path"]
 		entityName := request.Params.Arguments["entity_name"]
 
@@ -316,7 +334,7 @@ func (s *Server) registerPrompts() {
 	// analyze-architecture produces an architecture-review prompt for system-level reasoning.
 	s.MCPServer.AddPrompt(mcp.NewPrompt("analyze-architecture",
 		mcp.WithPromptDescription("Analyzes the project architecture and generates a summary prompt."),
-	), func(ctx context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	), func(_ context.Context, request mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		prompt := "Analyze the current project's architecture. Focus on package boundaries, dependency flow, and key design patterns used. If this is a monorepo, identify the core packages and their interactions."
 
 		return &mcp.GetPromptResult{
@@ -419,6 +437,53 @@ func (s *Server) registerTools() {
 		mcp.WithDescription("Traces the usage of a specific field or symbol across the project."),
 		mcp.WithString("field_name", mcp.Description("The name of the field or symbol to trace")),
 	), s.handleTraceDataFlow)
+
+	// verify_implementation_gap compares the current state of a file or directory against its structural design.
+	addTool(mcp.NewTool("verify_implementation_gap",
+		mcp.WithDescription("Analyzes code for missing implementation pieces based on structural mapping and docstrings."),
+		mcp.WithString("path", mcp.Description("Target path to analyze.")),
+	), s.handleVerifyImplementationGap)
+
+	// get_code_history retrieves recent git history for a specific file.
+	addTool(mcp.NewTool("get_code_history",
+		mcp.WithDescription("Retrieves recent git commit history for a specific file to understand recent changes."),
+		mcp.WithString("file_path", mcp.Description("Path to the file to check history for.")),
+	), s.handleGetCodeHistory)
+
+	// get_summarized_context provides a high-level summary of the codebase context for a given path.
+	addTool(mcp.NewTool("get_summarized_context",
+		mcp.WithDescription("Generates a high-level, summarized view of the code and dependencies for a specific file or directory."),
+		mcp.WithString("path", mcp.Description("Path to summarize context for.")),
+	), s.handleGetSummarizedContext)
+
+	// verify_proposed_change simulates applying a code change and checks for potential regressions or architectural violations.
+	addTool(mcp.NewTool("verify_proposed_change",
+		mcp.WithDescription("Validates a proposed code change against architectural rules and safety constraints."),
+		mcp.WithString("path", mcp.Description("Target file path for the change.")),
+		mcp.WithString("content", mcp.Description("The proposed new content.")),
+	), s.handleVerifyProposedChange)
+
+	// distill_knowledge extracts key information (KIs) from code and stores them as indexed context.
+	addTool(mcp.NewTool("distill_knowledge",
+		mcp.WithDescription("Extracts and indexes key architectural or logic knowledge from a file or directory for better semantic retrieval."),
+		mcp.WithString("path", mcp.Description("Target path to distill knowledge from.")),
+	), s.handleDistillKnowledge)
+
+	// get_impact_radius_precise performs a high-precision impact analysis for a symbol using the knowledge graph.
+	addTool(mcp.NewTool("get_impact_radius_precise",
+		mcp.WithDescription("Uses the knowledge graph to precisely identify all entities affected by changing a specific symbol."),
+		mcp.WithString("symbol_name", mcp.Description("The name of the symbol to analyze.")),
+	), s.handleGetImpactRadiusPrecise)
+
+	// find_missing_tests analyzes the project to identify functions and methods that lack unit tests.
+	addTool(mcp.NewTool("find_missing_tests",
+		mcp.WithDescription("Analyzes the project to identify functions and methods that lack unit tests based on naming conventions and file existence."),
+	), s.handleFindMissingTests)
+
+	// list_api_endpoints discovers and lists all defined API endpoints across the project.
+	addTool(mcp.NewTool("list_api_endpoints",
+		mcp.WithDescription("Discovers and lists all defined API endpoints (GET, POST, etc.) across the project by analyzing route registrations and handle functions."),
+	), s.handleListAPIEndpoints)
 }
 
 func (s *Server) wrapToolHandler(name string, handler func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {

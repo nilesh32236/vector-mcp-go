@@ -117,9 +117,9 @@ func TestMockStore_CallCounts(t *testing.T) {
 	ctx := context.Background()
 
 	// Make some calls
-	store.Search(ctx, []float32{}, 10, nil, "")
-	store.Search(ctx, []float32{}, 10, nil, "")
-	store.Insert(ctx, []db.Record{})
+	_, _ = store.Search(ctx, []float32{}, 10, nil, "")
+	_, _ = store.Search(ctx, []float32{}, 10, nil, "")
+	_ = store.Insert(ctx, []db.Record{})
 
 	searchCalls, insertCalls := store.GetCallCounts()
 	if searchCalls != 2 {

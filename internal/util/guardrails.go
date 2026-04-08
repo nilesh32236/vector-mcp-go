@@ -1,46 +1,47 @@
+// Package util provides common utility functions used throughout the codebase.
 package util
 
 // ClampInt clamps value into the inclusive [min, max] range.
 // If min is greater than max, the bounds are swapped.
-func ClampInt(value, min, max int) int {
-	if min > max {
-		min, max = max, min
+func ClampInt(value, low, high int) int {
+	if low > high {
+		low, high = high, low
 	}
-	if value < min {
-		return min
+	if value < low {
+		return low
 	}
-	if value > max {
-		return max
+	if value > high {
+		return high
 	}
 	return value
 }
 
 // ClampInt64 clamps value into the inclusive [min, max] range.
 // If min is greater than max, the bounds are swapped.
-func ClampInt64(value, min, max int64) int64 {
-	if min > max {
-		min, max = max, min
+func ClampInt64(value, low, high int64) int64 {
+	if low > high {
+		low, high = high, low
 	}
-	if value < min {
-		return min
+	if value < low {
+		return low
 	}
-	if value > max {
-		return max
+	if value > high {
+		return high
 	}
 	return value
 }
 
 // ClampFloat64 clamps value into the inclusive [min, max] range.
 // If min is greater than max, the bounds are swapped.
-func ClampFloat64(value, min, max float64) float64 {
-	if min > max {
-		min, max = max, min
+func ClampFloat64(value, low, high float64) float64 {
+	if low > high {
+		low, high = high, low
 	}
-	if value < min {
-		return min
+	if value < low {
+		return low
 	}
-	if value > max {
-		return max
+	if value > high {
+		return high
 	}
 	return value
 }

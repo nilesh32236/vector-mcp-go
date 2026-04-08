@@ -44,16 +44,16 @@ func TestLRUCache_Eviction(t *testing.T) {
 	ctx := context.Background()
 
 	// Add 3 items
-	cache.Set(ctx, "key1", "value1", 0)
-	cache.Set(ctx, "key2", "value2", 0)
-	cache.Set(ctx, "key3", "value3", 0)
+	_ = cache.Set(ctx, "key1", "value1", 0)
+	_ = cache.Set(ctx, "key2", "value2", 0)
+	_ = cache.Set(ctx, "key3", "value3", 0)
 
 	if cache.Size() != 3 {
 		t.Errorf("expected size 3, got %d", cache.Size())
 	}
 
 	// Add a 4th item - should evict key1 (oldest)
-	cache.Set(ctx, "key4", "value4", 0)
+	_ = cache.Set(ctx, "key4", "value4", 0)
 
 	if cache.Size() != 3 {
 		t.Errorf("expected size 3, got %d", cache.Size())
@@ -77,10 +77,10 @@ func TestLRUCache_Update(t *testing.T) {
 	ctx := context.Background()
 
 	// Set initial value
-	cache.Set(ctx, "key1", "value1", 0)
+	_ = cache.Set(ctx, "key1", "value1", 0)
 
 	// Update value
-	cache.Set(ctx, "key1", "value2", 0)
+	_ = cache.Set(ctx, "key1", "value2", 0)
 
 	// Size should still be 1
 	if cache.Size() != 1 {
@@ -101,8 +101,8 @@ func TestLRUCache_Delete(t *testing.T) {
 	cache := NewLRUCache()
 	ctx := context.Background()
 
-	cache.Set(ctx, "key1", "value1", 0)
-	cache.Delete(ctx, "key1")
+	_ = cache.Set(ctx, "key1", "value1", 0)
+	_ = cache.Delete(ctx, "key1")
 
 	_, found := cache.Get(ctx, "key1")
 	if found {
@@ -114,11 +114,11 @@ func TestLRUCache_Clear(t *testing.T) {
 	cache := NewLRUCache()
 	ctx := context.Background()
 
-	cache.Set(ctx, "key1", "value1", 0)
-	cache.Set(ctx, "key2", "value2", 0)
-	cache.Set(ctx, "key3", "value3", 0)
+	_ = cache.Set(ctx, "key1", "value1", 0)
+	_ = cache.Set(ctx, "key2", "value2", 0)
+	_ = cache.Set(ctx, "key3", "value3", 0)
 
-	cache.Clear()
+	_ = cache.Clear()
 
 	if cache.Size() != 0 {
 		t.Errorf("expected size 0, got %d", cache.Size())
@@ -130,7 +130,7 @@ func TestLRUCache_TTL(t *testing.T) {
 	ctx := context.Background()
 
 	// Set with short TTL
-	cache.Set(ctx, "key1", "value1", 100*time.Millisecond)
+	_ = cache.Set(ctx, "key1", "value1", 100*time.Millisecond)
 
 	// Should exist immediately
 	_, found := cache.Get(ctx, "key1")
@@ -158,9 +158,9 @@ func TestLRUCache_OnEvict(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	cache.Set(ctx, "key1", "value1", 0)
-	cache.Set(ctx, "key2", "value2", 0)
-	cache.Set(ctx, "key3", "value3", 0) // Should evict key1
+	_ = cache.Set(ctx, "key1", "value1", 0)
+	_ = cache.Set(ctx, "key2", "value2", 0)
+	_ = cache.Set(ctx, "key3", "value3", 0) // Should evict key1
 
 	if evicted["key1"] != "value1" {
 		t.Errorf("expected key1 to be evicted, got evicted: %v", evicted)
@@ -250,7 +250,7 @@ func TestSearchResultCache_InvalidateByProject(t *testing.T) {
 	results := []string{"result1"}
 	projectIDs := []string{"project1"}
 
-	cache.Set(ctx, "query", projectIDs, results)
+	_ = cache.Set(ctx, "query", projectIDs, results)
 
 	// Should exist
 	_, found := cache.Get(ctx, "query", projectIDs)
@@ -281,7 +281,7 @@ func TestStatsCache(t *testing.T) {
 	}
 
 	// Set and hit
-	cache.Set(ctx, "key1", "value1", 0)
+	_ = cache.Set(ctx, "key1", "value1", 0)
 	cache.Get(ctx, "key1")
 
 	stats = cache.GetStats()
@@ -295,15 +295,15 @@ func TestLRUCache_LRUOrder(t *testing.T) {
 	ctx := context.Background()
 
 	// Add items
-	cache.Set(ctx, "key1", "value1", 0)
-	cache.Set(ctx, "key2", "value2", 0)
-	cache.Set(ctx, "key3", "value3", 0)
+	_ = cache.Set(ctx, "key1", "value1", 0)
+	_ = cache.Set(ctx, "key2", "value2", 0)
+	_ = cache.Set(ctx, "key3", "value3", 0)
 
 	// Access key1 to make it recently used
 	cache.Get(ctx, "key1")
 
 	// Add new item - should evict key2 (now oldest)
-	cache.Set(ctx, "key4", "value4", 0)
+	_ = cache.Set(ctx, "key4", "value4", 0)
 
 	// key1 should still exist (was accessed)
 	_, found := cache.Get(ctx, "key1")
@@ -370,7 +370,7 @@ func BenchmarkLRUCache_Set(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cache.Set(ctx, string(rune(i)), i, 0)
+		_ = cache.Set(ctx, string(rune(i)), i, 0)
 	}
 }
 
@@ -380,7 +380,7 @@ func BenchmarkLRUCache_Get(b *testing.B) {
 
 	// Pre-populate
 	for i := 0; i < 10000; i++ {
-		cache.Set(ctx, string(rune(i)), i, 0)
+		_ = cache.Set(ctx, string(rune(i)), i, 0)
 	}
 
 	b.ResetTimer()
@@ -396,7 +396,7 @@ func BenchmarkEmbeddingCache(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cache.SetEmbedding(ctx, string(rune(i)), embedding)
-		cache.GetEmbedding(ctx, string(rune(i)))
+		_ = cache.SetEmbedding(ctx, string(rune(i)), embedding)
+		_, _ = cache.GetEmbedding(ctx, string(rune(i)))
 	}
 }

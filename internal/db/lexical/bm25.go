@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	bm25K1 = 1.2
-	bm25B  = 0.75
+	bm25K1               = 1.2
+	bm25B                = 0.75
+	BM25Offset           = 0.5
+	TokenExpansionFactor = 2
+	DefaultFragments     = 4
 )
 
 // Posting holds a document ID and its term frequency.
@@ -140,7 +143,7 @@ func (idx *Index) Search(query string, topK int) []Result {
 		}
 		// IDF component
 		df := float64(len(posts))
-		idf := math.Log((N-df+0.5)/(df+0.5) + 1)
+		idf := math.Log((N-df+BM25Offset)/(df+BM25Offset) + 1)
 
 		for _, p := range posts {
 			dl := float64(idx.docLen[p.DocID])
@@ -178,7 +181,7 @@ func tokenize(text string) []string {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
 	})
 
-	tokens := make([]string, 0, len(rawTokens)*2)
+	tokens := make([]string, 0, len(rawTokens)*TokenExpansionFactor)
 	for _, token := range rawTokens {
 		if token == "" {
 			continue
@@ -215,7 +218,7 @@ func splitIdentifier(token string) []string {
 		return nil
 	}
 
-	fragments := make([]string, 0, 4)
+	fragments := make([]string, 0, DefaultFragments)
 	start := 0
 	flush := func(end int) {
 		if end <= start {
