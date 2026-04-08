@@ -80,6 +80,7 @@ type Server struct {
 	monorepoResolver *indexer.WorkspaceResolver                                                                     // Resolver for monorepo package structures
 	lspSessions      map[string]lspManagerInterface                                                                 // Map of root paths to LSP managers
 	lspMu            sync.Mutex                                                                                     // Mutex for lspSessions map
+	rootMu           sync.RWMutex                                                                                   // Mutex for cfg.ProjectRoot, pathValidator, monorepoResolver
 	throttler        *system.MemThrottler                                                                           // Shared system memory throttler
 	safety           *mutation.SafetyChecker                                                                        // Safety checker for mutation integrity
 	graph            *db.KnowledgeGraph                                                                             // Code relationship graph for reasoning
@@ -155,7 +156,7 @@ func (s *Server) getManagerForFile(filePath string) (lspManagerInterface, string
 	root, err := util.FindWorkspaceRoot(filePath)
 	if err != nil {
 		s.logger.Warn("Failed to find workspace root, falling back to project root", "path", filePath, "error", err)
-		root = s.cfg.ProjectRoot
+		root = s.projectRoot()
 	}
 
 	// 2. Determine LSP command for file extension
@@ -177,6 +178,32 @@ func (s *Server) getManagerForFile(filePath string) (lspManagerInterface, string
 	manager := lsp.NewManager(cmd, root, s.logger, s.throttler)
 	s.lspSessions[sessionKey] = manager
 	return manager, root, nil
+}
+
+// projectRoot returns the current project root under a read lock.
+func (s *Server) projectRoot() string {
+	s.rootMu.RLock()
+	defer s.rootMu.RUnlock()
+	return s.cfg.ProjectRoot
+}
+
+// validatePath validates a path against the current project root under a read lock.
+func (s *Server) validatePath(path string) (string, error) {
+	s.rootMu.RLock()
+	v := s.pathValidator
+	s.rootMu.RUnlock()
+	return v.ValidatePath(path)
+}
+
+// monorepoResolve resolves a dependency path via the monorepo resolver under a read lock.
+func (s *Server) monorepoResolve(dep string) (string, bool) {
+	s.rootMu.RLock()
+	r := s.monorepoResolver
+	s.rootMu.RUnlock()
+	if r == nil {
+		return "", false
+	}
+	return r.Resolve(dep)
 }
 
 // WithRemoteStore sets a remote store for the server, enabling it to act as a slave
@@ -227,8 +254,9 @@ func (s *Server) registerResources() {
 		mcp.WithMIMEType("application/json"),
 	), func(ctx context.Context, _ mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 		status := "Idle"
+		root := s.projectRoot()
 		if s.progressMap != nil {
-			if val, ok := s.progressMap.Load(s.cfg.ProjectRoot); ok {
+			if val, ok := s.progressMap.Load(root); ok {
 				status = val.(string)
 			}
 		}
@@ -240,7 +268,7 @@ func (s *Server) registerResources() {
 		}
 
 		data := map[string]any{
-			"project_root": s.cfg.ProjectRoot,
+			"project_root": root,
 			"status":       status,
 			"record_count": count,
 			"is_master":    s.remoteStore == nil,

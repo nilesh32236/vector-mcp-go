@@ -1,6 +1,5 @@
 package daemon
 
-
 import (
 	"context"
 	"sync"

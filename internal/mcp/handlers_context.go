@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nilesh32236/vector-mcp-go/internal/db"
 	"github.com/nilesh32236/vector-mcp-go/internal/indexer"
+	"github.com/nilesh32236/vector-mcp-go/internal/security/pathguard"
 )
 
 // handleSetProjectRoot updates the active project root directory and resets the file watcher.
@@ -21,8 +22,17 @@ func (s *Server) handleSetProjectRoot(_ context.Context, request mcp.CallToolReq
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
 	}
+
+	newValidator, err := pathguard.NewValidator(absPath, pathguard.DefaultOptions())
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to validate new project root: %v", err)), nil
+	}
+
+	s.rootMu.Lock()
 	s.cfg.ProjectRoot = absPath
-	s.monorepoResolver = indexer.InitResolver(s.cfg.ProjectRoot)
+	s.pathValidator = newValidator
+	s.monorepoResolver = indexer.InitResolver(absPath)
+	s.rootMu.Unlock()
 	select {
 	case s.watcherResetChan <- absPath:
 		return mcp.NewToolResultText(fmt.Sprintf("Project root updated to %s. File watcher is resetting.", absPath)), nil
@@ -39,7 +49,7 @@ func (s *Server) handleStoreContext(ctx context.Context, request mcp.CallToolReq
 	if text == "" {
 		return mcp.NewToolResultError("text is required"), nil
 	}
-	projectID := request.GetString("project_id", s.cfg.ProjectRoot)
+	projectID := request.GetString("project_id", s.projectRoot())
 	emb, err := s.embedder.Embed(ctx, text)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to generate embedding: %v", err)), nil

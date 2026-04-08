@@ -126,17 +126,17 @@ func isTreeSitterSupported(ext string) bool {
 // For HTML and CSS files, it extracts high-value blocks (tags, rulesets, and declarations)
 // and safely derives parent context without assuming fixed node shapes.
 const (
-	ExtGo = ".go"
-	ExtJS = ".js"
-	ExtJSX = ".jsx"
-	ExtTS = ".ts"
-	ExtTSX = ".tsx"
-	ExtPHP = ".php"
-	ExtPY = ".py"
-	ExtRS = ".rs"
-	ExtHTML = ".html"
-	ExtCSS = ".css"
-	TypeIdentifier = "type_identifier"
+	ExtGo               = ".go"
+	ExtJS               = ".js"
+	ExtJSX              = ".jsx"
+	ExtTS               = ".ts"
+	ExtTSX              = ".tsx"
+	ExtPHP              = ".php"
+	ExtPY               = ".py"
+	ExtRS               = ".rs"
+	ExtHTML             = ".html"
+	ExtCSS              = ".css"
+	TypeIdentifier      = "type_identifier"
 	TypeFieldIdentifier = "field_identifier"
 	MethodStatusDefined = "defined"
 )

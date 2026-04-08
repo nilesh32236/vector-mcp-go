@@ -45,7 +45,7 @@ func (s *Server) handleDeleteContext(ctx context.Context, request mcp.CallToolRe
 	if targetPath == "" {
 		return mcp.NewToolResultError("target_path is required"), nil
 	}
-	projectID := request.GetString("project_id", s.cfg.ProjectRoot)
+	projectID := request.GetString("project_id", s.projectRoot())
 
 	dryRun := false
 	if args, ok := request.Params.Arguments.(map[string]any); ok {
@@ -140,11 +140,11 @@ func (s *Server) handleGetIndexingDiagnostics(ctx context.Context, _ mcp.CallToo
 		return true
 	})
 
-	status, _ := store.GetStatus(ctx, s.cfg.ProjectRoot)
+	status, _ := store.GetStatus(ctx, s.projectRoot())
 
 	var out strings.Builder
 	out.WriteString("## 🛠️ Indexing Diagnostics\n\n")
-	fmt.Fprintf(&out, "**Active Project Root**: `%s`\n", s.cfg.ProjectRoot)
+	fmt.Fprintf(&out, "**Active Project Root**: `%s`\n", s.projectRoot())
 	fmt.Fprintf(&out, "**Global Index Status**: %s\n\n", status)
 
 	out.WriteString("### 🚀 Active Background Tasks\n")
@@ -171,12 +171,13 @@ func (s *Server) handleGetIndexingDiagnostics(ctx context.Context, _ mcp.CallToo
 
 // runStatus is a helper that compares disk files with the database to determine indexing health.
 func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, error) {
-	diskFiles, _ := indexer.ScanFiles(s.cfg.ProjectRoot)
-	dbMapping, _ := store.GetPathHashMapping(ctx, s.cfg.ProjectRoot)
+	root := s.projectRoot()
+	diskFiles, _ := indexer.ScanFiles(root)
+	dbMapping, _ := store.GetPathHashMapping(ctx, root)
 	var indexed, updated, missing []string
 	diskPaths := make(map[string]bool)
 	for _, absPath := range diskFiles {
-		relPath := config.GetRelativePath(absPath, s.cfg.ProjectRoot)
+		relPath := config.GetRelativePath(absPath, root)
 		diskPaths[relPath] = true
 		currentHash, _ := indexer.GetHash(absPath)
 		if dbHash, exists := dbMapping[relPath]; exists {
@@ -196,7 +197,7 @@ func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, err
 		}
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "🔍 Index Status for %s:\n", s.cfg.ProjectRoot)
+	fmt.Fprintf(&out, "🔍 Index Status for %s:\n", root)
 	fmt.Fprintf(&out, "✅ Fully Indexed: %d\n🔄 Modified: %d\n📂 Missing: %d\n🗑️ Deleted: %d\n", len(indexed), len(updated), len(missing), len(deleted))
 	if len(missing) > 0 {
 		out.WriteString("\n📂 Missing Files (Next to index):\n")
@@ -218,7 +219,7 @@ func (s *Server) runStatus(ctx context.Context, store IndexerStore) (string, err
 			fmt.Fprintf(&out, "  - %s\n", f)
 		}
 	}
-	status, _ := store.GetStatus(ctx, s.cfg.ProjectRoot)
+	status, _ := store.GetStatus(ctx, root)
 	if status != "" {
 		fmt.Fprintf(&out, "\n🛰️ Background Status (from DB): %s\n", status)
 	}
