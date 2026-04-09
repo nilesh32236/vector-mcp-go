@@ -82,3 +82,35 @@ func TestWorkerStatusUpdate(t *testing.T) {
 		t.Errorf("expected 'Completed' status in DB, got %s", dbStatus)
 	}
 }
+
+func TestNewIndexWorker(t *testing.T) {
+	cfg := &config.Config{}
+	logger := slog.Default()
+	queue := make(chan string)
+	progress := &sync.Map{}
+	storeGetter := func(ctx context.Context) (*db.Store, error) {
+		return nil, nil
+	}
+	embedder := &mockEmbedder{}
+
+	w := NewIndexWorker(cfg, logger, queue, progress, storeGetter, embedder)
+
+	if w.cfg != cfg {
+		t.Error("cfg not correctly assigned")
+	}
+	if w.logger != logger {
+		t.Error("logger not correctly assigned")
+	}
+	if w.indexQueue != queue {
+		t.Error("indexQueue not correctly assigned")
+	}
+	if w.progressMap != progress {
+		t.Error("progressMap not correctly assigned")
+	}
+	if w.storeGetter == nil {
+		t.Error("storeGetter not correctly assigned")
+	}
+	if w.embedder != embedder {
+		t.Error("embedder not correctly assigned")
+	}
+}
