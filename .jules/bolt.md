@@ -5,3 +5,7 @@
 ## 2026-04-06 - Remove strings.ToLower allocations from hot loops
 **Learning:** Calling `strings.ToLower` inside iteration loops (like per-line file scanning or graph node traversal) causes significant memory allocations and CPU overhead due to repeated string copying. A benchmark showed that hoisting `strings.ToLower` outside of hot loops, or early-returning on substring matches, reduces time overhead by roughly 30-40%.
 **Action:** Always hoist invariant string transformations (like lowercasing the search query) outside of hot loops. When iterating, prefer to pre-lower the entire text or only lower individual elements against a pre-lowered invariant.
+
+## 2026-04-09 - Incremental line counting in Chunking
+**Learning:** In string chunking/iteration loops where line numbers are tracked, recalculating line numbers from the beginning of the file (e.g. `strings.Count(string(runes[:i]), "\n")`) results in O(N^2) complexity and massive memory allocations.
+**Action:** Keep a running sum of line numbers. When moving to the next chunk, increment the line count by only counting the newlines in the newly processed (non-overlapping) segment of the text.
