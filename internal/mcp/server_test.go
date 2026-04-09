@@ -73,6 +73,7 @@ func TestIndexStatusTool(t *testing.T) {
 		localStoreGetter: localStoreGetter,
 		progressMap:      progressMap,
 		embedder:         &mockEmbedder{dim: 1024},
+		graph:            db.NewKnowledgeGraph(),
 	}
 
 	// Test HandleIndexStatus directly
@@ -140,13 +141,14 @@ func TestSearchCodebaseTool(t *testing.T) {
 		cfg:              cfg,
 		localStoreGetter: func(_ context.Context) (*db.Store, error) { return store, nil },
 		embedder:         &mockEmbedder{dim: 1024},
+		graph:            db.NewKnowledgeGraph(),
 	}
 
 	// Test with query
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "search_codebase"
 	req.Params.Arguments = map[string]any{
-		"query": "hello world",
+		"query": "test",
 	}
 
 	res, err := srv.handleSearchCodebase(ctx, req)
@@ -340,4 +342,127 @@ export class SharedUtils {
 			t.Errorf("did not expect interface User to be flagged as dead code")
 		}
 	})
+}
+
+func TestHandleSearchWorkspace(t *testing.T) {
+	ctx := context.Background()
+	dbPath := "./test_workspace_db"
+	_ = os.RemoveAll(dbPath)
+	defer func() { _ = os.RemoveAll(dbPath) }()
+
+	cfg := &config.Config{
+		ProjectRoot: dbPath,
+		DbPath:      dbPath,
+	}
+
+	store, _ := db.Connect(ctx, dbPath, "test_collection", 1024)
+
+	emb := make([]float32, 1024)
+	emb[0] = 1.0
+
+	// Insert dummy record for vector search and graph search
+	err := store.Insert(ctx, []db.Record{
+		{
+			ID:        "test-id-workspace-1",
+			Content:   "type MyInterface interface {}\nfunc (m *MyType) Implements() {}",
+			Embedding: emb,
+			Metadata: map[string]string{
+				"path":       "workspace.go",
+				"project_id": "/test/project",
+				"symbols":    "[\"MyInterface\", \"MyType\"]",
+				"category":   "code",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to insert: %v", err)
+	}
+
+	srv := &Server{
+		cfg:              cfg,
+		localStoreGetter: func(_ context.Context) (*db.Store, error) { return store, nil },
+		embedder:         &mockEmbedder{dim: 1024},
+		graph:            db.NewKnowledgeGraph(),
+		progressMap:      &sync.Map{},
+	}
+
+	tests := []struct {
+		name       string
+		action     string
+		limit      float64
+		query      string
+		wantError  bool
+		errMessage string
+	}{
+		{
+			name:      "vector search valid limit",
+			action:    "vector",
+			limit:     5,
+			query:     "test",
+			wantError: false,
+		},
+		{
+			name:      "regex search clamped lower limit",
+			action:    "regex",
+			limit:     0,
+			query:     "test",
+			wantError: false,
+		},
+		{
+			name:      "graph search clamped upper limit",
+			action:    "graph",
+			limit:     150,
+			query:     "MyInterface",
+			wantError: false,
+		},
+		{
+			name:      "index status action",
+			action:    "index_status",
+			limit:     10,
+			query:     "",
+			wantError: false,
+		},
+		{
+			name:       "invalid action",
+			action:     "invalid_action",
+			limit:      10,
+			query:      "test",
+			wantError:  true,
+			errMessage: "Invalid action: invalid_action. Must be 'vector', 'regex', 'graph', or 'index_status'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := mcp.CallToolRequest{}
+			req.Params.Name = "search_workspace"
+			req.Params.Arguments = map[string]any{
+				"action": tt.action,
+				"query":  tt.query,
+				"limit":  tt.limit,
+			}
+
+			res, err := srv.handleSearchWorkspace(ctx, req)
+			if err != nil {
+				t.Fatalf("handleSearchWorkspace returned error: %v", err)
+			}
+
+			if tt.wantError {
+				if !res.IsError {
+					t.Errorf("expected error result for action %s, but got success", tt.action)
+				}
+				if res.IsError {
+					content := res.Content[0].(mcp.TextContent).Text
+					if !strings.Contains(content, tt.errMessage) {
+						t.Errorf("expected error message %q, got %q", tt.errMessage, content)
+					}
+				}
+			} else {
+				if res.IsError {
+					content := res.Content[0].(mcp.TextContent).Text
+					t.Errorf("did not expect error for action %s, but got: %s", tt.action, content)
+				}
+			}
+		})
+	}
 }

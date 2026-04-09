@@ -1,0 +1,3 @@
+## 2024-04-09 - Missing Coverage for Fat Tool Pattern (search_workspace)
+**Blindspot:** The `handleSearchWorkspace` MCP tool, which unifies vector, regex, graph, and index_status into a single "Fat Tool", lacked test coverage for its `action` enum branches and bounds clamping logic.
+**Coverage:** Added a table-driven test `TestHandleSearchWorkspace` in `internal/mcp/server_test.go` to explicitly verify each `action` path, test boundary inputs for the `limit` parameter, and cover invalid action behavior.
