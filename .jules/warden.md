@@ -1,0 +1,3 @@
+## 2023-10-27 - O(N^2) Line Number Counting in String Chunking
+**Anti-Pattern:** Recalculating line numbers from the beginning of a file during string chunking loops (e.g., `strings.Count(string(runes[:i]), "\n")`). This creates an O(N^2) time complexity and massive memory allocations, as an expanding string is allocated from the heap on every single iteration of the chunk loop.
+**Standard:** When chunking text and needing to track line numbers, maintain a running `currentLine` counter outside the loop. In each iteration, update the counter by only applying `strings.Count` to the new, non-overlapping segment of text (`runes[lastI:i]`) and update `lastI`. This keeps complexity strictly O(N).

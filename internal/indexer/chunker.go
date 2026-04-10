@@ -574,10 +574,17 @@ func splitIfNeeded(c Chunk) []Chunk {
 	}
 
 	var chunks []Chunk
+	currentLine := c.StartLine
+	lastI := 0
 	for i := 0; i < len(runes); {
 		end := i + maxRunes
 		if end > len(runes) {
 			end = len(runes)
+		}
+
+		if i > lastI {
+			currentLine += strings.Count(string(runes[lastI:i]), "\n")
+			lastI = i
 		}
 
 		subContent := string(runes[i:end])
@@ -587,12 +594,8 @@ func splitIfNeeded(c Chunk) []Chunk {
 
 		newChunk := c
 		newChunk.Content = subContent
-		newChunk.EndLine = newChunk.StartLine + linesInSub
-		// Adjust start line for subsequent chunks
-		if i > 0 {
-			linesBefore := strings.Count(string(runes[:i]), "\n")
-			newChunk.StartLine = c.StartLine + linesBefore
-		}
+		newChunk.StartLine = currentLine
+		newChunk.EndLine = currentLine + linesInSub
 
 		chunks = append(chunks, newChunk)
 
@@ -754,14 +757,21 @@ func fastChunk(text string) []Chunk {
 		return nil
 	}
 
+	currentLine := 1
+	lastI := 0
 	for i := 0; i < len(runes); {
 		end := i + chunkSize
 		if end > len(runes) {
 			end = len(runes)
 		}
 
+		if i > lastI {
+			currentLine += strings.Count(string(runes[lastI:i]), "\n")
+			lastI = i
+		}
+
 		content := string(runes[i:end])
-		startLine := strings.Count(string(runes[:i]), "\n") + 1
+		startLine := currentLine
 		endLine := startLine + strings.Count(content, "\n")
 
 		chunks = append(chunks, Chunk{
