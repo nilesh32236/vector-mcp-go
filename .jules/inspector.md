@@ -1,0 +1,3 @@
+## 2024-04-10 - handleSearchWorkspace Fat Tool Coverage
+**Blindspot:** The `handleSearchWorkspace` tool in `internal/mcp/handlers_search.go` acts as a central router ("Fat Tool Pattern") with multiple action branches (`vector`, `regex`, `graph`, `index_status`) and utilizes `util.ClampInt` to sanitize user inputs (e.g., limit). However, there were no table-driven tests verifying these action branches or the input sanitization bounds.
+**Coverage:** Implemented table-driven tests in `internal/mcp/handlers_search_test.go` that assert proper routing to sub-handlers based on the `action` input, and specifically verify that out-of-bounds limits (negative or exceeding 100) are clamped properly without panicking.
