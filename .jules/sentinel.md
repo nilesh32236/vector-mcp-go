@@ -1,9 +1,4 @@
-## 2026-04-07 - Path Traversal Vulnerability in MCP Handlers
-**Vulnerability:** Found unvalidated absolute path resolution in `handleGetCodebaseSkeleton` (via `filepath.Join(s.cfg.ProjectRoot, targetPath)` and `filepath.IsAbs`) which allowed directory traversal outside the project bounds.
-**Learning:** File paths supplied by users or via external requests must always be subjected to explicit validation.
-**Prevention:** Use `s.pathValidator.ValidatePath` (from `internal/security/pathguard`) for all user-provided file paths in the MCP handler layer instead of relying solely on `filepath` functions.
-
-## 2026-04-08 - Path Validator Not Updated on Project Root Change
-**Vulnerability:** The `handleSetProjectRoot` tool allowed updating `s.cfg.ProjectRoot` without re-initializing `s.pathValidator`.
-**Learning:** Security components (like path validators) that rely on configuration state (like `ProjectRoot`) must be updated synchronously when that state changes, otherwise validation bypass or false positives may occur.
-**Prevention:** Always re-initialize dependent security components when configuration state changes.
+## 2025-04-10 - Missing Path Validations in MCP Handlers
+**Vulnerability:** Path Traversal vulnerabilities in `handlers_safety.go` and `handlers_analysis_extended.go` where user-provided paths were read/used directly without validation.
+**Learning:** The handlers mapped to MCP tools (`mcp.CallToolRequest`) extract paths using `request.GetString("path", "")` and often pass them directly to core modules (like LSP providers or file readers).
+**Prevention:** ALWAYS apply `s.validatePath(path)` to any user-provided path parameter inside the MCP handler layer before using it or passing it to underlying services.
