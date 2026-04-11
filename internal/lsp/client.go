@@ -90,16 +90,16 @@ func (m *Manager) EnsureStarted(ctx context.Context) error {
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get stdin pipe: %w", err)
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get stdout pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return err
+		return fmt.Errorf("failed to start LSP server command: %w", err)
 	}
 
 	m.cmd = cmd
@@ -175,7 +175,7 @@ func (m *Manager) callLocked(ctx context.Context, method string, params any, res
 
 	data, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal LSP request: %w", err)
 	}
 
 	ch := make(chan []byte, 1)
@@ -183,7 +183,7 @@ func (m *Manager) callLocked(ctx context.Context, method string, params any, res
 
 	if err := m.writeLocked(data); err != nil {
 		delete(m.pending, id)
-		return err
+		return fmt.Errorf("failed to write LSP request: %w", err)
 	}
 
 	m.mu.Unlock()
@@ -200,12 +200,15 @@ func (m *Manager) callLocked(ctx context.Context, method string, params any, res
 				} `json:"error"`
 			}
 			if err := json.Unmarshal(resp, &r); err != nil {
-				return err
+				return fmt.Errorf("failed to unmarshal LSP response: %w", err)
 			}
 			if r.Error != nil {
 				return fmt.Errorf("LSP error (%d): %s", r.Error.Code, r.Error.Message)
 			}
-			return json.Unmarshal(r.Result, result)
+			if err := json.Unmarshal(r.Result, result); err != nil {
+				return fmt.Errorf("failed to unmarshal LSP result: %w", err)
+			}
+			return nil
 		}
 		return nil
 	case <-ctx.Done():
@@ -232,9 +235,12 @@ func (m *Manager) notifyLocked(method string, params any) error {
 	}
 	data, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal LSP notification: %w", err)
 	}
-	return m.writeLocked(data)
+	if err := m.writeLocked(data); err != nil {
+		return fmt.Errorf("failed to write LSP notification: %w", err)
+	}
+	return nil
 }
 
 // RegisterNotificationHandler registers a callback for a specific LSP notification method.
@@ -248,10 +254,10 @@ func (m *Manager) RegisterNotificationHandler(method string, handler func([]byte
 func (m *Manager) writeLocked(data []byte) error {
 	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))
 	if _, err := io.WriteString(m.stdin, header); err != nil {
-		return err
+		return fmt.Errorf("failed to write Content-Length header: %w", err)
 	}
 	if _, err := m.stdin.Write(data); err != nil {
-		return err
+		return fmt.Errorf("failed to write request body: %w", err)
 	}
 	return nil
 }
