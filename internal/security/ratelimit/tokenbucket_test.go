@@ -125,7 +125,9 @@ func TestTokenBucket_WaitContextCancel(t *testing.T) {
 }
 
 func TestTokenBucket_Concurrent(t *testing.T) {
-	tb := NewTokenBucket(1000, 100) // High rate for fast test
+	// A rate of 0.0001 means it takes 10000 seconds to refill 1 token,
+	// effectively ensuring that during the test duration no tokens are refilled.
+	tb := NewTokenBucket(0.0001, 100)
 
 	var wg sync.WaitGroup
 	successCount := make(chan bool, 200)
