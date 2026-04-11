@@ -74,12 +74,16 @@ func TestFastChunk(t *testing.T) {
 		t.Errorf("fastChunk(shortStr) content = %q; want %q", chunks[0].Content, shortStr)
 	}
 
-	// Long string
-	longStrRunes := make([]rune, 6000)
-	for i := range longStrRunes {
-		longStrRunes[i] = 'a'
+	// Long string (multiline)
+	var longStrBuilder strings.Builder
+	for i := 0; i < 6000; i++ {
+		if i > 0 && i%100 == 0 {
+			longStrBuilder.WriteRune('\n')
+		} else {
+			longStrBuilder.WriteRune('a')
+		}
 	}
-	longStr := string(longStrRunes)
+	longStr := longStrBuilder.String()
 
 	chunks = fastChunk(longStr)
 
@@ -102,6 +106,24 @@ func TestFastChunk(t *testing.T) {
 		if len([]rune(chunks[2].Content)) != 1000 {
 			t.Errorf("Chunk 2 length = %v; want 1000", len([]rune(chunks[2].Content)))
 		}
+
+		// Assert line bounds exactly using strings.Count to verify the offset calculations
+		expectedLine := 1
+		for i, c := range chunks {
+			expectedLineCount := strings.Count(c.Content, "\n")
+			if c.StartLine != expectedLine {
+				t.Errorf("Chunk %d StartLine = %d, want %d", i, c.StartLine, expectedLine)
+			}
+			if c.EndLine != expectedLine+expectedLineCount {
+				t.Errorf("Chunk %d EndLine = %d, want %d", i, c.EndLine, expectedLine+expectedLineCount)
+			}
+			// Calculate the next chunk's start line manually by counting newlines in the non-overlapping advanced text
+			if i < len(chunks)-1 {
+				overlap := 500
+				advancedRunes := []rune(c.Content)[:len([]rune(c.Content))-overlap]
+				expectedLine += strings.Count(string(advancedRunes), "\n")
+			}
+		}
 	}
 }
 
@@ -113,12 +135,17 @@ func TestSplitIfNeeded(t *testing.T) {
 		t.Errorf("splitIfNeeded(shortChunk) returned %v chunks; want 1", len(chunks))
 	}
 
-	// Long chunk
-	longChunkRunes := make([]rune, 16000)
-	for i := range longChunkRunes {
-		longChunkRunes[i] = 'a'
+	// Long chunk (multiline)
+	var longChunkBuilder strings.Builder
+	for i := 0; i < 16000; i++ {
+		if i > 0 && i%100 == 0 {
+			longChunkBuilder.WriteRune('\n')
+		} else {
+			longChunkBuilder.WriteRune('a')
+		}
 	}
-	longChunk := Chunk{Content: string(longChunkRunes), StartLine: 1, EndLine: 1}
+	longChunkContent := longChunkBuilder.String()
+	longChunk := Chunk{Content: longChunkContent, StartLine: 1, EndLine: 1}
 
 	chunks = splitIfNeeded(longChunk)
 
@@ -129,6 +156,24 @@ func TestSplitIfNeeded(t *testing.T) {
 	expectedChunks := 3
 	if len(chunks) != expectedChunks {
 		t.Errorf("splitIfNeeded(longChunk) returned %v chunks; want %v", len(chunks), expectedChunks)
+	}
+
+	// Assert line bounds exactly using strings.Count to verify the offset calculations
+	expectedLine := longChunk.StartLine
+	for i, c := range chunks {
+		expectedLineCount := strings.Count(c.Content, "\n")
+		if c.StartLine != expectedLine {
+			t.Errorf("Chunk %d StartLine = %d, want %d", i, c.StartLine, expectedLine)
+		}
+		if c.EndLine != expectedLine+expectedLineCount {
+			t.Errorf("Chunk %d EndLine = %d, want %d", i, c.EndLine, expectedLine+expectedLineCount)
+		}
+		// Calculate the next chunk's start line manually by counting newlines in the non-overlapping advanced text
+		if i < len(chunks)-1 {
+			overlap := 800
+			advancedRunes := []rune(c.Content)[:len([]rune(c.Content))-overlap]
+			expectedLine += strings.Count(string(advancedRunes), "\n")
+		}
 	}
 }
 
