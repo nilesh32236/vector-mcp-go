@@ -175,7 +175,7 @@ func (m *Manager) callLocked(ctx context.Context, method string, params any, res
 
 	data, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("failed to marshal LSP request: %w", err)
+		return fmt.Errorf("failed to marshal LSP request (method=%s id=%v): %w", method, id, err)
 	}
 
 	ch := make(chan []byte, 1)
@@ -183,7 +183,7 @@ func (m *Manager) callLocked(ctx context.Context, method string, params any, res
 
 	if err := m.writeLocked(data); err != nil {
 		delete(m.pending, id)
-		return fmt.Errorf("failed to write LSP request: %w", err)
+		return fmt.Errorf("failed to write LSP request (method=%s id=%v): %w", method, id, err)
 	}
 
 	m.mu.Unlock()
@@ -200,13 +200,13 @@ func (m *Manager) callLocked(ctx context.Context, method string, params any, res
 				} `json:"error"`
 			}
 			if err := json.Unmarshal(resp, &r); err != nil {
-				return fmt.Errorf("failed to unmarshal LSP response: %w", err)
+				return fmt.Errorf("failed to unmarshal LSP response (method=%s id=%v): %w", method, id, err)
 			}
 			if r.Error != nil {
 				return fmt.Errorf("LSP error (%d): %s", r.Error.Code, r.Error.Message)
 			}
 			if err := json.Unmarshal(r.Result, result); err != nil {
-				return fmt.Errorf("failed to unmarshal LSP result: %w", err)
+				return fmt.Errorf("failed to unmarshal LSP result (method=%s id=%v): %w", method, id, err)
 			}
 			return nil
 		}
@@ -235,10 +235,10 @@ func (m *Manager) notifyLocked(method string, params any) error {
 	}
 	data, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("failed to marshal LSP notification: %w", err)
+		return fmt.Errorf("failed to marshal LSP notification (method=%s): %w", method, err)
 	}
 	if err := m.writeLocked(data); err != nil {
-		return fmt.Errorf("failed to write LSP notification: %w", err)
+		return fmt.Errorf("failed to write LSP notification (method=%s): %w", method, err)
 	}
 	return nil
 }

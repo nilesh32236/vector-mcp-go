@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Models contains all embedding and reranker model presets supported by the runtime downloader.
@@ -124,7 +125,8 @@ func downloadFile(url string, dest string) error {
 	}
 
 	tempDest := dest + ".tmp"
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("failed to download file: %w", err)
 	}
@@ -146,5 +148,8 @@ func downloadFile(url string, dest string) error {
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 
-	return os.Rename(tempDest, dest)
+	if err := os.Rename(tempDest, dest); err != nil {
+		return fmt.Errorf("rename %s -> %s: %w", tempDest, dest, err)
+	}
+	return nil
 }
