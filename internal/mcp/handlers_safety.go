@@ -20,7 +20,12 @@ func (s *Server) handleVerifyPatchIntegrity(ctx context.Context, request mcp.Cal
 		return mcp.NewToolResultError("path and search are required"), nil
 	}
 
-	diags, err := s.safety.VerifyPatchIntegrity(ctx, path, search, replace)
+	validatedPath, err := s.validatePath(path)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
+	}
+
+	diags, err := s.safety.VerifyPatchIntegrity(ctx, validatedPath, search, replace)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("verification failed: %v", err)), nil
 	}

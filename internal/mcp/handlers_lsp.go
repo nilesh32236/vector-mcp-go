@@ -129,6 +129,15 @@ func (s *Server) handleGetTypeHierarchy(ctx context.Context, path string, line, 
 func (s *Server) handleLspQuery(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	action := request.GetString("action", "")
 	path := request.GetString("path", "")
+
+	if path != "" {
+		validatedPath, err := s.validatePath(path)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
+		}
+		path = validatedPath
+	}
+
 	line, character := parseAndClampLSPPosition(request)
 
 	switch action {
