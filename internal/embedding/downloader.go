@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Models contains all embedding and reranker model presets supported by the runtime downloader.
@@ -120,13 +121,14 @@ func EnsureModel(modelsDir, modelName string) (ModelConfig, error) {
 func downloadFile(url string, dest string) error {
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return err
+		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	tempDest := dest + ".tmp"
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Get(url)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to download file: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -136,15 +138,18 @@ func downloadFile(url string, dest string) error {
 
 	out, err := os.Create(tempDest)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 
 	_, err = io.Copy(out, resp.Body)
 	_ = out.Close()
 	if err != nil {
 		_ = os.Remove(tempDest)
-		return err
+		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 
-	return os.Rename(tempDest, dest)
+	if err := os.Rename(tempDest, dest); err != nil {
+		return fmt.Errorf("rename %s -> %s: %w", tempDest, dest, err)
+	}
+	return nil
 }
