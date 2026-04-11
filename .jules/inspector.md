@@ -1,0 +1,7 @@
+## 2025-04-11 - Fat Tool Pattern Testing Gap in search_workspace
+**Blindspot:** The `search_workspace` MCP tool routes requests to different specialized logic (vector, regex, graph, index_status) acting as a "Fat Tool". However, there were no tests validating that this routing behaved correctly across action branches, and no tests explicitly validating panic prevention boundary conditions like extremely high limit inputs over this tool.
+**Coverage:** We now test `handleSearchWorkspace` with a table-driven test in `internal/mcp/handlers_search_test.go` covering all valid action enums (`vector`, `regex`, `graph`, `index_status`), invalid action handling, and an extreme `limit` scenario (`999999999`) to ensure `ClampInt` mitigates out-of-bounds panics without failure.
+
+## 2025-04-11 - TokenBucket Flakiness in Concurrent Scenario
+**Blindspot:** The `TestTokenBucket_Concurrent` test was asserting exactly `100` tokens allowed based on a rate of `1000/s` and burst of `100`. Because spawning 200 goroutines can take several milliseconds, the token bucket was actively refilling in the background, sometimes leading to 101 or 102 tokens allowed, causing CI flakiness.
+**Coverage:** Lowered the token bucket refill rate in the test to `0.0001` (refill once per ~10,000 seconds), guaranteeing zero tokens are refilled within the runtime of the test, solidifying the test assertions to exactly `100` denied and `100` allowed.
