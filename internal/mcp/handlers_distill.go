@@ -16,13 +16,18 @@ func (s *Server) handleDistillPackagePurpose(ctx context.Context, request mcp.Ca
 		return mcp.NewToolResultError("path (package directory) is required"), nil
 	}
 
+	absPath, err := s.validatePath(pkgPath)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
+	}
+
 	store, err := s.getStore(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get store: %v", err)), nil
 	}
 
 	distiller := analysis.NewDistiller(store, s.embedder, s.logger)
-	summary, err := distiller.DistillPackagePurpose(ctx, s.projectRoot(), pkgPath)
+	summary, err := distiller.DistillPackagePurpose(ctx, s.projectRoot(), absPath)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Distillation failed: %v", err)), nil
 	}
