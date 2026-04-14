@@ -131,23 +131,18 @@ func (s *Server) handleLspQuery(ctx context.Context, request mcp.CallToolRequest
 	path := request.GetString("path", "")
 	line, character := parseAndClampLSPPosition(request)
 
-	absPath, err := s.validatePath(path)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalid path: %v", err)), nil
-	}
-
 	switch action {
 	case "definition":
-		return s.handleGetPreciseDefinition(ctx, absPath, line, character)
+		return s.handleGetPreciseDefinition(ctx, path, line, character)
 	case "references":
-		return s.handleFindReferencesPrecise(ctx, absPath, line, character)
+		return s.handleFindReferencesPrecise(ctx, path, line, character)
 	case "type_hierarchy":
-		return s.handleGetTypeHierarchy(ctx, absPath, line, character)
+		return s.handleGetTypeHierarchy(ctx, path, line, character)
 	case "impact_analysis":
 		return s.handleGetImpactAnalysis(ctx, mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
 				Arguments: map[string]any{
-					"path":      absPath,
+					"path":      path,
 					"line":      float64(line),
 					"character": float64(character),
 				},

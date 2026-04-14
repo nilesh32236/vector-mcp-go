@@ -7,3 +7,7 @@
 **Vulnerability:** The `handleSetProjectRoot` tool allowed updating `s.cfg.ProjectRoot` without re-initializing `s.pathValidator`.
 **Learning:** Security components (like path validators) that rely on configuration state (like `ProjectRoot`) must be updated synchronously when that state changes, otherwise validation bypass or false positives may occur.
 **Prevention:** Always re-initialize dependent security components when configuration state changes.
+## 2025-04-14 - Fix Path Traversal in MCP Handlers
+**Vulnerability:** Multiple MCP handler tools (`handleLspQuery`, `handleVerifyPatchIntegrity`, `handleDistillPackagePurpose`, `handleGetImpactAnalysis`, `handleDistillKnowledge`) directly used user-provided `path` arguments without resolving them through `s.validatePath(path)`.
+**Learning:** Even though "Fat Tool" routers might not have explicit file operations, they pass these paths to backend sub-tools, LSP calls, or analyzers where unvalidated paths could result in directory traversal or escaping the `ProjectRoot`.
+**Prevention:** Always extract and explicitly validate the `path` argument using `s.validatePath()` (or `s.pathValidator.ValidatePath()`) at the earliest possible point in the handler logic before passing it down to sub-services.
