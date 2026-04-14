@@ -1162,7 +1162,7 @@ func (s *Server) handleDistillKnowledge(ctx context.Context, request mcp.CallToo
 	for _, r := range records {
 		relPath := r.Metadata["path"]
 
-		if strings.HasPrefix(relPath, absPath) || strings.HasPrefix(relPath, path) {
+		if strings.HasPrefix(relPath, path) {
 			fmt.Fprintf(&relevantContent, "File: %s\nContent:\n%s\n---\n", relPath, r.Content)
 			count++
 		}
