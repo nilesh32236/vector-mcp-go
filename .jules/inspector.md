@@ -1,0 +1,3 @@
+## 2026-04-14 - Add Test Coverage for Fat Tools and Sanitization
+**Blindspot:** The unified "Fat Tool" handlers (`handleSearchWorkspace`, `handleModifyWorkspace`, `handleLspQuery`) lacked table-driven test coverage for their action routing, input sanitization bounds (limits), and missing arguments cases. Panics could have occurred on bounds check failures or nil maps.
+**Coverage:** Implemented table-driven tests for all major fat tools in `internal/mcp/handlers_search_test.go`, `internal/mcp/handlers_mutation_test.go`, and `internal/mcp/handlers_lsp_test.go`. The tests verify proper limits sanitization, enum branch execution, and error handling without crashing on edge cases or negative bounds.
