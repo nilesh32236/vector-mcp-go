@@ -79,30 +79,61 @@ func (s *Server) handleFilesystemGrep(ctx context.Context, request mcp.CallToolR
 
 					relPath, _ := filepath.Rel(s.projectRoot(), path)
 
-					lines := strings.Split(contentStr, "\n")
-					var lowerLines []string
-					if !isRegex {
+					if isRegex {
+						lines := strings.Split(contentStr, "\n")
+						for i, line := range lines {
+							if re.MatchString(line) {
+								select {
+								case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
+								case <-ctx.Done():
+									return
+								}
+							}
+						}
+					} else {
 						lowerContent := strings.ToLower(contentStr)
 						// Early exit: if the file doesn't contain the query at all, skip it entirely
 						if !strings.Contains(lowerContent, lowerQuery) {
 							continue
 						}
-						lowerLines = strings.Split(lowerContent, "\n")
-					}
 
-					for i, line := range lines {
-						matched := false
-						if isRegex {
-							matched = re.MatchString(line)
-						} else {
-							matched = strings.Contains(lowerLines[i], lowerQuery)
-						}
+						searchFrom := 0
+						lineNum := 1
+						lastLineStart := 0
 
-						if matched {
+						for searchFrom < len(lowerContent) {
+							idx := strings.Index(lowerContent[searchFrom:], lowerQuery)
+							if idx == -1 {
+								break
+							}
+
+							absIdx := searchFrom + idx
+
+							// Advance lineNum by counting newlines between lastLineStart and absIdx
+							newlines := strings.Count(lowerContent[lastLineStart:absIdx], "\n")
+							lineNum += newlines
+
+							// Find line start and end from contentStr
+							start := strings.LastIndexByte(contentStr[:absIdx], '\n') + 1
+							end := strings.IndexByte(contentStr[absIdx:], '\n')
+							if end == -1 {
+								end = len(contentStr)
+							} else {
+								end += absIdx
+							}
+
+							line := contentStr[start:end]
+
 							select {
-							case matchChan <- Match{Path: relPath, Line: i + 1, Content: strings.TrimSpace(line)}:
+							case matchChan <- Match{Path: relPath, Line: lineNum, Content: strings.TrimSpace(line)}:
 							case <-ctx.Done():
 								return
+							}
+
+							searchFrom = end + 1 // skip to next line to avoid duplicate matches on the same line
+							lastLineStart = searchFrom
+							if searchFrom <= len(contentStr) && end != len(contentStr) {
+								lineNum++
 							}
 						}
 					}
