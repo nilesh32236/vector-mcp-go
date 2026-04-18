@@ -5,3 +5,6 @@
 ## 2026-04-06 - Remove strings.ToLower allocations from hot loops
 **Learning:** Calling `strings.ToLower` inside iteration loops (like per-line file scanning or graph node traversal) causes significant memory allocations and CPU overhead due to repeated string copying. A benchmark showed that hoisting `strings.ToLower` outside of hot loops, or early-returning on substring matches, reduces time overhead by roughly 30-40%.
 **Action:** Always hoist invariant string transformations (like lowercasing the search query) outside of hot loops. When iterating, prefer to pre-lower the entire text or only lower individual elements against a pre-lowered invariant.
+## 2026-04-18 - String array allocation overhead in grep line-by-line searches
+**Learning:** Using `strings.Split(content, "\n")` and processing line-by-line using indexes creates massive string slice allocations and causes significant overhead during search operations in files with many lines. It triggers heavy heap allocation and garbage collection.
+**Action:** When performing case-insensitive string matching line-by-line, avoid splitting string contents. Instead, convert to lowercase once, search the long lowercase string directly using `strings.Index`, and extract the matching line content from the original string via slicing and boundary detection with `strings.LastIndexByte`.
